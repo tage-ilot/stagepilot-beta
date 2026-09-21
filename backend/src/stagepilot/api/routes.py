@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from typing import Literal, NoReturn, cast
 from zoneinfo import ZoneInfo
@@ -337,6 +338,7 @@ async def update_planning_center_settings(
     request: Request,
 ) -> SettingsResponse:
     runtime = _runtime(request)
+    previous_planning_center = runtime.settings_service.snapshot().planning_center
     public_settings = PersistentPlanningCenterSettings(
         app_id=settings.app_id,
         service_type_id=settings.service_type_id,
@@ -345,15 +347,25 @@ async def update_planning_center_settings(
         upcoming_lookahead_days=settings.upcoming_lookahead_days,
         request_timeout_seconds=settings.request_timeout_seconds,
     )
+    # Only fields that actually invalidate the existing Planning Center HTTP
+    # client (the app id, or the PAT secret itself) require restarting the
+    # packaged backend. Everything else (service type, plan title
+    # preference, lookahead window, timeout) can be applied in place, which
+    # avoids an unnecessary full sidecar restart -- and the port-rebind
+    # window that comes with it -- on every settings save.
+    app_id_changed = public_settings.app_id != previous_planning_center.app_id
+    secret_changed = settings.secret is not None or settings.remove_secret
+    restart_required = app_id_changed or secret_changed
     try:
-        runtime.settings_service.update_planning_center(
+        await asyncio.to_thread(
+            runtime.settings_service.update_planning_center,
             public_settings,
             secret=settings.secret,
             remove_secret=settings.remove_secret,
         )
     except (CredentialStoreError, SettingsFileError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _settings_response(runtime, persisted=True, restart_required=True)
+    return _settings_response(runtime, persisted=True, restart_required=restart_required)
 
 
 @router.post("/planning-center/test", response_model=PlanningCenterTestResponse)
