@@ -70,7 +70,7 @@ describe("packaged backend startup recovery", () => {
       "aria-valuetext",
       "Startup stopped because the local backend reported an error.",
     );
-    expect(screen.getByRole("button", { name: "Copy Log Path" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Backend Log" })).toBeInTheDocument();
   });
 
   it("offers a bounded supervisor retry action", async () => {

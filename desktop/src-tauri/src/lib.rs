@@ -564,7 +564,8 @@ fn redact_secrets(text: &str) -> String {
         let lower = line.to_ascii_lowercase();
         for (needle, _) in patterns {
             if lower.contains(&needle.to_ascii_lowercase()) {
-                redacted = redacted.replace(line, "[REDACTED: line contained a credential-shaped token]");
+                redacted =
+                    redacted.replace(line, "[REDACTED: line contained a credential-shaped token]");
                 break;
             }
         }
@@ -581,7 +582,11 @@ fn iso8601_now() -> String {
     let total_seconds = now.as_secs();
     let days = total_seconds / 86_400;
     let time_of_day = total_seconds % 86_400;
-    let (hour, minute, second) = (time_of_day / 3600, (time_of_day % 3600) / 60, time_of_day % 60);
+    let (hour, minute, second) = (
+        time_of_day / 3600,
+        (time_of_day % 3600) / 60,
+        time_of_day % 60,
+    );
 
     // Civil-from-days algorithm (Howard Hinnant's public-domain date
     // algorithms), converts a day count since the Unix epoch into a
@@ -644,7 +649,12 @@ impl<'a> BackendCrashLogEntry<'a> {
              message: {}\n\
              recent_output:\n{}\n\
              ---- END STAGEPILOT BACKEND FAILURE ----\n",
-            self.timestamp, self.app_version, self.os, self.failure_kind, self.message, self.recent_output
+            self.timestamp,
+            self.app_version,
+            self.os,
+            self.failure_kind,
+            self.message,
+            self.recent_output
         )
     }
 }
@@ -940,9 +950,7 @@ fn backend_supervisor_status(
 /// at most the last `BACKEND_LOG_COPY_MAX_BYTES` bytes when the file is
 /// larger, so a runaway log can't stall the UI or blow up the clipboard.
 #[tauri::command]
-fn copy_backend_log(
-    supervisor: tauri::State<'_, BackendSupervisor>,
-) -> Result<String, String> {
+fn copy_backend_log(supervisor: tauri::State<'_, BackendSupervisor>) -> Result<String, String> {
     let log_path = supervisor
         .snapshot()
         .log_path
@@ -951,8 +959,8 @@ fn copy_backend_log(
 }
 
 fn read_backend_log_tail(path: &std::path::Path) -> Result<String, String> {
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Unable to open the backend log: {error}"))?;
+    let mut file =
+        fs::File::open(path).map_err(|error| format!("Unable to open the backend log: {error}"))?;
     let size = file
         .metadata()
         .map_err(|error| format!("Unable to read the backend log metadata: {error}"))?
