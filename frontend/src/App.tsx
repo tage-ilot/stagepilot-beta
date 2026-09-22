@@ -3,11 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
 import { DashboardAccessGate } from "./components/DashboardAccessGate";
+import { CrashLoopAlertDialog } from "./components/CrashLoopAlertDialog";
 import {
   backendStartupTitle,
+  copyBackendLog,
   desktopBackendStatus,
   listenForDesktopBackend,
+  listenForDesktopBackendCrashLoop,
   restartDesktopBackend,
+  type BackendCrashLoopDetected,
   type BackendSupervisorStatus,
 } from "./desktop";
 import { useDashboardAccess } from "./access/AccessContext";
@@ -101,10 +105,18 @@ function StagePilotApp() {
     const copyLogPath = async () => {
       if (!backendSupervisor?.log_path) return;
       try {
-        await navigator.clipboard.writeText(backendSupervisor.log_path);
-        setBackendActionMessage("Backend log path copied.");
-      } catch {
-        setBackendActionMessage(`Backend log: ${backendSupervisor.log_path}`);
+        const content = await copyBackendLog();
+        await navigator.clipboard.writeText(content);
+        setBackendActionMessage("Backend log copied.");
+      } catch (error) {
+        try {
+          await navigator.clipboard.writeText(backendSupervisor.log_path);
+          setBackendActionMessage("Backend log path copied.");
+        } catch {
+          setBackendActionMessage(
+            error instanceof Error ? error.message : `Backend log: ${backendSupervisor.log_path}`,
+          );
+        }
       }
     };
     const progressHeadline =
@@ -162,7 +174,7 @@ function StagePilotApp() {
                     onClick={() => void copyLogPath()}
                     type="button"
                   >
-                    Copy Log Path
+                    Copy Backend Log
                   </button>
                 )}
               </div>
@@ -187,9 +199,27 @@ function StagePilotApp() {
 }
 
 export default function App() {
+  const [crashLoop, setCrashLoop] = useState<BackendCrashLoopDetected | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void listenForDesktopBackendCrashLoop((payload) => {
+      if (active) setCrashLoop(payload);
+    }).then((nextUnlisten) => {
+      if (!active) nextUnlisten?.();
+      else unlisten = nextUnlisten;
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
   return (
     <DashboardAccessGate>
       <StagePilotApp />
+      <CrashLoopAlertDialog crashLoop={crashLoop} onDismiss={() => setCrashLoop(null)} />
     </DashboardAccessGate>
   );
 }

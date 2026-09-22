@@ -53,6 +53,40 @@ export const listenForDesktopBackend = async (
   });
 };
 
+export type BackendCrashLoopDetected = {
+  failure_kind:
+    | "port_occupied"
+    | "sidecar_missing"
+    | "sidecar_exited"
+    | "macos_code_signing"
+    | "timeout"
+    | null;
+  message: string;
+};
+
+/// Mirrors `listenForDesktopBackend` but for the repeat-crash-loop alert.
+/// Intentionally independent from the startup-gated backend-status
+/// listener so callers can mount it at the app root, outside any
+/// dashboardVisible gate, and still receive the event whether the user is
+/// on the startup screen or the live dashboard.
+export const listenForDesktopBackendCrashLoop = async (
+  onCrashLoop: (payload: BackendCrashLoopDetected) => void,
+): Promise<UnlistenFn | null> => {
+  if (!isTauri()) return null;
+  return listen<BackendCrashLoopDetected>(
+    "stagepilot://backend-crash-loop-detected",
+    (event) => {
+      onCrashLoop(event.payload);
+    },
+  );
+};
+
+export const copyBackendLog = async (): Promise<string> => {
+  if (!isTauri()) throw new Error("Backend log copy is only available in the desktop app.");
+  return invoke<string>("copy_backend_log");
+};
+
+
 export const isDesktopShell = () => isTauri();
 
 export const minimizeDesktopWindow = async () => {
