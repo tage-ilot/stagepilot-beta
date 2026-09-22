@@ -146,10 +146,17 @@ export function useUpdater({
     const update = candidate.current;
     if (!update || installing.current) return;
     installing.current = true;
+    // `prepare_for_update` (run inside the candidate's install, immediately
+    // before the "installing" stage) deliberately kills the managed backend so
+    // the installer can replace the binary on disk. Reaching that stage is the
+    // signal that the backend is actually down and has to be brought back if
+    // the install then fails.
+    let backendStopped = false;
     setState((current) => ({ ...current, status: "downloading", error: null }));
     try {
       await adapter.prepareRelaunch(update.availableVersion);
       await update.install((progress) => {
+        if (progress.stage === "installing") backendStopped = true;
         setState((current) => ({
           ...current,
           progress,
@@ -161,10 +168,26 @@ export function useUpdater({
     } catch (cause) {
       adapter.clearRelaunchMarker();
       installing.current = false;
+      const reason = cause instanceof Error
+        ? cause.message
+        : "StagePilot could not install the update.";
+      let recovery = "";
+      if (backendStopped) {
+        let restarted = false;
+        try {
+          restarted = (await adapter.restartBackend?.()) ?? false;
+        } catch (restartCause) {
+          console.warn("StagePilot could not restart the backend after a failed update.", restartCause);
+          restarted = false;
+        }
+        recovery = restarted
+          ? " The local backend was restarted — you are still on the old version."
+          : " The local backend could not be restarted — restart StagePilot manually.";
+      }
       setState((current) => ({
         ...current,
         status: "error",
-        error: cause instanceof Error ? cause.message : "StagePilot could not install the update.",
+        error: `${reason}${recovery}`,
         errorDialogOpen: true,
       }));
     }
