@@ -49,6 +49,10 @@ case "$MODE" in
     SOURCE_APP="$(find "$MOUNT_POINT" -maxdepth 2 -type d -name 'StagePilot.app' -print -quit)"
     cp -R "$SOURCE_APP" "$TEMP_ROOT/StagePilot.app"
     APP="$TEMP_ROOT/StagePilot.app"
+    UNINSTALLER="$(find "$MOUNT_POINT" -maxdepth 1 -type f -name 'Uninstall StagePilot.command' -print -quit)"
+    [[ -n "$UNINSTALLER" ]] || { echo "DMG is missing the macOS uninstaller (Uninstall StagePilot.command)." >&2; exit 1; }
+    [[ -x "$UNINSTALLER" ]] || { echo "Uninstall StagePilot.command in the DMG is not executable." >&2; exit 1; }
+    bash -n "$UNINSTALLER" || { echo "Uninstall StagePilot.command has a syntax error." >&2; exit 1; }
     ;;
   archive)
     mkdir -p "$TEMP_ROOT/archive"
