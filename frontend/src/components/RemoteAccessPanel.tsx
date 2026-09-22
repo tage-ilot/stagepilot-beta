@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useDashboardAccess } from "../access/AccessContext";
-import { invalidateAccess } from "../access/accessState";
 import {
-  ApiError, bootstrapRemote, createRemoteUser, deleteRemoteUser, getRemoteStatus,
-  getRemoteUsers, regenerateRemote, setRemoteEnabled, updateRemoteUser,
-  type RemoteStatus, type RemoteUser,
+  bootstrapRemote, createRemoteUser, deleteRemoteUser, regenerateRemote,
+  setRemoteEnabled, updateRemoteUser, type RemoteUser,
 } from "../api";
 import { setRemoteAutostart } from "../desktop";
+import type { RemoteAccessControl } from "../hooks/useRemoteAccess";
 
 const button = "rounded-lg border border-white/20 px-3.5 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:opacity-40";
 const primaryButton = "rounded-lg border border-rose-400/40 bg-rose-500 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-rose-400 disabled:opacity-40";
 const input = "w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-rose-400/50";
-const labels: Record<RemoteStatus["state"], string> = {
+const labels: Record<import("../api").RemoteStatus["state"], string> = {
   off: "Off", enabling: "Enabling…", connected: "Connected", reconnecting: "Reconnecting…", error: "Connection unavailable",
 };
 
@@ -29,7 +27,7 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-function ButtonSpinner() {
+export function ButtonSpinner() {
   const reducedMotion = usePrefersReducedMotion();
   if (reducedMotion) {
     return <span aria-hidden="true" className="text-xs font-semibold tracking-wide">Working…</span>;
@@ -49,81 +47,23 @@ function safeUrl(value: string | null): string | null {
   } catch { return null; }
 }
 
-function friendlyError(cause: unknown): string {
-  if (cause instanceof ApiError) {
-    if (cause.status === 401 || cause.status === 403) return "Your access has changed. Please sign in again.";
-    if (cause.status === 409) return "The change could not be applied. Keep at least one enabled Operator and use a unique email. Refresh before trying again.";
-    if (cause.status === 422) return "Use a valid email and a password of at least 12 characters.";
-    if (cause.status === 429) return "Too many requests. Please wait before trying again.";
-    // The backend already translates enable/regenerate failures (enrollment
-    // limit, unreachable control plane, revoked credential, etc.) into a
-    // short, specific, end-user-safe message -- surface it verbatim rather
-    // than collapsing everything to the generic fallback below.
-    if (cause.status === 503 && cause.message) return cause.message;
-  }
-  return "Remote Access is unavailable. Local StagePilot is unaffected. Try again shortly.";
-}
-
-export function RemoteAccessPanel() {
-  const access = useDashboardAccess();
-  const [status, setStatus] = useState<RemoteStatus | null>(null);
-  const [users, setUsers] = useState<RemoteUser[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [bootstrap, setBootstrap] = useState(false);
+export function RemoteAccessPanel({ control }: { control: RemoteAccessControl }) {
+  const {
+    access, status, users, error, notice, busy, bootstrap, setBootstrap,
+    confirmDisable, cancelDisable, confirmDisableAccept, canManage, local, run,
+  } = control;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<RemoteUser["role"]>("Viewer");
   const [edit, setEdit] = useState<RemoteUser | null>(null);
-  const [confirmDisable, setConfirmDisable] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
-  const [enableBusy, setEnableBusy] = useState(false);
-  const alive = useRef(true);
-  const inFlight = useRef(false);
-  const canManage = access.authenticated && access.capabilities.canConfigure;
-  const local = access.mode !== "remote";
+  const passwordCleared = useRef(false);
 
   useEffect(() => {
-    alive.current = true;
-    if (!canManage) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      if (!inFlight.current) {
-        try {
-          const next = await getRemoteStatus();
-          if (!cancelled) setStatus(next);
-        } catch (cause) {
-          if (!cancelled) { setStatus(null); setError(friendlyError(cause)); }
-        }
-      }
-      if (!cancelled) timer = setTimeout(() => void poll(), 2000);
-    };
-    void poll();
-    void getRemoteUsers().then((next) => { if (!cancelled) setUsers(next); }).catch((cause) => {
-      if (!cancelled) setError(friendlyError(cause));
-    });
-    return () => { cancelled = true; alive.current = false; clearTimeout(timer); };
-  }, [canManage]);
-
-  async function run(work: () => Promise<unknown>, selfChange = false) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      await work();
-      if (selfChange && !local) { invalidateAccess(); return; }
-      const [next, nextUsers] = await Promise.all([getRemoteStatus(), getRemoteUsers()]);
-      if (alive.current) { setStatus(next); setUsers(nextUsers); setNotice("Changes saved."); }
-    } catch (cause) {
-      if (alive.current) setError(friendlyError(cause));
-    } finally {
-      inFlight.current = false;
-      if (alive.current) { setBusy(false); setPassword(""); }
-    }
-  }
+    if (!busy && !passwordCleared.current) { setPassword(""); passwordCleared.current = true; }
+    if (busy) passwordCleared.current = false;
+  }, [busy]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -159,11 +99,10 @@ export function RemoteAccessPanel() {
     {url && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3">
       <output aria-label="Remote URL" className="break-all text-sm text-sky-200">{url}</output>
       <button className={button} type="button" onClick={() => {
-        if (!navigator.clipboard) { setError("Copy unavailable. Select and copy the link above."); return; }
-        void navigator.clipboard.writeText(url).then(() => setNotice("Link copied."), () => setError("Copy unavailable. Select and copy the link above."));
+        if (!navigator.clipboard) { control.setError("Copy unavailable. Select and copy the link above."); return; }
+        void navigator.clipboard.writeText(url).then(() => control.setNotice("Link copied."), () => control.setError("Copy unavailable. Select and copy the link above."));
       }}>Copy link</button>
-      <button className={`${button} inline-flex items-center gap-2`} disabled={busy || regenBusy || enableBusy} type="button" onClick={() => setConfirmRegenerate(true)}>{regenBusy && <ButtonSpinner />}{regenBusy ? "Regenerating…" : "Regenerate Remote link"}</button>
-      {!status?.enabled ? null : <button className={button} disabled={busy} type="button" onClick={() => setConfirmDisable(true)}>Disable Remote Access</button>}
+      <button className={`${button} inline-flex items-center gap-2`} disabled={busy || regenBusy} type="button" onClick={() => setConfirmRegenerate(true)}>{regenBusy && <ButtonSpinner />}{regenBusy ? "Regenerating…" : "Regenerate Remote link"}</button>
     </div>}
     {confirmRegenerate && <div role="group" aria-label="Confirm regenerate Remote link" className="space-y-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3">
       <p className="text-sm text-amber-200">
@@ -174,28 +113,16 @@ export function RemoteAccessPanel() {
           if (regenBusy) return;
           setConfirmRegenerate(false);
           setRegenBusy(true);
-          void run(async () => { await regenerateRemote(); }).finally(() => setRegenBusy(false));
+          void run(async () => { await regenerateRemote(); }).catch(() => undefined).finally(() => setRegenBusy(false));
         }}>{regenBusy && <ButtonSpinner />}{regenBusy ? "Regenerating…" : "Confirm regenerate"}</button>
         <button className={button} disabled={regenBusy} type="button" onClick={() => setConfirmRegenerate(false)}>Cancel</button>
       </div>
     </div>}
-    {!url && !status?.enabled && <button className={`${primaryButton} inline-flex items-center gap-2`} disabled={busy || enableBusy || !status?.available || Boolean(status?.provisioned && !status?.credential_available)} type="button" onClick={() => {
-      if (status?.needs_operator) { if (local) setBootstrap(true); }
-      else {
-        setEnableBusy(true);
-        void run(async () => { await setRemoteEnabled(true); await setRemoteAutostart(true); }).finally(() => setEnableBusy(false));
-      }
-    }}>{enableBusy && <ButtonSpinner />}{enableBusy ? "Enabling…" : "Enable Remote Access"}</button>}
-    {!url && status?.enabled && <button className={button} disabled={busy} type="button" onClick={() => setConfirmDisable(true)}>Disable Remote Access</button>}
     {confirmDisable && <div role="group" aria-label="Confirm disable Remote Access" className="space-y-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3">
       <p className="text-sm text-amber-200">Disconnect all Remote users? Local StagePilot will keep running.</p>
       <div className="flex flex-wrap gap-3">
-        <button className={primaryButton} disabled={busy} type="button" onClick={() => {
-          setConfirmDisable(false); void run(async () => {
-            await setRemoteEnabled(false); await setRemoteAutostart(false);
-          }, true);
-        }}>Confirm disable</button>
-        <button className={button} type="button" onClick={() => setConfirmDisable(false)}>Cancel</button>
+        <button className={primaryButton} disabled={busy} type="button" onClick={confirmDisableAccept}>Confirm disable</button>
+        <button className={button} type="button" onClick={cancelDisable}>Cancel</button>
       </div>
     </div>}
     {status?.needs_operator && !local && <p className="text-sm text-slate-300">Create the first Operator from local StagePilot.</p>}
@@ -212,16 +139,16 @@ export function RemoteAccessPanel() {
             onChange={(event) => {
               const nextRole = event.target.value as RemoteUser["role"];
               if (user.role === "Operator" && nextRole === "Viewer" && !window.confirm(`Change ${user.email} to Viewer and revoke their Remote sessions?`)) return;
-              void run(() => updateRemoteUser(user.id, {role: nextRole}), self);
+              void run(() => updateRemoteUser(user.id, {role: nextRole}), self).catch(() => undefined);
             }}>
             <option>Viewer</option><option>Operator</option></select></label>
           <button className={button} disabled={busy || last} type="button" onClick={() => {
             if (user.enabled && !window.confirm(`Disable ${user.email} and revoke their Remote sessions?`)) return;
-            void run(() => updateRemoteUser(user.id, {enabled: !user.enabled}), self);
+            void run(() => updateRemoteUser(user.id, {enabled: !user.enabled}), self).catch(() => undefined);
           }}>{user.enabled ? "Disable" : "Enable"} {user.email}</button>
           <button className={button} disabled={busy} type="button" onClick={() => {setEdit(user); setPassword("");}}>Change password for {user.email}</button>
           <button className={button} disabled={busy || last} type="button" onClick={() => {
-            if (window.confirm(`Delete ${user.email} and revoke their sessions?`)) void run(() => deleteRemoteUser(user.id), self);
+            if (window.confirm(`Delete ${user.email} and revoke their sessions?`)) void run(() => deleteRemoteUser(user.id), self).catch(() => undefined);
           }}>Delete {user.email}</button>
         </li>;
       })}</ul>}

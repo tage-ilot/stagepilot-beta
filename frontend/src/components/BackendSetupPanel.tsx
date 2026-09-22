@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { apiOrigin, websocketUrl } from "../api";
+import { useRemoteAccess } from "../hooks/useRemoteAccess";
 import type {
   ApplicationState,
   GeneralSettingsInput,
   HealthResponse,
   SettingsResponse,
 } from "../types";
-import { RemoteAccessPanel } from "./RemoteAccessPanel";
+import { ButtonSpinner, RemoteAccessPanel } from "./RemoteAccessPanel";
 import { SetupPanelHeader } from "./SetupPanelHeader";
 
 export function BackendSetupPanel({
@@ -38,7 +39,7 @@ export function BackendSetupPanel({
   const [pinEnabled, setPinEnabled] = useState(true);
   const [dashboardPin, setDashboardPin] = useState("");
   const [releaseChannel, setReleaseChannel] = useState<GeneralSettingsInput["release_channel"]>("BETA");
-  const [remoteAccessOpen, setRemoteAccessOpen] = useState(false);
+  const remote = useRemoteAccess();
 
   useEffect(() => {
     if (!settings) return;
@@ -190,18 +191,25 @@ export function BackendSetupPanel({
         </div>
         <label
           aria-controls="remote-access-inline"
-          aria-expanded={remoteAccessOpen}
+          aria-expanded={remote.panelOpen}
           className="flex items-start gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3 text-sm text-slate-300"
         >
           <input
-            checked={remoteAccessOpen}
+            checked={remote.enabled}
             className="mt-0.5 size-4 accent-rose-500"
-            onChange={(event) => setRemoteAccessOpen(event.target.checked)}
+            disabled={remote.checkboxBusy}
+            onChange={(event) => {
+              if (event.target.checked) remote.requestEnable();
+              else remote.requestDisable();
+            }}
             type="checkbox"
           />
           <span>
-            <span className="block font-semibold text-slate-200">
-              Remote Access
+            <span className="inline-flex items-center gap-2">
+              <span className="block font-semibold text-slate-200">
+                Remote Access
+              </span>
+              {remote.checkboxBusy && <ButtonSpinner />}
             </span>
             <span className="mt-1 block text-xs text-slate-400">
               Securely view or operate this StagePilot from another device.
@@ -211,12 +219,12 @@ export function BackendSetupPanel({
       </div>
 
       <div
-        className={`dashboard-expand-region mt-4 ${remoteAccessOpen ? "dashboard-expand-region-open" : ""}`}
+        className={`dashboard-expand-region mt-4 ${remote.panelOpen ? "dashboard-expand-region-open" : ""}`}
         id="remote-access-inline"
       >
         <div className="dashboard-expand-region-inner">
           <div className="overflow-hidden rounded-lg border border-white/7 bg-black/20 p-4">
-            <RemoteAccessPanel />
+            <RemoteAccessPanel control={remote} />
           </div>
         </div>
       </div>
