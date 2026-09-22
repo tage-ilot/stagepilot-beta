@@ -410,9 +410,11 @@ export function Dashboard({
       const after = element.getBoundingClientRect();
       const scaleX = after.width ? before.width / after.width : 1;
       const scaleY = after.height ? before.height / after.height : 1;
-      element.getAnimations().forEach((animation) => animation.cancel());
       const isSurface = element.dataset.statusMotionPart === "surface";
       if (typeof element.animate !== "function") return;
+      if (typeof element.getAnimations === "function") {
+        element.getAnimations().forEach((animation) => animation.cancel());
+      }
       element.animate([
         {
           opacity: isSurface ? 1 : 0.55,
