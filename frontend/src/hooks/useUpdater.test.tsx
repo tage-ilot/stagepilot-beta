@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
   UpdateCandidate,
@@ -25,16 +25,31 @@ const makeCandidate = (install = vi.fn().mockResolvedValue(undefined)): UpdateCa
     await install();
   },
 });
-const makeAdapter = (candidate: UpdateCandidate | null = null): UpdaterAdapter & {
+
+// Mirrors the real candidate: `prepare_for_update` kills the managed backend
+// just before the "installing" stage is reported, and only then does the
+// install itself run (and, here, fail).
+const makeBackendStoppingCandidate = (install: () => Promise<unknown>): UpdateCandidate => ({
+  ...makeCandidate(),
+  install: async (onProgress) => {
+    onProgress(progress);
+    onProgress({ ...progress, stage: "installing" });
+    await install();
+  },
+});
+
+const makeAdapter = (candidate: UpdateCandidate | null = null): Omit<UpdaterAdapter, "restartBackend"> & {
   check: ReturnType<typeof vi.fn>;
   prepareRelaunch: ReturnType<typeof vi.fn>;
   relaunch: ReturnType<typeof vi.fn>;
+  restartBackend: Mock<() => Promise<boolean>>;
 } => ({
   isEnabled: () => true,
   check: vi.fn().mockResolvedValue(candidate),
   prepareRelaunch: vi.fn().mockResolvedValue(undefined),
   clearRelaunchMarker: vi.fn(),
   relaunch: vi.fn().mockResolvedValue(undefined),
+  restartBackend: vi.fn().mockResolvedValue(true),
   restoreAfterRelaunch: vi.fn().mockResolvedValue(null),
 });
 
@@ -141,6 +156,74 @@ describe("useUpdater", () => {
     expect(result.current.status).toBe("error");
     expect(result.current.errorDialogOpen).toBe(true);
     expect(result.current.error).toContain("Signature rejected");
+  });
+
+  it("restarts the backend when the install fails after prepare_for_update stopped it", async () => {
+    const adapter = makeAdapter(
+      makeBackendStoppingCandidate(vi.fn().mockRejectedValue(new Error("Disk full"))),
+    );
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    act(() => result.current.openConfirmation());
+
+    await act(() => result.current.install());
+
+    expect(adapter.prepareRelaunch).toHaveBeenCalledWith("1.2.0");
+    expect(adapter.restartBackend).toHaveBeenCalledOnce();
+    expect(adapter.relaunch).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("error");
+    expect(result.current.errorDialogOpen).toBe(true);
+    expect(result.current.error).toContain("Disk full");
+    expect(result.current.error).toContain("was restarted");
+  });
+
+  it("tells the user to restart manually when backend recovery itself fails", async () => {
+    const adapter = makeAdapter(
+      makeBackendStoppingCandidate(vi.fn().mockRejectedValue(new Error("Disk full"))),
+    );
+    adapter.restartBackend.mockRejectedValue(new Error("supervisor unavailable"));
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    act(() => result.current.openConfirmation());
+
+    await act(() => result.current.install());
+
+    expect(adapter.restartBackend).toHaveBeenCalledOnce();
+    expect(result.current.error).toContain("could not be restarted");
+    expect(result.current.error).toContain("restart StagePilot manually");
+  });
+
+  it("does not restart the backend when the failure happened before it was stopped", async () => {
+    const adapter = makeAdapter(makeCandidate(vi.fn().mockRejectedValue(new Error("Network down"))));
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    act(() => result.current.openConfirmation());
+
+    await act(() => result.current.install());
+
+    expect(adapter.restartBackend).not.toHaveBeenCalled();
+    expect(result.current.error).toBe("Network down");
+  });
+
+  it("does not attempt recovery when prepareRelaunch itself fails", async () => {
+    const adapter = makeAdapter(makeCandidate());
+    adapter.prepareRelaunch.mockRejectedValue(new Error("Could not save window state"));
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    act(() => result.current.openConfirmation());
+
+    await act(() => result.current.install());
+
+    expect(adapter.restartBackend).not.toHaveBeenCalled();
+    expect(result.current.error).toBe("Could not save window state");
   });
 
   it("shows a success message only when a valid update marker is restored", async () => {

@@ -9,6 +9,8 @@ import {
   StateFlags,
 } from "@tauri-apps/plugin-window-state";
 
+import { restartDesktopBackend } from "../desktop";
+
 export const UPDATE_RELAUNCH_MARKER = "stagepilot.update-pending-relaunch.v1";
 export const UPDATE_CHECK_TIMEOUT_MS = 15_000;
 
@@ -38,6 +40,13 @@ export interface UpdaterAdapter {
   clearRelaunchMarker(): void;
   relaunch(): Promise<void>;
   restoreAfterRelaunch(): Promise<UpdateRelaunchResult>;
+  /**
+   * Bring the managed backend back after a failed install. `prepare_for_update`
+   * deliberately kills the managed backend so the installer can replace the
+   * binary on disk; if the install then fails, nothing else restarts it.
+   * Resolves `true` when the backend was restarted.
+   */
+  restartBackend?(): Promise<boolean>;
 }
 
 type RelaunchMarker = {
@@ -157,6 +166,7 @@ export const tauriUpdaterAdapter: UpdaterAdapter = {
     localStorage.removeItem(UPDATE_RELAUNCH_MARKER);
   },
   relaunch,
+  restartBackend: restartDesktopBackend,
   restoreAfterRelaunch: async () => {
     const marker = safeReadMarker();
     if (!marker) return null;
