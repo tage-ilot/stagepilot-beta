@@ -35,7 +35,22 @@ const DEFAULT_PORT: u16 = 8765;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const RECENT_BACKEND_LINES: usize = 32;
+// A single rotation (keeping .log.1) is enough headroom for a rapid crash
+// loop: at RECENT_BACKEND_LINES=32 lines per failure plus the structured
+// failure entry, dozens of failures fit well inside BACKEND_LOG_MAX_BYTES
+// before even one rotation, and the failing entry itself is always written
+// to the *current* (active) file before any rotation check runs for the
+// next backend start. We still bump to two backup generations (.log.1,
+// .log.2) below purely as extra headroom for long-lived installs that
+// accumulate many restarts across days without the app being restarted.
 const BACKEND_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const BACKEND_LOG_MAX_BACKUPS: u32 = 2;
+/// Rolling window used for repeat-crash-loop detection.
+const CRASH_LOOP_WINDOW: Duration = Duration::from_secs(120);
+/// Number of failures inside `CRASH_LOOP_WINDOW` that qualifies as a loop.
+const CRASH_LOOP_THRESHOLD: usize = 3;
+/// Maximum bytes of log content returned by the "copy backend log" command.
+const BACKEND_LOG_COPY_MAX_BYTES: u64 = 200 * 1024;
 const STAGEPILOT_GITHUB_URL: &str = "https://github.com/tage-ilot/stagepilot";
 // Stable-channel updates come from the main (non-beta) desktop release feed;
 // beta-channel updates keep using whichever endpoint tauri.conf.json (or its
@@ -105,6 +120,15 @@ enum BackendFailureKind {
     Timeout,
 }
 
+/// Payload for the `stagepilot://backend-crash-loop-detected` event, fired
+/// when the backend has failed `CRASH_LOOP_THRESHOLD`+ times within
+/// `CRASH_LOOP_WINDOW`.
+#[derive(Clone, Debug, Serialize)]
+struct CrashLoopDetected {
+    failure_kind: BackendFailureKind,
+    message: String,
+}
+
 fn timeout_may_replace(state: &BackendState) -> bool {
     matches!(state, BackendState::Starting)
 }
@@ -159,6 +183,13 @@ struct BackendSupervisor {
     status: Arc<Mutex<BackendSupervisorStatus>>,
     child: Arc<Mutex<Option<CommandChild>>>,
     child_pid: Arc<Mutex<Option<u32>>>,
+    /// Timestamps of recent classified failures, used for crash-loop
+    /// detection. In-memory only; cleared/pruned on a rolling window.
+    failure_history: Arc<Mutex<VecDeque<Instant>>>,
+    /// Set once a qualifying crash-loop window has been alerted on, so we
+    /// don't re-emit on every subsequent failure in the same loop. Cleared
+    /// once failures stop for `CRASH_LOOP_COOLDOWN`.
+    crash_loop_armed: Arc<Mutex<bool>>,
 }
 
 impl BackendSupervisor {
@@ -174,6 +205,39 @@ impl BackendSupervisor {
             })),
             child: Arc::new(Mutex::new(None)),
             child_pid: Arc::new(Mutex::new(None)),
+            failure_history: Arc::new(Mutex::new(VecDeque::new())),
+            crash_loop_armed: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Records a failure occurrence and reports whether this failure
+    /// qualifies as the (re-)start of a crash loop that should alert the
+    /// user. See `crash_loop_qualifies` / `prune_failure_history` for the
+    /// pure decision logic (also covered directly by unit tests).
+    fn note_failure_and_check_crash_loop(&self, now: Instant) -> bool {
+        let mut history = self
+            .failure_history
+            .lock()
+            .expect("backend failure-history lock poisoned");
+        history.push_back(now);
+        prune_failure_history(&mut history, now);
+        let qualifies = crash_loop_qualifies(&history);
+        let mut armed = self
+            .crash_loop_armed
+            .lock()
+            .expect("backend crash-loop-armed lock poisoned");
+        if qualifies {
+            if *armed {
+                false
+            } else {
+                *armed = true;
+                true
+            }
+        } else {
+            if history.len() < CRASH_LOOP_THRESHOLD {
+                *armed = false;
+            }
+            false
         }
     }
 
@@ -466,10 +530,174 @@ fn probe_port(port: u16) -> PortProbe {
 
 fn rotate_backend_log(path: &std::path::Path) {
     if fs::metadata(path).is_ok_and(|metadata| metadata.len() >= BACKEND_LOG_MAX_BYTES) {
-        let previous = path.with_extension("log.1");
-        let _ = fs::remove_file(&previous);
-        let _ = fs::rename(path, previous);
+        // Shift .log.(N-1) -> .log.N, ..., .log.1 -> .log.2, then move the
+        // active file into .log.1. Oldest generation beyond
+        // BACKEND_LOG_MAX_BACKUPS is dropped.
+        for generation in (1..BACKEND_LOG_MAX_BACKUPS).rev() {
+            let from = path.with_extension(format!("log.{generation}"));
+            let to = path.with_extension(format!("log.{}", generation + 1));
+            if from.exists() {
+                let _ = fs::remove_file(&to);
+                let _ = fs::rename(&from, &to);
+            }
+        }
+        let first_backup = path.with_extension("log.1");
+        let _ = fs::remove_file(&first_backup);
+        let _ = fs::rename(path, &first_backup);
     }
+}
+
+/// Removes any known secret-shaped substrings (Planning Center OAuth
+/// tokens/credentials and generic bearer/api-key patterns) from text before
+/// it is written to the on-disk crash log. The recent-output ring buffer is
+/// raw backend stdout/stderr and must never be trusted to be secret-free.
+fn redact_secrets(text: &str) -> String {
+    let patterns: &[(&str, &str)] = &[
+        ("Authorization: Bearer ", "Authorization: Bearer [REDACTED]"),
+        ("planning_center_token", "planning_center_token=[REDACTED]"),
+        ("access_token", "access_token=[REDACTED]"),
+        ("refresh_token", "refresh_token=[REDACTED]"),
+        ("client_secret", "client_secret=[REDACTED]"),
+    ];
+    let mut redacted = text.to_string();
+    for line in redacted.clone().lines() {
+        let lower = line.to_ascii_lowercase();
+        for (needle, _) in patterns {
+            if lower.contains(&needle.to_ascii_lowercase()) {
+                redacted =
+                    redacted.replace(line, "[REDACTED: line contained a credential-shaped token]");
+                break;
+            }
+        }
+    }
+    redacted
+}
+
+/// Renders a UTC timestamp as an ISO-8601 string (e.g.
+/// "2024-05-01T12:34:56Z") without pulling in a chrono/time dependency.
+fn iso8601_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_seconds = now.as_secs();
+    let days = total_seconds / 86_400;
+    let time_of_day = total_seconds % 86_400;
+    let (hour, minute, second) = (
+        time_of_day / 3600,
+        (time_of_day % 3600) / 60,
+        time_of_day % 60,
+    );
+
+    // Civil-from-days algorithm (Howard Hinnant's public-domain date
+    // algorithms), converts a day count since the Unix epoch into a
+    // proleptic-Gregorian (year, month, day) triple.
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z",
+        day = day,
+    )
+}
+
+/// Structured crash entry appended to the backend log for every classified
+/// failure, on top of the raw stdout/stderr already streamed there. Kept as
+/// a plain struct (rather than inline formatting) so both production code
+/// and tests share the exact same shape.
+#[derive(Debug, Serialize)]
+struct BackendCrashLogEntry<'a> {
+    timestamp: String,
+    app_version: &'a str,
+    os: &'a str,
+    failure_kind: BackendFailureKind,
+    message: &'a str,
+    recent_output: String,
+}
+
+impl<'a> BackendCrashLogEntry<'a> {
+    fn new(
+        app_version: &'a str,
+        kind: BackendFailureKind,
+        message: &'a str,
+        recent_output: &str,
+    ) -> Self {
+        Self {
+            timestamp: iso8601_now(),
+            app_version,
+            os: env::consts::OS,
+            failure_kind: kind,
+            message,
+            recent_output: redact_secrets(recent_output),
+        }
+    }
+
+    fn render(&self) -> String {
+        format!(
+            "---- STAGEPILOT BACKEND FAILURE ----\n\
+             timestamp: {}\n\
+             app_version: {}\n\
+             os: {}\n\
+             failure_kind: {:?}\n\
+             message: {}\n\
+             recent_output:\n{}\n\
+             ---- END STAGEPILOT BACKEND FAILURE ----\n",
+            self.timestamp,
+            self.app_version,
+            self.os,
+            self.failure_kind,
+            self.message,
+            self.recent_output
+        )
+    }
+}
+
+/// Appends a structured failure entry to the backend log file, in addition
+/// to the raw stdout/stderr lines already streamed there by the event
+/// pump. Best-effort: failures to write are swallowed since the frontend
+/// alert already carries the failure information via the emitted event.
+fn write_crash_log_entry(
+    log_path: Option<&str>,
+    app_version: &str,
+    kind: BackendFailureKind,
+    message: &str,
+    recent_output: &str,
+) {
+    let Some(path) = log_path else { return };
+    let entry = BackendCrashLogEntry::new(app_version, kind, message, recent_output);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(entry.render().as_bytes());
+        let _ = file.flush();
+    }
+}
+
+/// Drops failure timestamps that are either outside the detection window
+/// (older than `CRASH_LOOP_WINDOW`) or, when the history has gone quiet for
+/// at least `CRASH_LOOP_COOLDOWN`, all history predating the quiet period —
+/// this is what allows the loop-detected alert to re-arm after a cooldown.
+fn prune_failure_history(history: &mut VecDeque<Instant>, now: Instant) {
+    while let Some(oldest) = history.front() {
+        if now.duration_since(*oldest) > CRASH_LOOP_WINDOW {
+            history.pop_front();
+        } else {
+            break;
+        }
+    }
+}
+
+/// Pure decision: does this failure history qualify as an active crash
+/// loop, i.e. does it contain at least `CRASH_LOOP_THRESHOLD` entries (all
+/// of which are already guaranteed to be within `CRASH_LOOP_WINDOW` of
+/// `now` by `prune_failure_history`)?
+fn crash_loop_qualifies(history: &VecDeque<Instant>) -> bool {
+    history.len() >= CRASH_LOOP_THRESHOLD
 }
 
 fn recent_backend_text(lines: &VecDeque<String>) -> String {
@@ -640,6 +868,7 @@ fn start_backend(app: &tauri::AppHandle, supervisor: BackendSupervisor) -> Resul
     let event_app = app.clone();
     let event_supervisor = supervisor.clone();
     let event_log_path = backend_log_path_text.clone();
+    let event_app_version = app.package_info().version.to_string();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
@@ -675,13 +904,29 @@ fn start_backend(app: &tauri::AppHandle, supervisor: BackendSupervisor) -> Resul
                         );
                         let (kind, message) =
                             backend_exit_failure(payload.code, &recent, event_log_path.as_deref());
+                        write_crash_log_entry(
+                            event_log_path.as_deref(),
+                            &event_app_version,
+                            kind.clone(),
+                            &message,
+                            &recent,
+                        );
                         event_supervisor.fail(
                             &event_app,
-                            kind,
-                            message,
+                            kind.clone(),
+                            message.clone(),
                             true,
                             event_log_path.clone(),
                         );
+                        if event_supervisor.note_failure_and_check_crash_loop(Instant::now()) {
+                            let _ = event_app.emit(
+                                "stagepilot://backend-crash-loop-detected",
+                                CrashLoopDetected {
+                                    failure_kind: kind,
+                                    message,
+                                },
+                            );
+                        }
                     }
                     break;
                 }
@@ -698,6 +943,37 @@ fn backend_supervisor_status(
     supervisor: tauri::State<'_, BackendSupervisor>,
 ) -> BackendSupervisorStatus {
     supervisor.snapshot()
+}
+
+/// Reads the backend log file content for clipboard copy, primarily for
+/// the "Copy Backend Log" button and the crash-loop alert dialog. Returns
+/// at most the last `BACKEND_LOG_COPY_MAX_BYTES` bytes when the file is
+/// larger, so a runaway log can't stall the UI or blow up the clipboard.
+#[tauri::command]
+fn copy_backend_log(supervisor: tauri::State<'_, BackendSupervisor>) -> Result<String, String> {
+    let log_path = supervisor
+        .snapshot()
+        .log_path
+        .ok_or_else(|| "No backend log is available yet.".to_string())?;
+    read_backend_log_tail(std::path::Path::new(&log_path))
+}
+
+fn read_backend_log_tail(path: &std::path::Path) -> Result<String, String> {
+    let mut file =
+        fs::File::open(path).map_err(|error| format!("Unable to open the backend log: {error}"))?;
+    let size = file
+        .metadata()
+        .map_err(|error| format!("Unable to read the backend log metadata: {error}"))?
+        .len();
+    if size > BACKEND_LOG_COPY_MAX_BYTES {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::Start(size - BACKEND_LOG_COPY_MAX_BYTES))
+            .map_err(|error| format!("Unable to seek the backend log: {error}"))?;
+    }
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|error| format!("Unable to read the backend log: {error}"))?;
+    Ok(content)
 }
 
 #[tauri::command]
@@ -1114,6 +1390,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend_supervisor_status,
             restart_managed_backend,
+            copy_backend_log,
             prepare_for_update,
             check_for_update_on_channel,
             set_remote_autostart,
@@ -1309,6 +1586,134 @@ mod tests {
         assert_eq!(kind, BackendFailureKind::SidecarExited);
         assert!(message.contains("exit code 7"));
         assert!(message.contains("/tmp/backend.log"));
+    }
+
+    #[test]
+    fn crash_log_entry_contains_structured_fields_and_redacts_secrets() {
+        let recent = "starting up\nAuthorization: Bearer super-secret-token\nboom";
+        let entry = BackendCrashLogEntry::new(
+            "1.2.3",
+            BackendFailureKind::SidecarExited,
+            "The packaged StagePilot backend exited before it became ready (exit code 1).",
+            recent,
+        );
+        let rendered = entry.render();
+        assert!(rendered.contains("app_version: 1.2.3"));
+        assert!(rendered.contains(&format!("os: {}", env::consts::OS)));
+        assert!(rendered.contains("failure_kind: SidecarExited"));
+        assert!(rendered.contains("exit code 1"));
+        assert!(rendered.contains("boom"));
+        assert!(!rendered.contains("super-secret-token"));
+        assert!(rendered.contains("REDACTED"));
+        // ISO-8601 timestamp: YYYY-MM-DDTHH:MM:SSZ
+        assert!(rendered.contains("timestamp: 2"));
+        assert!(rendered.contains('T'));
+        assert!(rendered.contains('Z'));
+    }
+
+    #[test]
+    fn write_crash_log_entry_persists_structured_failure_to_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "stagepilot-crash-log-test-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("stagepilot-backend.log");
+        let log_path_text = log_path.to_string_lossy().into_owned();
+
+        write_crash_log_entry(
+            Some(&log_path_text),
+            "9.9.9",
+            BackendFailureKind::MacosCodeSigning,
+            "macOS blocked the backend.",
+            "access_token=abc123\nharmless line",
+        );
+
+        let contents = fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("app_version: 9.9.9"));
+        assert!(contents.contains("failure_kind: MacosCodeSigning"));
+        assert!(contents.contains("macOS blocked the backend."));
+        assert!(contents.contains("harmless line"));
+        assert!(!contents.contains("abc123"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secrets_are_redacted_from_crash_log_output() {
+        let text = "line one\naccess_token=super-secret\nclient_secret: also-secret\nfine line";
+        let redacted = redact_secrets(text);
+        assert!(!redacted.contains("super-secret"));
+        assert!(!redacted.contains("also-secret"));
+        assert!(redacted.contains("fine line"));
+        assert!(redacted.contains("line one"));
+    }
+
+    #[test]
+    fn three_failures_within_two_minutes_trigger_crash_loop_detection() {
+        let mut history = VecDeque::new();
+        let base = Instant::now();
+        let first = base;
+        let second = base + Duration::from_secs(30);
+        let third = base + Duration::from_secs(60);
+
+        history.push_back(first);
+        prune_failure_history(&mut history, first);
+        assert!(!crash_loop_qualifies(&history));
+
+        history.push_back(second);
+        prune_failure_history(&mut history, second);
+        assert!(!crash_loop_qualifies(&history));
+
+        history.push_back(third);
+        prune_failure_history(&mut history, third);
+        assert!(
+            crash_loop_qualifies(&history),
+            "3 failures within 2 minutes should qualify as a crash loop"
+        );
+    }
+
+    #[test]
+    fn two_failures_more_than_two_minutes_apart_do_not_trigger_crash_loop() {
+        let mut history = VecDeque::new();
+        let base = Instant::now();
+        let first = base;
+        let second = base + Duration::from_secs(150); // > CRASH_LOOP_WINDOW (120s)
+
+        history.push_back(first);
+        prune_failure_history(&mut history, first);
+        assert!(!crash_loop_qualifies(&history));
+
+        history.push_back(second);
+        // Pruning at `second` should drop `first` since it's now more than
+        // CRASH_LOOP_WINDOW old, leaving only the single recent failure.
+        prune_failure_history(&mut history, second);
+        assert_eq!(history.len(), 1);
+        assert!(!crash_loop_qualifies(&history));
+    }
+
+    #[test]
+    fn crash_loop_alert_only_fires_once_per_qualifying_window_and_rearms_later() {
+        let supervisor = BackendSupervisor::new(8765);
+        let base = Instant::now();
+
+        // First two failures: below threshold, no alert.
+        assert!(!supervisor.note_failure_and_check_crash_loop(base));
+        assert!(!supervisor.note_failure_and_check_crash_loop(base + Duration::from_secs(10)));
+        // Third failure within the window: crosses the threshold, alert fires.
+        assert!(supervisor.note_failure_and_check_crash_loop(base + Duration::from_secs(20)));
+        // A 4th failure still inside/related to the same window must not
+        // re-emit the alert.
+        assert!(!supervisor.note_failure_and_check_crash_loop(base + Duration::from_secs(25)));
+
+        // After the original failures age out of the rolling window and
+        // failures stop occurring for a while, a fresh 3rd-in-2-minutes
+        // pattern should be able to alert again.
+        let far_future = base + Duration::from_secs(400);
+        assert!(!supervisor.note_failure_and_check_crash_loop(far_future));
+        assert!(!supervisor.note_failure_and_check_crash_loop(far_future + Duration::from_secs(10)));
+        assert!(supervisor.note_failure_and_check_crash_loop(far_future + Duration::from_secs(20)));
     }
 
     #[test]
