@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 
 import type {
   ApplicationState,
@@ -255,6 +255,74 @@ function renderDashboard(
 beforeEach(() => {
   window.localStorage.removeItem("stagepilot.dashboard-layout.v2");
   window.localStorage.removeItem("stagepilot.dashboard-layout.invalid");
+});
+
+describe("Recent event stream 120s expiry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("hides an event older than 120s while a 30s-old event still shows", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T16:02:30Z"));
+    const state = applicationState(loadedServiceState, {
+      recent_events: [
+        { id: "old", type: "song_started", timestamp: "2026-07-13T16:00:00Z", source: "propresenter" },
+        { id: "fresh", type: "song_started", timestamp: "2026-07-13T16:02:00Z", source: "propresenter" },
+      ],
+    });
+    renderDashboard(loadedServiceState, { state });
+
+    expect(document.querySelectorAll(".event-row")).toHaveLength(1);
+    expect(screen.getByText("song_started")).toBeInTheDocument();
+  });
+
+  it("re-evaluates live: an event disappears on its own once it crosses 120s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T16:00:00Z"));
+    const state = applicationState(loadedServiceState, {
+      recent_events: [
+        { id: "will-expire", type: "song_started", timestamp: "2026-07-13T16:00:00Z", source: "propresenter" },
+      ],
+    });
+    renderDashboard(loadedServiceState, { state });
+
+    expect(screen.getByText("song_started")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.setSystemTime(new Date("2026-07-13T16:02:05Z"));
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(screen.queryByText("song_started")).toBeNull();
+  });
+
+  it("leaves the pinned active-error mechanism unaffected by event age", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T16:00:00Z"));
+    const state = applicationState(loadedServiceState, {
+      propresenter_status: "error",
+      recent_errors: [
+        { component: "propresenter", event_id: null, message: "Could not connect.", timestamp: "2026-07-13T10:00:00Z" },
+      ],
+      recent_events: [],
+    });
+    renderDashboard(loadedServiceState, { state });
+
+    const errorMessage = screen.getByText(/Could not connect\./);
+    expect(errorMessage).toBeInTheDocument();
+    expect(errorMessage.closest("p")?.textContent).toMatch(/propresenter/i);
+    expect(document.querySelectorAll(".border-rose-400\\/15")).toHaveLength(1);
+
+    await act(async () => {
+      vi.setSystemTime(new Date("2026-07-13T16:10:00Z"));
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    // Still pinned, still singular, despite being far older than 120s.
+    expect(screen.getByText(/Could not connect\./)).toBeInTheDocument();
+    expect(document.querySelectorAll(".border-rose-400\\/15")).toHaveLength(1);
+  });
 });
 
 describe("Dashboard Planning Center plan states", () => {

@@ -1,17 +1,21 @@
 export function DashboardLayoutToolbar({
   editing,
+  eventsHidden,
   onAddSpacer,
   onCompact,
   onDone,
   onEdit,
   onReset,
+  onToggleEventsHidden,
 }: {
   editing: boolean;
+  eventsHidden: boolean;
   onAddSpacer: () => void;
   onCompact: () => void;
   onDone: () => void;
   onEdit: () => void;
   onReset: () => void;
+  onToggleEventsHidden: () => void;
 }) {
   if (!editing) {
     return (
@@ -38,6 +42,9 @@ export function DashboardLayoutToolbar({
       </span>
       <button className="rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10" onClick={onAddSpacer} type="button">
         Add spacer
+      </button>
+      <button className="rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10" onClick={onToggleEventsHidden} type="button">
+        {eventsHidden ? "Show event stream" : "Hide event stream"}
       </button>
       <button className="rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10" onClick={onCompact} type="button">
         Compact layout

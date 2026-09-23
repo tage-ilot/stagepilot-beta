@@ -312,6 +312,10 @@ export function Dashboard({
     return () => window.clearInterval(timer);
   }, [state.timer.started_at, state.timer.status]);
   useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
@@ -492,7 +496,10 @@ export function Dashboard({
   });
   const ready = readinessPassed(checks);
   const systemError = readinessHasError(checks);
-  const activity = [...state.recent_events].reverse().slice(0, 10);
+  const EVENT_DISPLAY_WINDOW_MS = 120_000;
+  const activity = [...state.recent_events].reverse()
+    .filter((event) => clockNow - Date.parse(event.timestamp) <= EVENT_DISPLAY_WINDOW_MS)
+    .slice(0, 10);
   const pinnedError = latestActiveError(state);
   const midiDetail = connectionViews.midi.detail;
   const timerDuration = state.timer.duration_seconds ?? state.current_song?.duration_seconds ?? 0;

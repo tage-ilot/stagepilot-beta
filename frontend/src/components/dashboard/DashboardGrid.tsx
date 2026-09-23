@@ -153,9 +153,11 @@ export function DashboardGrid({
   editingRef.current = editing;
 
   const hiddenWidgets = Object.entries(widgets).filter(([, content]) => content == null).map(([id]) => id).join(",");
+  const eventsHidden = layout.eventsHidden ?? false;
   const items = useMemo(() => activeItems(layout, mode).filter(
-    (item) => !hiddenWidgets.split(",").includes(item.id),
-  ), [layout, mode, hiddenWidgets]);
+    (item) => !hiddenWidgets.split(",").includes(item.id)
+      && !(item.id === "events" && eventsHidden && !editing),
+  ), [layout, mode, hiddenWidgets, eventsHidden, editing]);
   const orderedIds = useMemo(
     () => orderedLayoutItems(items).map(({ id }) => id),
     [items],
@@ -491,6 +493,13 @@ export function DashboardGrid({
     });
   }, [commitLayout, fitLoadedWidgetsToContent]);
 
+  const toggleEventsHidden = useCallback(() => {
+    const current = layoutRef.current;
+    const next = !(current.eventsHidden ?? false);
+    commitLayout({ ...current, eventsHidden: next });
+    setAnnouncement(next ? "Recent event stream hidden" : "Recent event stream shown");
+  }, [commitLayout]);
+
   return (
     <section aria-label="Customizable dashboard" className="mt-5">
       <p aria-live="polite" className="sr-only">{announcement}</p>
@@ -546,11 +555,13 @@ export function DashboardGrid({
       </div>
       {canEditLayout && <DashboardLayoutToolbar
         editing={editing}
+        eventsHidden={eventsHidden}
         onAddSpacer={addSpacer}
         onCompact={() => compactGrid(true)}
         onDone={() => setEditing(false)}
         onEdit={() => setEditing(true)}
         onReset={resetLayout}
+        onToggleEventsHidden={toggleEventsHidden}
       />}
     </section>
   );
