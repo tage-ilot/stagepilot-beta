@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from stagepilot.api.remote_auth import LoginRequest, RemoteRoute, _admin
 from stagepilot.api.remote_ingress import remote_context
 from stagepilot.remote_feature import RemoteFeature
-from stagepilot.remote_provider import ProviderError
+from stagepilot.remote_provider import InstallationPermanentlyRevokedError, ProviderError
 from stagepilot.services.remote_auth import RemoteRole
 
 router = APIRouter(prefix="/api/v1/remote-access", route_class=RemoteRoute)
@@ -46,10 +46,12 @@ async def status(request: Request) -> dict[str, Any]:
             "url": None,
             "message": "Remote Access is unavailable on this installation.",
             "temporary_url": True,
+            "permanently_revoked": False,
         }
     )
     result.setdefault("provisioned", True)
     result.setdefault("credential_available", True)
+    result.setdefault("permanently_revoked", False)
     result["needs_operator"] = not any(
         u["enabled"] and u["role"] == RemoteRole.OPERATOR
         for u in await access.call(access.store.users)
@@ -80,10 +82,31 @@ async def enable(request: Request) -> dict[str, Any]:
             await access.call(value.enable)
         else:
             await access.call(value.set_enabled, True)
+    except InstallationPermanentlyRevokedError as exc:
+        raise HTTPException(503, _enable_error_message(exc)) from exc
     except ProviderError as exc:
         raise HTTPException(503, _enable_error_message(exc)) from exc
     except ValueError as exc:
         raise HTTPException(409, "Remote Access is not provisioned or is already managed.") from exc
+    return await status(request)
+
+
+@router.post("/reset")
+async def reset(request: Request) -> dict[str, Any]:
+    """Explicit, visible recovery once `enable` has confirmed this
+    installation's credential is permanently (not transiently) revoked --
+    see `status().permanently_revoked` and `DesktopRemoteManager.reset_identity`.
+    Discards the dead local identity so the next `enable` mints a fresh one;
+    never runs silently/automatically."""
+
+    access = _admin(request)
+    mutation(request)
+    value = manager(request)
+    if value is None or not callable(getattr(value, "reset_identity", None)):
+        raise HTTPException(
+            503, "Resetting the installation identity is unavailable on this installation."
+        )
+    await access.call(value.reset_identity)
     return await status(request)
 
 
@@ -104,8 +127,8 @@ def _enable_error_message(exc: ProviderError) -> str:
         )
     if "credential is unavailable" in text or "credential was revoked" in text:
         return (
-            "This installation's credential is unavailable or revoked. Contact beta "
-            "support to recover this installation."
+            "Your previous Remote Access setup could not be restored and needs to be "
+            "reset. This is safe and won't affect local StagePilot."
         )
     if "not trusted" in text:
         return "Remote Access is unavailable on this installation."

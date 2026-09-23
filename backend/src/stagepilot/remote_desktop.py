@@ -21,8 +21,8 @@ from stagepilot.remote_bootstrap import (
 )
 from stagepilot.remote_connector import Connector
 from stagepilot.remote_feature import RemoteFeature
-from stagepilot.remote_files import BetaControlConfig, read_desired, safe_status
-from stagepilot.remote_provider import ProviderError
+from stagepilot.remote_files import BetaControlConfig, atomic_write, read_desired, safe_status
+from stagepilot.remote_provider import InstallationPermanentlyRevokedError, ProviderError
 from stagepilot.remote_runtime import attach_managed_remote
 
 
@@ -47,6 +47,7 @@ class DesktopRemoteManager:
         self.state_dir = root / "control"
         self.desired_path = self.installation_dir / "remote.json"
         self.connector_status_path = self.installation_dir / "connector-status.json"
+        self._permanently_revoked_marker = self.state_dir / "revoked.json"
         self.feature = RemoteFeature(self.desired_path)
         self.bootstrap = bootstrap_store or DesktopBootstrapStore(root / "bootstrap.json")
         self.revoke_sessions = revoke_sessions
@@ -73,6 +74,7 @@ class DesktopRemoteManager:
                 "provisioned": provisioned,
                 "credential_available": credential_available,
                 "temporary_url": False,
+                "permanently_revoked": self._permanently_revoked_marker.exists(),
             }
         )
         if not provisioned:
@@ -98,6 +100,29 @@ class DesktopRemoteManager:
         if not generation:
             raise ProviderError("Remote provisioning did not return a generation")
         self.feature.set_managed_enabled(True, generation)
+        return self.status()
+
+    def reset_identity(self) -> dict[str, object]:
+        """Explicit, visible recovery for a `retired` installation whose
+        credential the control plane has permanently revoked (reactivate()
+        returns 401/403 -- see `InstallationPermanentlyRevokedError`).
+
+        There is nothing left to reactivate or reenroll with (both require
+        presenting the now-dead credential), so this discards the local
+        identity record entirely and lets the next enable attempt mint a
+        brand-new installation via the anonymous `/v1/installations/enroll`
+        path. This never runs silently: it is only reachable via an
+        explicit user action from the UI once `enable()` has surfaced
+        `InstallationPermanentlyRevokedError`, and it never touches local
+        production state (Remote users, local StagePilot config).
+        """
+
+        retired = self.bootstrap.state().retired
+        if retired is not None:
+            self.bootstrap.discard_identity(retired)
+        self.feature.set_managed_enabled(False)
+        self._publish_off_status()
+        self._permanently_revoked_marker.unlink(missing_ok=True)
         return self.status()
 
     def disable(self) -> dict[str, object]:
@@ -248,14 +273,35 @@ class DesktopRemoteManager:
             self._publish_off_status_if_disabled()
 
     def _active(self) -> BootstrapMetadata:
-        active = self.bootstrap.state().active
-        if active is None:
-            active = self.bootstrap.ensure_enrolled(
-                control_plane_origin=self.control_plane_origin,
-                remote_port=self.remote_port,
-                transport=self.transport,
-            )
-        self.bootstrap.credential(active)
+        try:
+            active = self.bootstrap.state().active
+            if active is None:
+                # ensure_enrolled() already reads/validates the Keychain
+                # credential internally for every path that has one to
+                # check (the pre-existing `active` branch calls
+                # self.credential(); the `retired` branch's reactivate()
+                # reads it once before the reactivate POST). Only the
+                # brand-new anonymous-enrollment path has no prior
+                # credential to verify -- it just wrote one. Re-reading it
+                # again right below would be a second, avoidable
+                # Keychain/system-password prompt for the exact same
+                # enable attempt, so we trust this return value rather
+                # than reading a second time.
+                active = self.bootstrap.ensure_enrolled(
+                    control_plane_origin=self.control_plane_origin,
+                    remote_port=self.remote_port,
+                    transport=self.transport,
+                )
+            else:
+                self.bootstrap.credential(active)
+        except InstallationPermanentlyRevokedError:
+            # Surface a durable, visible "needs reset" signal for status()
+            # rather than letting the operator retry a doomed reactivation
+            # forever; cleared by a successful _active() or reset_identity().
+            atomic_write(self._permanently_revoked_marker, "{}")
+            raise
+        if self._permanently_revoked_marker.exists():
+            self._permanently_revoked_marker.unlink(missing_ok=True)
         return active
 
     def _apply(self, metadata: BootstrapMetadata, action: str) -> dict[str, object]:

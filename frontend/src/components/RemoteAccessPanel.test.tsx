@@ -12,12 +12,13 @@ vi.mock("../api", async (original) => ({
   getRemoteStatus: vi.fn(), getRemoteUsers: vi.fn(), setRemoteEnabled: vi.fn(),
   bootstrapRemote: vi.fn(), createRemoteUser: vi.fn(),
   updateRemoteUser: vi.fn(), deleteRemoteUser: vi.fn(), regenerateRemote: vi.fn(),
+  resetRemoteIdentity: vi.fn(),
 }));
 vi.mock("../desktop", async (original) => ({
   ...await original<typeof import("../desktop")>(),
   setRemoteAutostart: vi.fn(),
 }));
-const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true};
+const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true, permanently_revoked: false};
 const operator: api.RemoteUser = {id: "one", email: "operator@example.test", role: "Operator", enabled: true};
 beforeEach(() => {
   vi.clearAllMocks();
@@ -140,5 +141,14 @@ describe("Remote Access", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Local StagePilot is unaffected");
     expect(await screen.findByRole("button", {name: "Regenerate Remote link"})).toBeEnabled();
     expect(screen.queryByRole("button", {name: /Regenerating…/})).not.toBeInTheDocument();
+  });
+
+  it("shows a reset action for a permanently revoked installation and calls the reset API", async () => {
+    vi.mocked(api.getRemoteStatus).mockResolvedValue({...off, needs_operator: false, permanently_revoked: true});
+    vi.mocked(api.resetRemoteIdentity).mockResolvedValue({...off, needs_operator: true, permanently_revoked: false});
+    render(<Harness />);
+    expect(await screen.findByText(/needs to be reset/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Reset installation identity"}));
+    await waitFor(() => expect(api.resetRemoteIdentity).toHaveBeenCalledTimes(1));
   });
 });
