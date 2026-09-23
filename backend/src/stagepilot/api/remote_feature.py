@@ -74,9 +74,6 @@ async def enable(request: Request) -> dict[str, Any]:
     mutation(request)
     managed = manager(request)
     value: Any = managed or feature(request)
-    users = await access.call(access.store.users)
-    if not any(u["enabled"] and u["role"] == RemoteRole.OPERATOR for u in users):
-        raise HTTPException(409, "Create the first Operator before enabling Remote Access.")
     try:
         if managed is not None:
             await access.call(value.enable)

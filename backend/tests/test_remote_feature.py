@@ -37,6 +37,42 @@ def test_atomic_write_skips_unsupported_directory_fsync_on_windows(
     assert not any(call.args[:2] == (tmp_path, os.O_RDONLY) for call in open_mock.call_args_list)
 
 
+def test_enable_succeeds_with_zero_operators_on_fresh_install(tmp_path: Path) -> None:
+    """Regression for the beta.10 gap: a genuinely fresh installation (zero
+    Operators configured) must be able to call /enable directly and start
+    the tunnel, matching the frontend's already-shipped expectation that
+    Operator creation is not a precondition for starting Remote Access.
+    Real Viewer/Operator auth still gates every actual Remote request
+    regardless of Operator count, so this is safe."""
+    store = RemoteStore(tmp_path / "identity.db")
+    app = create_app(Settings(), remote_store=store, dashboard_auth_enforced=True)
+    feature = RemoteFeature(tmp_path / "export/remote.json")
+    app.state.remote_feature = feature
+    with TestClient(app) as client:
+        assert client.post("/api/v1/dashboard-auth/login", json={"pin": "1234"}).status_code == 200
+        assert client.get("/api/v1/remote-access").json()["needs_operator"] is True
+        client.headers["X-StagePilot-Remote"] = "1"
+        response = client.post("/api/v1/remote-access/enable")
+        assert response.status_code == 200
+        status = client.get("/api/v1/remote-access").json()
+        assert status["needs_operator"] is True
+
+
+def test_last_enabled_operator_removal_guard_is_unaffected(tmp_path: Path) -> None:
+    """The separate, still-valid rule that the last enabled Operator on an
+    already-enabled installation cannot be removed/disabled/demoted must
+    keep working -- it is unrelated to the enable-time zero-operator gate
+    that was removed above."""
+    store = RemoteStore(tmp_path / "identity.db")
+    user = store.bootstrap("operator@example.test", PASSWORD)
+    with pytest.raises(RemoteAuthError, match="last enabled Operator"):
+        store.update_user(user["id"], delete=True)
+    with pytest.raises(RemoteAuthError, match="last enabled Operator"):
+        store.update_user(user["id"], enabled=False)
+    with pytest.raises(RemoteAuthError, match="last enabled Operator"):
+        store.update_user(user["id"], role=RemoteRole.VIEWER)
+
+
 def test_product_bootstrap_and_intent(tmp_path: Path) -> None:
     store = RemoteStore(tmp_path / "identity.db")
     app = create_app(Settings(), remote_store=store, dashboard_auth_enforced=True)
@@ -57,7 +93,7 @@ def test_product_bootstrap_and_intent(tmp_path: Path) -> None:
         assert client.get("/api/v1/remote-access").json()["needs_operator"] is True
         assert client.post("/api/v1/remote-access/enable").status_code == 403
         client.headers["X-StagePilot-Remote"] = "1"
-        assert client.post("/api/v1/remote-access/enable").status_code == 409
+        assert client.post("/api/v1/remote-access/enable").status_code == 200
         body = {"email": "operator@example.test", "password": PASSWORD}
         assert client.post("/api/v1/remote-access/bootstrap", json=body).status_code == 201
         assert client.post("/api/v1/remote-access/bootstrap", json=body).status_code == 409
