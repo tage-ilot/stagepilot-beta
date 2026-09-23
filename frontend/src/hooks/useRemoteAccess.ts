@@ -29,6 +29,16 @@ export function friendlyRemoteError(cause: unknown): string {
  * renders status, users, and link management using the same state so the
  * visual checkbox state and the real enabled state never diverge).
  */
+// A single momentary `credential_available: false` reading (e.g. the very
+// first native Keychain/Credential Manager broker read after a backend
+// restart racing an in-flight system password prompt) self-resolves within
+// a poll cycle or two and must never be reported to the user as a
+// permanent revocation -- see t_460cf8dd. Only a run of consecutive false
+// readings across this many 2s polls is treated as a genuine, persistent
+// problem worth surfacing with the alarming "revoked, contact support"
+// wording; anything shorter renders no credential banner at all.
+const CREDENTIAL_UNAVAILABLE_STREAK_THRESHOLD = 3;
+
 export function useRemoteAccess() {
   const access = useDashboardAccess();
   const [status, setStatus] = useState<RemoteStatus | null>(null);
@@ -38,8 +48,10 @@ export function useRemoteAccess() {
   const [busy, setBusy] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [checkboxBusy, setCheckboxBusy] = useState(false);
+  const [credentialWarning, setCredentialWarning] = useState(false);
   const alive = useRef(true);
   const inFlight = useRef(false);
+  const credentialUnavailableStreak = useRef(0);
   const canManage = access.authenticated && access.capabilities.canConfigure;
   const local = access.mode !== "remote";
 
@@ -52,7 +64,18 @@ export function useRemoteAccess() {
       if (!inFlight.current) {
         try {
           const next = await getRemoteStatus();
-          if (!cancelled) setStatus(next);
+          if (!cancelled) {
+            setStatus(next);
+            if (next.provisioned && !next.credential_available) {
+              credentialUnavailableStreak.current += 1;
+              if (credentialUnavailableStreak.current >= CREDENTIAL_UNAVAILABLE_STREAK_THRESHOLD) {
+                setCredentialWarning(true);
+              }
+            } else {
+              credentialUnavailableStreak.current = 0;
+              setCredentialWarning(false);
+            }
+          }
         } catch (cause) {
           if (!cancelled) { setStatus(null); setError(friendlyRemoteError(cause)); }
         }
@@ -135,7 +158,7 @@ export function useRemoteAccess() {
 
   return {
     access, status, users, setUsers, error, setError, notice, setNotice,
-    busy, bootstrap, confirmDisable, checkboxBusy,
+    busy, bootstrap, confirmDisable, checkboxBusy, credentialWarning,
     canManage, local, run,
     enabled, panelOpen,
     requestEnable, requestDisable, cancelDisable, confirmDisableAccept,

@@ -49,7 +49,7 @@ function safeUrl(value: string | null): string | null {
 export function RemoteAccessPanel({ control }: { control: RemoteAccessControl }) {
   const {
     access, status, users, error, notice, busy, bootstrap,
-    confirmDisable, cancelDisable, confirmDisableAccept, canManage, local, run,
+    confirmDisable, cancelDisable, confirmDisableAccept, canManage, local, run, credentialWarning,
   } = control;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -96,7 +96,7 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
       <p className="text-sm text-amber-200">Temporary Remote link: the address changes after reconnection or restart. This preview is not a permanent remote address.</p> :
       <p className="text-sm text-sky-200">Stable Remote link: this installation keeps the same address after reconnecting.</p>}
     {status && !status.available && <p className="text-sm text-slate-300">Remote Access is unavailable on this installation. Local StagePilot is unaffected.</p>}
-    {status?.provisioned && !status.credential_available && <p className="text-sm text-amber-200">The installation credential is unavailable or revoked. Remote remains off; contact beta support to recover this installation.</p>}
+    {status?.provisioned && !status.credential_available && credentialWarning && <p className="text-sm text-amber-200">The installation credential is unavailable or revoked. Remote remains off; contact beta support to recover this installation.</p>}
     {status?.permanently_revoked && <div role="group" aria-label="Reset installation identity" className="space-y-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3">
       <p className="text-sm text-amber-200">
         Your previous Remote Access setup could not be restored and needs to be reset. This is safe and won't affect local StagePilot.
