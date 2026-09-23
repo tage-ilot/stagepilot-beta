@@ -210,7 +210,76 @@ describe('private-beta control plane', () => {
     expect(second.hostname).not.toBe(first.hostname);
     expect(second.installationCredential).not.toBe(first.installationCredential);
     expect(String(first.hostname)).toBe(`sp-${String(first.installationId)}.remote.example.com`);
+    expect(String(first.installationId)).toMatch(/^[a-f0-9]{8}$/);
     expect(JSON.stringify([...storage.values.values()])).not.toContain('provider-secret-never-returned');
+  });
+
+  it('retries id generation on a collision instead of overwriting the existing installation', async () => {
+    // Force the first two 4-byte draws to collide with an id that already
+    // has a real installation record, then let the third draw succeed --
+    // proves the retry loop advances past a collision rather than
+    // silently overwriting someone else's installation.
+    const collidingId = 'deadbeef';
+    storage.values.set(`installation:${collidingId}`, {
+      id: collidingId,
+      hostname: `sp-${collidingId}.remote.example.com`,
+      label: 'victim',
+      phase: 'enabled',
+      desiredEnabled: true,
+      revoked: false,
+      createdAt: 'then',
+      updatedAt: 'then',
+    });
+    const draws = [collidingId, collidingId, 'cafef00d'];
+    const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+      const hex = draws.shift();
+      if (!hex) throw new Error('ran out of scripted random draws');
+      const bytes = hex.match(/.{2}/g)!.map((byte) => parseInt(byte, 16));
+      (array as Uint8Array).set(bytes);
+      return array;
+    });
+
+    try {
+      const response = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'collision-retry-request',
+      }));
+      expect(response.status).toBe(201);
+      const installation = await json(response);
+      expect(installation.installationId).toBe('cafef00d');
+      expect(installation.installationId).not.toBe(collidingId);
+      // The pre-seeded "victim" installation must be completely untouched.
+      const victim = storage.values.get(`installation:${collidingId}`) as Record<string, unknown>;
+      expect(victim.label).toBe('victim');
+      expect(victim.phase).toBe('enabled');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fails closed with a 503 when every id-generation attempt collides', async () => {
+    const spy = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+      (array as Uint8Array).set([0xde, 0xad, 0xbe, 0xef]);
+      return array;
+    });
+    storage.values.set('installation:deadbeef', {
+      id: 'deadbeef',
+      hostname: 'sp-deadbeef.remote.example.com',
+      label: '',
+      phase: 'disabled',
+      desiredEnabled: false,
+      revoked: false,
+      createdAt: 'then',
+      updatedAt: 'then',
+    });
+
+    try {
+      const response = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'collision-exhausted-request',
+      }));
+      expect(response.status).toBe(503);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('enforces normalized-source enrollment quota while replay and another source remain available', async () => {

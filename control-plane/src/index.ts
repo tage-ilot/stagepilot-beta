@@ -164,6 +164,28 @@ function randomHex(bytes: number): string {
   return Array.from(value, (part) => part.toString(16).padStart(2, '0')).join('');
 }
 
+const NEW_ID_BYTES = 4; // 8 hex chars (32 bits) for new-enrollment / reenroll ids.
+const MAX_ID_COLLISION_ATTEMPTS = 5;
+
+// id lineage: installations minted furthest in the past used a 32-hex-char
+// id (16 random bytes); a later generation shortened that to 16 hex chars
+// (8 random bytes); this generation shortens it again to 8 hex chars (4
+// random bytes, ~4.3 billion possibilities) for a shorter Remote URL.
+// Every existing installation keeps whatever id/hostname it was minted
+// with -- only brand-new enrollments and reenroll() calls made after this
+// change get the shorter 8-char id. Route matching therefore has to accept
+// all three lengths indefinitely (see the {8}|{16}|{32} regexes above).
+async function generateUniqueInstallationId(
+  storage: DurableObjectStorage,
+): Promise<string> {
+  for (let attempt = 0; attempt < MAX_ID_COLLISION_ATTEMPTS; attempt++) {
+    const candidate = randomHex(NEW_ID_BYTES);
+    const existing = await storage.get(`installation:${candidate}`);
+    if (existing === undefined) return candidate;
+  }
+  throw new Limited(503, 5, 'installation id allocation failed');
+}
+
 function encodeBase64Url(value: Uint8Array): string {
   let binary = '';
   for (const byte of value) binary += String.fromCharCode(byte);
@@ -297,12 +319,12 @@ export class Registry {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return reply(await this.stats());
       }
-      const adminRevoke = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{16}|[a-f0-9]{32})\/revoke$/);
+      const adminRevoke = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/revoke$/);
       if (request.method === 'POST' && adminRevoke) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.withProviderLane('recovery', () => this.adminRevoke(adminRevoke[1]));
       }
-      const reenrollRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{16}|[a-f0-9]{32})\/reenroll$/);
+      const reenrollRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/reenroll$/);
       if (request.method === 'POST' && reenrollRoute) {
         const installation = await this.state.storage.get<Installation>(`installation:${reenrollRoute[1]}`);
         if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
@@ -315,7 +337,7 @@ export class Registry {
       // unlike the other routes below, this deliberately allows a revoked
       // installation through (that is the whole point) as long as the
       // caller can still present its installation credential.
-      const reactivateRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{16}|[a-f0-9]{32})\/reactivate$/);
+      const reactivateRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/reactivate$/);
       if (request.method === 'POST' && reactivateRoute) {
         const installation = await this.state.storage.get<Installation>(`installation:${reactivateRoute[1]}`);
         if (!installation || !(await this.isInstallation(request, installation))) {
@@ -324,7 +346,7 @@ export class Registry {
         await this.takeInstallationRate(installation, 'mutation');
         return await this.withProviderLane('recovery', () => this.reactivate(installation));
       }
-      const route = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{16}|[a-f0-9]{32})\/(status|provision|disable|revoke|reconcile)$/);
+      const route = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/(status|provision|disable|revoke|reconcile)$/);
       if (!route) return reply({ error: 'not found' }, 404);
       const installation = await this.state.storage.get<Installation>(`installation:${route[1]}`);
       if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
@@ -726,9 +748,10 @@ export class Registry {
         await this.bumpDenied(stats, 'enrollmentDenied');
         throw new Limited(503, 300, 'enrollment unavailable');
       }
-      // New enrollments get a 16-hex-char id (sp-<16 hex chars> hostname
-      // label); existing 32-char installations keep working unchanged.
-      id = randomHex(8);
+      // id lineage: 32-char (legacy) -> 16-char -> now 8-char for new
+      // enrollments; see generateUniqueInstallationId's comment above.
+      // Existing 16-char/32-char installations are untouched.
+      id = await generateUniqueInstallationId(this.state.storage);
       const now = new Date().toISOString();
       installation = {
         id,
@@ -992,7 +1015,7 @@ export class Registry {
       await this.bumpDenied(stats, 'enrollmentDenied');
       throw new Limited(503, 300, 'enrollment unavailable');
     }
-    const id = randomHex(8);
+    const id = await generateUniqueInstallationId(this.state.storage);
     const now = new Date().toISOString();
     const fresh: Installation = {
       id,
