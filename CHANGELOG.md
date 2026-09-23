@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.104-beta.11] - 2026-09-23
+
+### Fixed
+
+- Restore the desktop window's maximum size cap (1700x2560) so it matches
+  the background image dimensions again; verified against the actual
+  measured asset and native window-manager resize/maximize clamping.
+- Make a fresh install's dashboard layout match what Reset Layout produces,
+  instead of using a different static sizing pass on first load.
+- Auto-fit dashboard widget content height on mobile / Remote Access (the
+  same React app on narrow viewports), replacing the old static row clamp.
+- Allow enabling Remote Access with zero Operators configured.
+
+### Added
+
+- Recent Event Stream: add a hide/show toggle scoped to edit-layout mode
+  (persisted, defaults to visible on Reset Layout) and 120-second
+  auto-expiry for non-error events.
+
 ## [1.1.104-beta.4] - 2026-09-19
 
 ### Fixed
