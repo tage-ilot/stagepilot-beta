@@ -1417,3 +1417,103 @@ async def test_unexpected_factory_failure_is_sanitized_and_cleaned_up(
         await plugin.stop()
         await state_service.stop()
         await event_bus.unsubscribe(event_subscription)
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_applies_new_service_type_to_running_plugin_without_restart() -> None:
+    """Regression test for the beta.8 stale-settings bug.
+
+    Saving settings with an unchanged App ID/Secret but a different
+    service_type_id must reach the already-running plugin instance: a fresh
+    client is built from the new settings, the connection is refreshed in
+    place, and the live plugin's cached settings/plan reflect the change --
+    all without stopping or recreating the Plugin object itself.
+    """
+    initial_client = FakePlanningCenterClient(
+        [loaded_result("plan-old")],
+        service_types=[service_type("42", "Weekend Services")],
+    )
+    today = MutableToday(SERVICE_DATE)
+    harness = await plugin_harness(initial_client, today=today)
+    try:
+        await harness.plugin.start()
+        state = await harness.state_store.snapshot()
+        assert state.plan and state.plan.id == "plan-old"
+        assert harness.factory.calls == 1
+
+        new_client = FakePlanningCenterClient(
+            [loaded_result("plan-new")],
+            service_types=[service_type("99", "Youth Services")],
+        )
+        harness.factory.client = new_client
+        new_settings = configured_settings().model_copy(update={"service_type_id": "99"})
+
+        outcome = await harness.plugin.reconfigure(new_settings)
+
+        assert outcome.accepted is True
+        assert harness.factory.calls == 2
+        assert harness.factory.settings[-1].service_type_id == "99"
+        assert initial_client.close_calls == 1
+
+        state = await harness.state_store.snapshot()
+        assert state.plan and state.plan.id == "plan-new"
+        assert state.planning_center_status is ConnectionStatus.CONNECTED
+
+        health = await harness.plugin.health()
+        assert health.status is PluginStatus.RUNNING
+
+        connection_events = planning_center_events(harness, EventType.CONNECTION_CHANGED)
+        assert ConnectionStatus.CONNECTED in [
+            event.payload.status
+            for event in connection_events
+            if isinstance(event.payload, ConnectionPayload)
+        ]
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_surfaces_failure_without_killing_the_plugin() -> None:
+    """A reconfigure() that fails (invalid new service type) must not be
+    swallowed silently -- it reports an ERROR connection status and a
+    rejected ActionOutcome, while the plugin itself stays alive.
+    """
+    initial_client = FakePlanningCenterClient(
+        [loaded_result("plan-old")],
+        service_types=[service_type("42", "Weekend Services")],
+    )
+    today = MutableToday(SERVICE_DATE)
+    harness = await plugin_harness(initial_client, today=today)
+    try:
+        await harness.plugin.start()
+
+        broken_client = FakePlanningCenterClient(
+            [PlanningCenterConfigurationError("boom")],
+            service_types=[service_type("99", "Youth Services")],
+        )
+        harness.factory.client = broken_client
+        new_settings = configured_settings().model_copy(update={"service_type_id": "99"})
+
+        outcome = await harness.plugin.reconfigure(new_settings)
+
+        assert outcome.accepted is False
+        health = await harness.plugin.health()
+        assert health.status is PluginStatus.ERROR
+        assert health.last_error is not None
+        state = await harness.state_store.snapshot()
+        assert state.service_load.status is ServiceLoadStatus.ERROR
+
+        # The plugin itself must survive the failed reconfigure: a follow-up
+        # reconfigure() with valid settings must still succeed rather than
+        # the plugin being left dead.
+        recovered_client = FakePlanningCenterClient(
+            [loaded_result("plan-recovered")],
+            service_types=[service_type("42", "Weekend Services")],
+        )
+        harness.factory.client = recovered_client
+        recovery_outcome = await harness.plugin.reconfigure(configured_settings())
+        assert recovery_outcome.accepted is True
+        state = await harness.state_store.snapshot()
+        assert state.plan and state.plan.id == "plan-recovered"
+    finally:
+        await harness.close()

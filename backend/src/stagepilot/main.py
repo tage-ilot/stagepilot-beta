@@ -192,6 +192,7 @@ def create_app(
         midi_controller=midi_plugin,
         propresenter_controller=propresenter_plugin,
         lights_controller=lights_plugin,
+        planning_center=planning_center_plugin,
     )
     startup_activation = StartupActivationService(
         plugin_manager=plugin_manager,
