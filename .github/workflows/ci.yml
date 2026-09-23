@@ -152,6 +152,23 @@ jobs:
       - name: Run Linux-compatible desktop tests
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
 
+      - name: Prove native window manager maximum-size hints
+        run: |
+          cargo build --manifest-path desktop/src-tauri/Cargo.toml
+          xvfb-run -a bash -euxo pipefail -c '
+            desktop/src-tauri/target/debug/stagepilot-desktop &
+            app_pid=$!
+            trap "kill $app_pid 2>/dev/null || true" EXIT
+            for attempt in $(seq 1 30); do
+              window_id=$(xwininfo -root -tree | sed -n "s/^[[:space:]]*\(0x[0-9a-f]*\).*StagePilot.*/\1/p" | head -n 1)
+              [ -n "$window_id" ] && break
+              sleep 1
+            done
+            [ -n "${window_id:-}" ]
+            xprop -id "$window_id" WM_NORMAL_HINTS | tee /tmp/stagepilot-window-hints.txt
+            grep -Eq "maximum size:[[:space:]]+1700 by 2560" /tmp/stagepilot-window-hints.txt
+          '
+
       - name: Validate updater and release configuration
         run: npm --prefix desktop run release:test
 
