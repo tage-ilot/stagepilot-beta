@@ -69,7 +69,38 @@ class PlanningCenterStatusResponse(BaseModel):
     app_id: str | None = None
     service_type_id: str | None = None
     planning_center_secret_saved: bool
+    connection_method: Literal["oauth", "manual"] = "manual"
+    oauth_connected: bool = False
+    oauth_needs_reconnect: bool = False
     detail: str | None = None
+
+
+class PlanningCenterOAuthStartResponse(BaseModel):
+    """Everything the desktop shell needs to open the consent page.
+
+    `authorize_url` deliberately omits `redirect_uri`: only the desktop
+    side knows which of the four pre-registered loopback ports was free,
+    and it appends that itself before opening the browser.
+    """
+
+    authorize_url: str = Field(min_length=1)
+    state: str = Field(min_length=1)
+
+
+class PlanningCenterOAuthCallbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    state: str = Field(min_length=1, max_length=512)
+    code: SecretStr = Field(min_length=1)
+    redirect_uri: str = Field(min_length=1, max_length=256)
+
+
+class PlanningCenterOAuthStatusResponse(BaseModel):
+    connection_method: Literal["oauth", "manual"]
+    connected: bool
+    needs_reconnect: bool
+    expires_at: float | None = None
+    scope: str | None = None
 
 
 class PlanningCenterTestRequest(BaseModel):

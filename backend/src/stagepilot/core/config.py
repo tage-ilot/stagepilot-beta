@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -261,6 +262,11 @@ class PlanningCenterSettings(BaseModel):
 
     app_id: SecretStr | None = None
     secret: SecretStr | None = None
+    # "manual" is the existing Personal Access Token (App ID + Secret) path
+    # and stays the default so existing installations are unaffected.
+    # "oauth" selects the Bearer-token path fed by planning_center_oauth.
+    connection_method: Literal["oauth", "manual"] = "manual"
+    access_token: SecretStr | None = None
     service_type_id: str | None = Field(default=None, min_length=1)
     plan_title_preference: str | None = Field(default=None, max_length=255)
     preferred_service_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -272,7 +278,7 @@ class PlanningCenterSettings(BaseModel):
         max_length=256,
     )
 
-    @field_validator("app_id", "secret", mode="before")
+    @field_validator("app_id", "secret", "access_token", mode="before")
     @classmethod
     def empty_secrets_are_unset(cls, value: object) -> object:
         """Treat empty environment values as absent credentials."""
@@ -299,6 +305,8 @@ class PlanningCenterSettings(BaseModel):
     def is_configured(self) -> bool:
         """Return a safe credential-presence flag without revealing either value."""
 
+        if self.connection_method == "oauth":
+            return self.access_token is not None
         return self.app_id is not None and self.secret is not None
 
     def credentials(self) -> tuple[str, str]:
@@ -308,6 +316,14 @@ class PlanningCenterSettings(BaseModel):
             msg = "Planning Center credentials are not configured."
             raise ValueError(msg)
         return self.app_id.get_secret_value(), self.secret.get_secret_value()
+
+    def bearer_token(self) -> str:
+        """Return the OAuth access token for the Bearer auth path."""
+
+        if self.connection_method != "oauth" or self.access_token is None:
+            msg = "Planning Center credentials are not configured."
+            raise ValueError(msg)
+        return self.access_token.get_secret_value()
 
 
 class Settings(BaseModel):

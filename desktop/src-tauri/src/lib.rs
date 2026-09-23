@@ -31,6 +31,8 @@ mod native_credentials;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use native_credentials::NativeCredentialBroker;
 
+mod pco_oauth;
+
 const DEFAULT_PORT: u16 = 8765;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_INTERVAL: Duration = Duration::from_millis(250);
@@ -1184,6 +1186,49 @@ fn hide_application_window(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|error| format!("StagePilot could not hide its window: {error}"))
 }
 
+/// Opens Planning Center's consent page in the user's real system browser
+/// (never an embedded webview) and waits on the single-use loopback
+/// listener for the authorization code.
+///
+/// The backend owns PKCE/state generation and the token exchange; this
+/// command only performs the two steps that must happen on the desktop:
+/// binding one of the four pre-registered loopback redirect ports and
+/// opening the browser. The listener is bound BEFORE the browser opens so
+/// a very fast redirect can never arrive at a closed port.
+#[tauri::command]
+async fn planning_center_sign_in(
+    authorize_url_prefix: String,
+    state: String,
+) -> Result<PlanningCenterSignIn, String> {
+    if state.is_empty() {
+        return Err("Planning Center sign-in could not be started.".to_string());
+    }
+    let server = pco_oauth::CallbackServer::start()?;
+    let redirect_uri = server.redirect_uri();
+    let authorize_url = format!(
+        "{authorize_url_prefix}&redirect_uri={}",
+        url::form_urlencoded::byte_serialize(redirect_uri.as_bytes()).collect::<String>()
+    );
+    if !pco_oauth::is_allowed_authorize_url(&authorize_url) {
+        return Err("Planning Center sign-in could not be started.".to_string());
+    }
+    tauri_plugin_opener::open_url(&authorize_url, None::<&str>)
+        .map_err(|_| "StagePilot could not open your browser to sign in.".to_string())?;
+    let timeout = pco_oauth::default_timeout();
+    let code = tauri::async_runtime::spawn_blocking(move || server.wait(&state, timeout))
+        .await
+        .map_err(|_| "Planning Center sign-in did not complete. Try again.".to_string())??;
+    Ok(PlanningCenterSignIn { code, redirect_uri })
+}
+
+/// The redirect URI is returned alongside the code because Planning Center
+/// requires the exact same value on the token exchange, and only the
+/// desktop side knows which of the four registered ports was free.
+#[derive(Clone, serde::Serialize)]
+struct PlanningCenterSignIn {
+    code: String,
+    redirect_uri: String,
+}
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn install_application_menu(app: &tauri::AppHandle) -> Result<(), String> {
     let package = app.package_info();
@@ -1394,7 +1439,8 @@ pub fn run() {
             prepare_for_update,
             check_for_update_on_channel,
             set_remote_autostart,
-            hide_application_window
+            hide_application_window,
+            planning_center_sign_in
         ])
         .setup(move |app| {
             if initial_launch_action == Some(StagePilotLaunchAction::Quit) {

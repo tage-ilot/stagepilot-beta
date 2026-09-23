@@ -363,6 +363,7 @@ def test_settings_api_never_returns_the_planning_center_secret(tmp_path: Path) -
     assert credentials.secret is None
     assert json.loads(path.read_text(encoding="utf-8"))["planning_center"] == {
         "app_id": "visible-app-id",
+        "connection_method": "manual",
         "service_type_id": "42",
         "plan_title_preference": None,
         "preferred_service_time": None,

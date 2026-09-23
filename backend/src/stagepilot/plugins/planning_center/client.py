@@ -50,7 +50,7 @@ SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class PlanningCenterClient:
-    """Call Planning Center with PAT authentication and safe error translation."""
+    """Call Planning Center with PAT or OAuth auth and safe error translation."""
 
     def __init__(
         self,
@@ -58,20 +58,35 @@ class PlanningCenterClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        try:
-            app_id, secret = settings.credentials()
-        except ValueError:
-            raise PlanningCenterConfigurationError(
-                "Planning Center credentials are not configured."
-            ) from None
+        # Two auth paths, selected by the persisted `connection_method`:
+        # the original Personal Access Token (HTTP Basic) path, unchanged,
+        # and the OAuth Bearer path added for "Sign in with Planning
+        # Center". Everything below this constructor is auth-agnostic.
+        auth: httpx.Auth | None = None
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": settings.user_agent,
+            "X-PCO-API-Version": API_VERSION,
+        }
+        if settings.connection_method == "oauth":
+            try:
+                headers["Authorization"] = f"Bearer {settings.bearer_token()}"
+            except ValueError:
+                raise PlanningCenterConfigurationError(
+                    "Planning Center credentials are not configured."
+                ) from None
+        else:
+            try:
+                app_id, secret = settings.credentials()
+            except ValueError:
+                raise PlanningCenterConfigurationError(
+                    "Planning Center credentials are not configured."
+                ) from None
+            auth = httpx.BasicAuth(app_id, secret)
         self._client = httpx.AsyncClient(
             base_url=API_BASE_URL,
-            auth=httpx.BasicAuth(app_id, secret),
-            headers={
-                "Accept": "application/json",
-                "User-Agent": settings.user_agent,
-                "X-PCO-API-Version": API_VERSION,
-            },
+            auth=auth,
+            headers=headers,
             timeout=httpx.Timeout(settings.request_timeout_seconds),
             transport=transport,
         )

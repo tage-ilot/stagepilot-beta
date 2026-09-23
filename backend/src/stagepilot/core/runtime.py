@@ -12,6 +12,7 @@ from stagepilot.core.plugin import PluginManager
 from stagepilot.core.propresenter import ProPresenterController
 from stagepilot.core.settings import SettingsService
 from stagepilot.core.state import StateStore
+from stagepilot.planning_center_oauth import PlanningCenterOAuthService
 from stagepilot.plugins.planning_center.plugin import PlanningCenterPlugin
 from stagepilot.services.planning_center_setup import PlanningCenterSetupService
 from stagepilot.services.state_service import StateService
@@ -30,3 +31,4 @@ class Runtime:
     propresenter_controller: ProPresenterController | None = None
     lights_controller: LightsController | None = None
     planning_center: PlanningCenterPlugin | None = None
+    planning_center_oauth: PlanningCenterOAuthService | None = None
