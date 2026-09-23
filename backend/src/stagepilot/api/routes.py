@@ -365,7 +365,24 @@ async def update_planning_center_settings(
         )
     except (CredentialStoreError, SettingsFileError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _settings_response(runtime, persisted=True, restart_required=restart_required)
+
+    reconfigure_error: str | None = None
+    plugin = runtime.planning_center
+    if not restart_required and plugin is not None:
+        updated_settings = runtime.settings_service.effective_runtime_settings().planning_center
+        outcome = await plugin.reconfigure(updated_settings)
+        if not outcome.accepted:
+            reconfigure_error = outcome.message
+            restart_required = True
+
+    response = _settings_response(runtime, persisted=True, restart_required=restart_required)
+    if reconfigure_error is not None:
+        response.warning = (
+            f"{response.warning} {reconfigure_error}".strip()
+            if response.warning
+            else reconfigure_error
+        )
+    return response
 
 
 @router.post("/planning-center/test", response_model=PlanningCenterTestResponse)

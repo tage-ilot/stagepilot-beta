@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from stagepilot.core.actions import ActionOutcome
 from stagepilot.core.config import PlanningCenterSettings
 from stagepilot.core.event_bus import EventBus, Subscription
 from stagepilot.core.events import (
@@ -197,6 +198,60 @@ class PlanningCenterPlugin(Plugin):
         if self._status is not PluginStatus.RUNNING or self._client is None:
             return
         await self._request_regular_refresh(wait=True)
+
+    async def reconfigure(self, settings: PlanningCenterSettings) -> ActionOutcome:
+        """Apply restart-exempt settings changes to the already-running plugin.
+
+        Replaces the cached settings and HTTP client in place, then re-runs
+        configuration validation and a full plan refresh -- the same steps
+        ``start()`` performs -- so the dashboard's connection status reflects
+        the new settings without a backend restart. The plugin's event
+        subscriptions and background task bookkeeping are left untouched.
+        """
+
+        if self._stopping or self._status is PluginStatus.STOPPED:
+            return ActionOutcome(
+                False, "Restart StagePilot to apply the updated Planning Center settings."
+            )
+
+        previous_settings = self._settings
+        previous_client = self._client
+        self._settings = settings
+        try:
+            self._validate_configuration()
+        except PlanningCenterError as exc:
+            self._settings = previous_settings
+            detail = self._with_cache_warning(str(exc))
+            self._record_error(detail)
+            await self._publish_connection(ConnectionStatus.ERROR, detail)
+            return ActionOutcome(False, detail)
+
+        self._client = self._client_factory(self._settings)
+        try:
+            await self._request_regular_refresh(wait=True)
+        except Exception:
+            self._settings = previous_settings
+            self._client = previous_client
+            detail = "Planning Center settings could not be applied to the running plugin."
+            self._logger.error("planning_center_reconfigure_failed")
+            self._record_error(detail)
+            await self._publish_connection(ConnectionStatus.ERROR, detail)
+            return ActionOutcome(False, detail)
+
+        if previous_client is not None and previous_client is not self._client:
+            with suppress(Exception):
+                await previous_client.close()
+
+        if self._status is PluginStatus.ERROR:
+            detail = (
+                self._last_error
+                or "Planning Center settings were applied but the connection failed."
+            )
+            return ActionOutcome(False, detail)
+
+        return ActionOutcome(
+            True, "Planning Center settings applied to the running service source."
+        )
 
     async def _on_reload_requested(self, _event: StagePilotEvent) -> None:
         if self._stopping:

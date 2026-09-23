@@ -545,11 +545,18 @@ export function useStagePilot() {
           return;
         }
         setPlanningCenterStatus(await getPlanningCenterStatus());
-        setPlanningCenterMessage(
-          response.restart_required
-            ? "Planning Center settings saved securely. Restart StagePilot to apply the service source."
-            : "Planning Center settings saved securely and applied to the running service source.",
-        );
+        if (response.restart_required) {
+          if (response.warning) {
+            setPlanningCenterError(response.warning);
+          }
+          setPlanningCenterMessage(
+            "Planning Center settings saved securely. Restart StagePilot to apply the service source.",
+          );
+        } else {
+          setPlanningCenterMessage(
+            "Planning Center settings saved securely and applied to the running service source.",
+          );
+        }
       } catch (cause) {
         setPlanningCenterError(
           cause instanceof Error ? cause.message : "Planning Center settings could not be saved.",
