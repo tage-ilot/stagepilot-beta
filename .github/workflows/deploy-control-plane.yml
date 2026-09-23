@@ -41,6 +41,8 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
       INSTALLATION_SIGNING_KEY: ${{ secrets.INSTALLATION_SIGNING_KEY }}
+      PLANNING_CENTER_CLIENT_ID: ${{ secrets.PLANNING_CENTER_CLIENT_ID }}
+      PLANNING_CENTER_CLIENT_SECRET: ${{ secrets.PLANNING_CENTER_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -93,6 +95,8 @@ jobs:
             CLOUDFLARE_API_TOKEN
             ADMIN_API_TOKEN
             INSTALLATION_SIGNING_KEY
+            PLANNING_CENTER_CLIENT_ID
+            PLANNING_CENTER_CLIENT_SECRET
       - name: Read back Worker runtime secret names
         id: runtime-secrets
         uses: cloudflare/wrangler-action@v4

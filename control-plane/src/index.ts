@@ -6,6 +6,8 @@ interface Env {
   REMOTE_HOST_SUFFIX: string;
   ADMIN_API_TOKEN: string;
   INSTALLATION_SIGNING_KEY: string;
+  PLANNING_CENTER_CLIENT_ID: string;
+  PLANNING_CENTER_CLIENT_SECRET: string;
   // Optional: the release-broker/in-app updater is deferred for this beta
   // (see docs/native-completion-runbook.md). No STAGEPILOT_RELEASE_TOKEN is
   // issued, so this binding is absent in production; release-asset routes
@@ -112,6 +114,12 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_UPDATER_BYTES = 512 * 1024 * 1024;
 const BETA_RELEASE_ORIGIN = 'https://stagepilot-beta-control-plane.stagepilot-illuminary-beta.workers.dev';
 const MAX_RELEASE_REDIRECTS = 5;
+const PCO_TOKEN_ENDPOINT = 'https://api.planningcenteronline.com/oauth/token';
+const PCO_OAUTH_FLOW_ID_BYTES = 16; // 32 hex chars
+const OAUTH_FLOW_ID = /^[a-f0-9]{32}$/;
+const OAUTH_FLOWS_PER_MINUTE = 10;
+const OAUTH_TOKEN_REQUESTS_PER_MINUTE = 20;
+const MAX_OAUTH_RATE_SOURCES = 2_000;
 
 function exactLengthStream(
   body: ReadableStream<Uint8Array>,
@@ -308,6 +316,15 @@ export class Registry {
       if (request.method === 'POST' && url.pathname === '/v1/installations/enroll') {
         return await this.enroll(request);
       }
+      if (request.method === 'POST' && url.pathname === '/v1/planning-center/oauth/flow') {
+        return await this.pcoOauthFlow(request);
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/planning-center/oauth/token') {
+        return await this.pcoOauthExchange(request, 'authorization_code');
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/planning-center/oauth/refresh') {
+        return await this.pcoOauthExchange(request, 'refresh_token');
+      }
       if (request.method === 'GET' && url.pathname === '/v1/releases/latest.json') {
         return await this.releaseAsset(request, this.latestReleaseVersion(), 'latest.json');
       }
@@ -403,6 +420,8 @@ export class Registry {
     if (typeof this.env.CLOUDFLARE_API_TOKEN !== 'string' || this.env.CLOUDFLARE_API_TOKEN.length < 20
       || typeof this.env.ADMIN_API_TOKEN !== 'string' || this.env.ADMIN_API_TOKEN.length < 32
       || typeof this.env.INSTALLATION_SIGNING_KEY !== 'string' || this.env.INSTALLATION_SIGNING_KEY.length < 32
+      || typeof this.env.PLANNING_CENTER_CLIENT_ID !== 'string' || this.env.PLANNING_CENTER_CLIENT_ID.length < 1
+      || typeof this.env.PLANNING_CENTER_CLIENT_SECRET !== 'string' || this.env.PLANNING_CENTER_CLIENT_SECRET.length < 1
       || (this.env.GITHUB_RELEASE_TOKEN !== undefined && this.env.GITHUB_RELEASE_TOKEN.length < 20)
       || this.env.ADMIN_API_TOKEN === this.env.INSTALLATION_SIGNING_KEY) {
       throw new Error('invalid authentication configuration');
@@ -782,6 +801,119 @@ export class Registry {
       ...publicInstallation(installation),
       installationCredential: await this.credential(installation.id, installation.credentialGeneration ?? 0),
     }, 201);
+  }
+
+  // Per-source-IP rate limiting for the anonymous PCO OAuth routes, mirroring
+  // the anonymous enroll() per-source quota pattern (keyed hash of the
+  // source IP so raw addresses are never persisted).
+  private async takeOauthRate(request: Request, kind: 'flow' | 'token'): Promise<void> {
+    const source = normalizeSourceAddress(request.headers.get('cf-connecting-ip') ?? '');
+    if (!source) throw new Limited(429, 60, 'oauth request rate limited');
+    const now = Math.floor(Date.now() / 1000);
+    const hash = await keyedHash(this.env.INSTALLATION_SIGNING_KEY, `oauth-source:${source}`);
+    const subject = `${kind}:${hash}`;
+    const indexKey = 'oauth-source-index';
+    const index = await this.state.storage.get<string[]>(indexKey) ?? [];
+    const retained: string[] = [];
+    for (const candidate of index) {
+      const stored = await this.state.storage.get<RateWindow>(`oauth-source:${candidate}`);
+      if (stored && now - stored.startedAt < 60) retained.push(candidate);
+      else await this.state.storage.delete(`oauth-source:${candidate}`);
+    }
+    if (!retained.includes(subject) && retained.length >= MAX_OAUTH_RATE_SOURCES) {
+      throw new Limited(503, 60, 'oauth service unavailable');
+    }
+    const key = `oauth-source:${subject}`;
+    const current = await this.state.storage.get<RateWindow>(key);
+    const window = !current || now - current.startedAt >= 60 ? { startedAt: now, count: 0 } : current;
+    const limit = kind === 'flow' ? OAUTH_FLOWS_PER_MINUTE : OAUTH_TOKEN_REQUESTS_PER_MINUTE;
+    if (window.count >= limit) throw new Limited(429, Math.max(1, 60 - (now - window.startedAt)), 'oauth request rate limited');
+    await this.state.storage.put({
+      [key]: { ...window, count: window.count + 1 },
+      [indexKey]: retained.includes(subject) ? retained : [...retained, subject],
+    });
+  }
+
+  // Mints a per-flow HMAC ticket bound to a fresh flow_id, per "Approved
+  // implementation decisions" §3 in docs/planning-center-oauth-design.md:
+  // reachable by any legitimate desktop instance mid-OAuth-flow (not gated
+  // behind an existing installation credential), protected only by the same
+  // anonymous per-source-IP rate limiting as enroll().
+  private async pcoOauthFlow(request: Request): Promise<Response> {
+    await this.takeOauthRate(request, 'flow');
+    const flowId = randomHex(PCO_OAUTH_FLOW_ID_BYTES);
+    const ticket = await keyedHash(this.env.INSTALLATION_SIGNING_KEY, `pco-oauth-flow:${flowId}`);
+    return reply({ flow_id: flowId, ticket }, 201);
+  }
+
+  private async verifyOauthTicket(flowId: unknown, ticket: unknown): Promise<boolean> {
+    if (typeof flowId !== 'string' || !OAUTH_FLOW_ID.test(flowId) || typeof ticket !== 'string' || ticket.length === 0) {
+      return false;
+    }
+    const expected = await keyedHash(this.env.INSTALLATION_SIGNING_KEY, `pco-oauth-flow:${flowId}`);
+    return equalSecret(ticket, expected);
+  }
+
+  // Relays an authorization_code or refresh_token grant to Planning
+  // Center's token endpoint, holding client_secret server-side per the
+  // approved design (desktop never sees it). Requires a valid {flow_id,
+  // ticket} minted by pcoOauthFlow() above -- see the "Route auth/abuse-
+  // control decision" in the design doc.
+  private async pcoOauthExchange(request: Request, grantType: 'authorization_code' | 'refresh_token'): Promise<Response> {
+    await this.takeOauthRate(request, 'token');
+    const input = await body(request);
+    if (!(await this.verifyOauthTicket(input.flow_id, input.ticket))) {
+      return reply({ error: 'invalid or expired flow ticket' }, 401);
+    }
+    const form = new URLSearchParams({
+      grant_type: grantType,
+      client_id: this.env.PLANNING_CENTER_CLIENT_ID,
+      client_secret: this.env.PLANNING_CENTER_CLIENT_SECRET,
+    });
+    if (grantType === 'authorization_code') {
+      const code = input.code;
+      const codeVerifier = input.code_verifier;
+      const redirectUri = input.redirect_uri;
+      if (typeof code !== 'string' || code.length === 0
+        || typeof codeVerifier !== 'string' || codeVerifier.length === 0
+        || typeof redirectUri !== 'string' || codeVerifier.length === 0) {
+        return reply({ error: 'invalid request' }, 400);
+      }
+      form.set('code', code);
+      form.set('code_verifier', codeVerifier);
+      form.set('redirect_uri', redirectUri);
+    } else {
+      const refreshToken = input.refresh_token;
+      if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
+        return reply({ error: 'invalid request' }, 400);
+      }
+      form.set('refresh_token', refreshToken);
+    }
+    let response: Response;
+    try {
+      response = await fetch(PCO_TOKEN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+        body: form.toString(),
+      });
+    } catch {
+      return reply({ error: 'planning center unavailable' }, 503, 30);
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      return reply({ error: 'planning center returned an invalid response' }, 502);
+    }
+    if (!response.ok) {
+      // Relay PCO's own error shape (e.g. { error: "invalid_grant" }) so the
+      // desktop/backend can distinguish transient vs. permanent (revoked/
+      // expired refresh token) failures, without leaking client_secret or
+      // any StagePilot-side diagnostics.
+      const errorPayload = payload && typeof payload === 'object' ? payload : { error: 'token exchange failed' };
+      return reply(errorPayload, response.status === 400 || response.status === 401 ? 400 : 502);
+    }
+    return reply(payload as Record<string, unknown>, 200);
   }
 
   private installationLimit(): number {

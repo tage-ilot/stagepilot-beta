@@ -9,6 +9,8 @@ export const RUNTIME_SECRET_NAMES = Object.freeze([
   "CLOUDFLARE_API_TOKEN",
   "ADMIN_API_TOKEN",
   "INSTALLATION_SIGNING_KEY",
+  "PLANNING_CENTER_CLIENT_ID",
+  "PLANNING_CENTER_CLIENT_SECRET",
 ]);
 
 function required(environment, name) {
@@ -40,6 +42,8 @@ export function validateDeploymentEnvironment(environment) {
   const providerToken = required(environment, "CLOUDFLARE_API_TOKEN");
   const adminToken = required(environment, "ADMIN_API_TOKEN");
   const signingKey = required(environment, "INSTALLATION_SIGNING_KEY");
+  const pcoClientId = required(environment, "PLANNING_CENTER_CLIENT_ID");
+  const pcoClientSecret = required(environment, "PLANNING_CENTER_CLIENT_SECRET");
 
   if (!ID.test(accountId)) throw new Error("CLOUDFLARE_ACCOUNT_ID must be 32 lowercase hexadecimal characters");
   if (!ID.test(zoneId)) throw new Error("CLOUDFLARE_ZONE_ID must be 32 lowercase hexadecimal characters");
@@ -61,6 +65,8 @@ export function validateDeploymentEnvironment(environment) {
   if (adminToken.length < 32) throw new Error("ADMIN_API_TOKEN must contain at least 32 characters");
   if (signingKey.length < 32) throw new Error("INSTALLATION_SIGNING_KEY must contain at least 32 characters");
   if (adminToken === signingKey) throw new Error("ADMIN_API_TOKEN and INSTALLATION_SIGNING_KEY must be independent");
+  if (pcoClientId.length < 1) throw new Error("PLANNING_CENTER_CLIENT_ID must not be empty");
+  if (pcoClientSecret.length < 1) throw new Error("PLANNING_CENTER_CLIENT_SECRET must not be empty");
 
   const releaseVersions = releaseVersionsText.split(",").map((value) => value.trim()).filter(Boolean);
   const releasePattern = /^\d+\.\d+\.\d+-beta\.\d+$/;
@@ -106,7 +112,7 @@ function main() {
     const exemptCount = config.enrollmentExemptSources.split(",").map((value) => value.trim()).filter(Boolean).length;
     const windowText = config.enrollmentWindowSeconds ? `${config.enrollmentWindowSeconds}s` : "default (86400s)";
     console.log(
-      `Deployment configuration valid: account/zone IDs present, suffix=${config.hostnameSuffix}, Remote port=${config.remotePort}, enrollment=${config.enrollmentEnabled}, installation limit=${config.installationLimit}, latest beta=${config.latestReleaseVersion}, enrollment exemptions=${exemptCount}, enrollment window=${windowText}; 3 runtime secrets present.`,
+      `Deployment configuration valid: account/zone IDs present, suffix=${config.hostnameSuffix}, Remote port=${config.remotePort}, enrollment=${config.enrollmentEnabled}, installation limit=${config.installationLimit}, latest beta=${config.latestReleaseVersion}, enrollment exemptions=${exemptCount}, enrollment window=${windowText}; 5 runtime secrets present.`,
     );
     return;
   }
