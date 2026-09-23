@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   bootstrapRemote, createRemoteUser, deleteRemoteUser, regenerateRemote,
-  setRemoteEnabled, updateRemoteUser, type RemoteUser,
+  updateRemoteUser, type RemoteUser,
 } from "../api";
-import { setRemoteAutostart } from "../desktop";
 import type { RemoteAccessControl } from "../hooks/useRemoteAccess";
 
 const button = "rounded-lg border border-white/20 px-3.5 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:opacity-40";
@@ -49,7 +48,7 @@ function safeUrl(value: string | null): string | null {
 
 export function RemoteAccessPanel({ control }: { control: RemoteAccessControl }) {
   const {
-    access, status, users, error, notice, busy, bootstrap, setBootstrap,
+    access, status, users, error, notice, busy, bootstrap,
     confirmDisable, cancelDisable, confirmDisableAccept, canManage, local, run,
   } = control;
   const [email, setEmail] = useState("");
@@ -70,10 +69,11 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
     if (edit && !window.confirm(`Replace the password for ${edit.email} and revoke all of their Remote sessions?`)) return;
     void run(async () => {
       if (bootstrap) {
+        // Remote is already running by the time this form can appear (see
+        // useRemoteAccess's `bootstrap` derivation) -- just create the
+        // Operator; no redundant enable call needed here.
         await bootstrapRemote(email, password);
-        setBootstrap(false); setEmail("");
-        await setRemoteEnabled(true);
-        await setRemoteAutostart(true);
+        setEmail("");
       } else if (edit) {
         await updateRemoteUser(edit.id, {password}); setEdit(null);
       } else {
@@ -126,8 +126,11 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
       </div>
     </div>}
     {status?.needs_operator && !local && <p className="text-sm text-slate-300">Create the first Operator from local StagePilot.</p>}
-    {bootstrap && local && <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Create first Operator</h3>}
-    {(bootstrap && local || status && !status.needs_operator) && <>
+    {bootstrap && <>
+      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Create first Operator</h3>
+      <p className="text-sm text-amber-200">Remote Access is running. Create the first Operator to allow sign-in.</p>
+    </>}
+    {(bootstrap || status && !status.needs_operator) && <>
       {!bootstrap && <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Remote users</h3>}
       <p className="text-sm text-slate-300">Viewers are read-only. Operators can control StagePilot and manage users. Keep at least one enabled Operator. User changes revoke that user's sessions.</p>
       {!bootstrap && <ul className="space-y-3">{users.map((user) => {
@@ -166,8 +169,8 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
           <span className="text-xs font-bold uppercase tracking-wider text-slate-500">New user role</span>
           <select className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100" disabled={busy} value={role} onChange={(e) => setRole(e.target.value as RemoteUser["role"])}><option>Viewer</option><option>Operator</option></select>
         </label>}
-        <button className={primaryButton} disabled={busy} type="submit">{bootstrap ? "Create Operator and enable" : edit ? "Save password" : "Add user"}</button>
-        {(edit || bootstrap) && <button className={button} type="button" onClick={() => {setEdit(null); setBootstrap(false); setPassword("");}}>Cancel</button>}
+        <button className={primaryButton} disabled={busy} type="submit">{bootstrap ? "Create Operator" : edit ? "Save password" : "Add user"}</button>
+        {edit && <button className={button} type="button" onClick={() => {setEdit(null); setPassword("");}}>Cancel</button>}
       </form>
     </>}
     {notice && <p role="status" className="text-sm text-sky-200">{notice}</p>}

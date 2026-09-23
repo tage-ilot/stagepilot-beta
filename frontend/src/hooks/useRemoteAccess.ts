@@ -36,7 +36,6 @@ export function useRemoteAccess() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [bootstrap, setBootstrap] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [checkboxBusy, setCheckboxBusy] = useState(false);
   const alive = useRef(true);
@@ -85,16 +84,15 @@ export function useRemoteAccess() {
     }
   }
 
-  /** The checkbox was checked. Enables Remote, or opens the bootstrap flow
-   * when there is no Operator yet. Never marks the checkbox checked
-   * prematurely -- it stays reflecting status.enabled, set only once the
-   * enable call actually succeeds. */
+  /** The checkbox was checked. Always enables Remote immediately, even when
+   * there is no Operator yet -- nothing on the backend treats "no Operator"
+   * as open access, so starting the tunnel with zero users configured is
+   * safe. The "Create first Operator" step (see `bootstrap` below) happens
+   * as a required follow-up once Remote is running, not a precondition.
+   * Never marks the checkbox checked prematurely -- it stays reflecting
+   * status.enabled, set only once the enable call actually succeeds. */
   function requestEnable() {
     if (status?.enabled) return;
-    if (status?.needs_operator) {
-      if (local) setBootstrap(true);
-      return;
-    }
     setCheckboxBusy(true);
     void run(async () => {
       await setRemoteEnabled(true);
@@ -123,6 +121,13 @@ export function useRemoteAccess() {
   }
 
   const enabled = Boolean(status?.enabled);
+  // Once Remote is enabled but there is still no Operator, the first-Operator
+  // form is a required next step (local device only -- a Remote session
+  // can't bootstrap itself). This replaces the old pre-enable bootstrap
+  // gate: it's now derived from live status rather than a one-shot flag set
+  // by requestEnable, so it stays visible until an Operator actually exists
+  // and reappears automatically if that ever regresses.
+  const bootstrap = local && enabled && Boolean(status?.needs_operator);
   // The setup panel should stay expanded whenever Remote Access is actually
   // enabled, while a toggle is in flight, or while the confirm/bootstrap
   // dialogs need to be visible -- collapsing those would hide them.
@@ -130,7 +135,7 @@ export function useRemoteAccess() {
 
   return {
     access, status, users, setUsers, error, setError, notice, setNotice,
-    busy, bootstrap, setBootstrap, confirmDisable, checkboxBusy,
+    busy, bootstrap, confirmDisable, checkboxBusy,
     canManage, local, run,
     enabled, panelOpen,
     requestEnable, requestDisable, cancelDisable, confirmDisableAccept,
