@@ -70,14 +70,27 @@ const contentRows = (
 const bottom = (items: DashboardLayoutItem[]) =>
   items.reduce((maximum, item) => Math.max(maximum, item.y + item.h), 0);
 
+// Fallback height used before the real content-fit measurement pass has
+// run for a widget on mobile (e.g. right after Reset Layout, or the very
+// first mount before `fitLoadedWidgetsToContent` fires). Once measured,
+// `layout.mobileHeights[id]` takes over and this clamp no longer applies.
+const mobileFallbackHeight = (source: DashboardLayoutItem | undefined) =>
+  Math.max(7, Math.min(source?.h ?? 10, 16));
+
 const mobileItems = (layout: DashboardLayoutState): DashboardLayoutItem[] => {
   const desktopById = new Map(layout.desktop.map((item) => [item.id, item]));
   let y = 0;
   return layout.mobileOrder.map((id) => {
     const source = desktopById.get(id);
+    const measured = layout.mobileHeights?.[id];
     const h = source?.kind === "spacer"
       ? Math.max(1, Math.min(source.h, 4))
-      : Math.max(7, Math.min(source?.h ?? 10, 16));
+      // The Recent Event Stream keeps its own bounded height + internal
+      // scroll on every layout mode (never content-measured/auto-fit),
+      // matching desktop/tablet behavior.
+      : id === "events"
+        ? mobileFallbackHeight(source)
+        : measured ?? mobileFallbackHeight(source);
     const item: DashboardLayoutItem = {
       id,
       kind: source?.kind ?? "widget",
@@ -183,6 +196,30 @@ export function DashboardGrid({
     commitLayout({ ...current, [currentMode]: nextItems });
   }, [commitLayout, readGridItems]);
 
+  // Mobile mode doesn't persist full grid items (x/y/w there are derived
+  // programmatically from `mobileOrder`, not user-arranged) -- only the
+  // real measured content heights are durable, so they can drive
+  // `mobileItems()` on the next load instead of the static desktop-derived
+  // clamp.
+  const saveMobileHeightsResult = useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const current = layoutRef.current;
+    const nextHeights: Partial<Record<DashboardItemId, number>> = {
+      ...current.mobileHeights,
+    };
+    let changed = false;
+    for (const element of grid.getGridItems()) {
+      const id = element.getAttribute("gs-id") as DashboardItemId | null;
+      const node = element.gridstackNode;
+      if (!id || id === "events" || !node?.h) continue;
+      if (nextHeights[id] !== node.h) changed = true;
+      nextHeights[id] = node.h;
+    }
+    if (!changed) return;
+    commitLayout({ ...current, mobileHeights: nextHeights });
+  }, [commitLayout]);
+
   const compactGrid = useCallback((announce = true) => {
     const grid = gridRef.current;
     if (!grid || modeRef.current === "mobile") return;
@@ -274,8 +311,12 @@ export function DashboardGrid({
     }
     activeGrid.batchUpdate(false);
     activeGrid.compact("compact");
-    if (targetMode !== "mobile") saveGridResult();
-  }, [saveGridResult]);
+    if (targetMode === "mobile") {
+      saveMobileHeightsResult();
+    } else {
+      saveGridResult();
+    }
+  }, [saveGridResult, saveMobileHeightsResult]);
 
   useEffect(() => {
     const grid = gridRef.current;
@@ -323,7 +364,11 @@ export function DashboardGrid({
       if (rows === node.h) return;
       activeGrid.update(element, { h: rows });
       activeGrid.compact("compact");
-      if (modeRef.current !== "mobile") saveGridResult();
+      if (modeRef.current === "mobile") {
+        saveMobileHeightsResult();
+      } else {
+        saveGridResult();
+      }
     };
     const scheduleFit = (
       element: GridItemHTMLElement,
@@ -370,7 +415,7 @@ export function DashboardGrid({
       resizeObserver.disconnect();
       mutationObserver.disconnect();
     };
-  }, [interactingId, mode, saveGridResult]);
+  }, [interactingId, mode, saveGridResult, saveMobileHeightsResult]);
 
   useEffect(() => {
     const grid = gridRef.current;

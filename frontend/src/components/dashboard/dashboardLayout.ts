@@ -36,6 +36,7 @@ export const createDefaultDashboardLayout = (): DashboardLayoutState => ({
   desktop: DASHBOARD_WIDGET_IDS.map((id) => widgetItem(id, "desktop")),
   tablet: DASHBOARD_WIDGET_IDS.map((id) => widgetItem(id, "tablet")),
   mobileOrder: ["now-playing", "service-plan", "manual-controls", "events"],
+  mobileHeights: {},
 });
 
 const validInteger = (value: unknown, minimum = 0): value is number =>
@@ -105,6 +106,19 @@ const validItems = (
   return normalized;
 };
 
+const validMobileHeights = (
+  value: unknown,
+  validIds: Set<DashboardItemId>,
+): Partial<Record<DashboardItemId, number>> => {
+  if (!isRecord(value)) return {};
+  const result: Partial<Record<DashboardItemId, number>> = {};
+  for (const [id, height] of Object.entries(value)) {
+    if (!validIds.has(id as DashboardItemId) || !validInteger(height, 1)) continue;
+    result[id as DashboardItemId] = height as number;
+  }
+  return result;
+};
+
 export const parseDashboardLayout = (value: unknown): DashboardLayoutState | null => {
   if (!isRecord(value) || value.version !== 2) return null;
   const desktop = validItems(value.desktop, DASHBOARD_COLUMNS.desktop, "desktop");
@@ -116,7 +130,17 @@ export const parseDashboardLayout = (value: unknown): DashboardLayoutState | nul
     || new Set(mobileOrder).size !== mobileOrder.length
     || !DASHBOARD_WIDGET_IDS.every((id) => mobileOrder.includes(id))
   ) return null;
-  return { version: 2, desktop, tablet, mobileOrder: mobileOrder as DashboardItemId[] };
+  const mobileHeights = validMobileHeights(
+    value.mobileHeights,
+    new Set(mobileOrder as DashboardItemId[]),
+  );
+  return {
+    version: 2,
+    desktop,
+    tablet,
+    mobileOrder: mobileOrder as DashboardItemId[],
+    mobileHeights,
+  };
 };
 
 export const packWidgetsInOrder = (
@@ -158,6 +182,7 @@ export const migrateDashboardOrder = (value: unknown): DashboardLayoutState | nu
     desktop: packWidgetsInOrder(order, DASHBOARD_COLUMNS.desktop),
     tablet: packWidgetsInOrder(order, DASHBOARD_COLUMNS.tablet),
     mobileOrder: [...order],
+    mobileHeights: {},
   };
 };
 
