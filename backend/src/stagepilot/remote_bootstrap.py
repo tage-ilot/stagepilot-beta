@@ -107,9 +107,9 @@ class BootstrapMetadata(BaseModel):
     version: int
     bundle_id: str = Field(alias="bundleId")
     control_plane_origin: str = Field(alias="controlPlaneOrigin")
-    installation_id: Annotated[str, Field(pattern=r"^[a-f0-9]{8}$|^[a-f0-9]{16}$|^[a-f0-9]{32}$")] = Field(
-        alias="installationId"
-    )
+    installation_id: Annotated[
+        str, Field(pattern=r"^[a-f0-9]{8}$|^[a-f0-9]{16}$|^[a-f0-9]{32}$")
+    ] = Field(alias="installationId")
     hostname: str
     remote_port: int = Field(alias="remotePort", ge=1024, le=65535)
 
