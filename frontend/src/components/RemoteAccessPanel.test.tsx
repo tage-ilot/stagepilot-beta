@@ -151,4 +151,36 @@ describe("Remote Access", () => {
     fireEvent.click(screen.getByRole("button", {name: "Reset installation identity"}));
     await waitFor(() => expect(api.resetRemoteIdentity).toHaveBeenCalledTimes(1));
   });
+
+  it("does not show the revoked-credential banner for a single transient false reading that self-resolves", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    const transient: api.RemoteStatus = {...off, needs_operator: false, credential_available: false};
+    const recovered: api.RemoteStatus = {...off, needs_operator: false, credential_available: true};
+    vi.mocked(api.getRemoteStatus)
+      .mockResolvedValueOnce(transient)
+      .mockResolvedValue(recovered);
+    render(<Harness />);
+    await vi.waitFor(() => expect(api.getRemoteStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/credential is unavailable or revoked/)).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(api.getRemoteStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/credential is unavailable or revoked/)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("shows the revoked-credential banner only once unavailability persists across multiple consecutive polls", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    const unavailable: api.RemoteStatus = {...off, needs_operator: false, credential_available: false};
+    vi.mocked(api.getRemoteStatus).mockResolvedValue(unavailable);
+    render(<Harness />);
+    await vi.waitFor(() => expect(api.getRemoteStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/credential is unavailable or revoked/)).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(api.getRemoteStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/credential is unavailable or revoked/)).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => expect(api.getRemoteStatus).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText(/credential is unavailable or revoked/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
 });
