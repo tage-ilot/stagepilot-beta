@@ -237,14 +237,51 @@ design is multiple work-days of focused effort, not a single-session
 task — closer to the scope of the Remote Access broker + reenroll work
 than to a typical bug-fix task in the recent history on this board.
 
-## Open items for operator decision before filing implementation work
+## Approved implementation decisions (supersede the open items above)
 
-1. Confirm which Planning Center org/account will register the OAuth
-   app (operator's own, or a dedicated StagePilot one) — §1.
-2. Confirm a control-plane/backend service exists (or should be stood
-   up) to host the token-exchange proxy — §2 depends on this; if no
-   such service currently exists this materially increases scope beyond
-   the Remote Access-broker comparison.
-3. Confirm redirect URI registration approach (wildcard loopback port
-   vs. fixed port set) once actually testing against PCO's app
-   registration UI — §3.
+Status: **APPROVED FOR IMPLEMENTATION.** The operator has registered the
+OAuth app, provisioned `PLANNING_CENTER_CLIENT_ID`/`_CLIENT_SECRET` as
+`stagepilot-control-plane` Worker secrets, and registered exactly 4 fixed
+loopback redirect URIs (PCO requires an exact port match; no wildcard
+support): `http://127.0.0.1:52847/callback` through `...52850/callback`.
+The desktop listener tries these 4 ports in order, first free wins.
+
+1. Reuses the existing `stagepilot-beta-control-plane` Worker/Durable
+   Object (`control-plane/src/index.ts`), not a new service.
+2. New routes `POST /v1/planning-center/oauth/token` and
+   `POST /v1/planning-center/oauth/refresh` on the existing `Registry`
+   DO `handle()` dispatcher.
+3. **Route auth/abuse-control decision**: these routes are reached by
+   "any legitimate desktop instance mid-OAuth-flow," which is a broader
+   set than "installations that have ever enrolled for Remote Access"
+   (Remote Access enrollment is opt-in and most Planning Center users
+   will never touch it — see `remote_desktop.py`). Requiring an existing
+   `isInstallation` credential would therefore lock out most users. The
+   session's Remote Access `isInstallation` bearer pattern is not
+   reusable here.
+
+   Instead: a per-flow HMAC "flow ticket", keyed with the existing
+   `INSTALLATION_SIGNING_KEY` secret, exactly parallel to how
+   `credential()` already derives per-installation HMAC tokens from that
+   same key. When the desktop app calls the *Python backend's* new
+   `/api/v1/planning-center/oauth/start`, the backend mints
+   `flow_ticket = base64url(HMAC-SHA256(INSTALLATION_SIGNING_KEY-equivalent... )`
+   — concretely, the backend does NOT hold the Worker's signing key, so
+   instead the Worker itself mints the ticket: add a lightweight
+   `POST /v1/planning-center/oauth/flow` (no auth required, IP rate
+   limited like anonymous `enroll()`) that returns `{flow_id, ticket}`
+   where `ticket = HMAC(INSTALLATION_SIGNING_KEY, "pco-oauth-flow:" +
+   flow_id)`, bound to the `state` value the backend generates. The
+   backend calls this once when starting a sign-in, embeds `flow_id` in
+   `state`, and presents `ticket` on the later `/oauth/token` /
+   `/oauth/refresh` calls. The Worker verifies `ticket` matches
+   `flow_id` before relaying to PCO. This is not proof the caller is a
+   *known* installation, but it does mean the caller must have gone
+   through the Worker's own IP-rate-limited flow-issuance step first —
+   the same anti-abuse posture as anonymous enrollment — so the token
+   route can never be hit "cold" as an open OAuth relay. Combine with
+   the existing per-source `RateWindow` rate limiting (reuse
+   `takeInstallationRate`-style windows keyed by source IP instead of
+   installation id) on all 3 new routes.
+4. Redirect URI approach: fixed 4-port set (§3), confirmed above, no
+   wildcard fallback needed.
