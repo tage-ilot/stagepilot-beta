@@ -76,7 +76,15 @@ class NativeRemoteCredentialStore:
                 f"{self.origin}/v1/credentials/{installation_id}",
                 headers={"Authorization": f"Bearer {self.authorization}"},
                 content=credential or b"",
-                timeout=3,
+                # Real human password entry via the OS Keychain/Credential
+                # Manager system prompt routinely takes well over a few
+                # seconds (the user has to notice the dialog, read it, and
+                # type). A short timeout here previously fired mid-prompt
+                # and surfaced a spurious "credential store unavailable"
+                # error while the user was still legitimately authorizing.
+                # 90s comfortably covers real human entry time without
+                # hanging forever on a genuinely broken broker connection.
+                timeout=90,
                 trust_env=False,
                 follow_redirects=False,
             )
@@ -142,6 +150,13 @@ class DesktopBootstrapStore:
         self.path = path
         self.credentials = credentials or NativeRemoteCredentialStore()
         self.trusted_origins = trusted_origins
+        # In-memory-only cache of the successfully-read credential, keyed by
+        # installation id, for the lifetime of this running process. This
+        # means the native broker/Keychain is only actually hit once per
+        # installation id per process (e.g. once after an app update, since
+        # an update restarts the backend), not on every status() poll.
+        # Never persisted to disk; cleared automatically on process exit.
+        self._credential_cache: dict[str, str] = {}
 
     def ensure_enrolled(
         self,
@@ -244,6 +259,7 @@ class DesktopBootstrapStore:
             }
         )
         self.credentials.set(installation_id, credential)
+        self._credential_cache[installation_id] = credential
         try:
             current.active = metadata
             # Deliberately retained (not cleared): this nonce is the durable
@@ -256,6 +272,7 @@ class DesktopBootstrapStore:
             self._write(current)
         except Exception:
             self.credentials.delete(installation_id)
+            self._credential_cache.pop(installation_id, None)
             raise
         return metadata
 
@@ -270,10 +287,14 @@ class DesktopBootstrapStore:
             raise ProviderError("Bootstrap metadata is unavailable") from exc
 
     def credential(self, metadata: BootstrapMetadata) -> str:
+        cached = self._credential_cache.get(metadata.installation_id)
+        if cached is not None:
+            return cached
         value = self.credentials.get(metadata.installation_id)
         match = _CREDENTIAL.fullmatch(value or "")
         if match is None or match.group(1) != metadata.installation_id:
             raise ProviderError("The installation credential is unavailable")
+        self._credential_cache[metadata.installation_id] = value or ""
         return value or ""
 
     def reenroll(
@@ -351,10 +372,12 @@ class DesktopBootstrapStore:
         # recoverable by re-reading the still-valid old credential -- never
         # a state with neither credential present.
         self.credentials.set(installation_id, new_credential)
+        self._credential_cache[installation_id] = new_credential
         state = self.state()
         state.active = new_metadata
         self._write(state)
         self.credentials.delete(metadata.installation_id)
+        self._credential_cache.pop(metadata.installation_id, None)
         return new_metadata
 
     def finish_revoke(self, metadata: BootstrapMetadata, *, hard: bool = False) -> None:
@@ -379,6 +402,7 @@ class DesktopBootstrapStore:
 
         if hard:
             self.credentials.delete(metadata.installation_id)
+            self._credential_cache.pop(metadata.installation_id, None)
         state = self.state()
         if state.active is not None and state.active.installation_id == metadata.installation_id:
             state.active = None
@@ -476,6 +500,7 @@ class DesktopBootstrapStore:
             }
         )
         self.credentials.set(installation_id, new_credential)
+        self._credential_cache[installation_id] = new_credential
         state = self.state()
         state.retired = None
         state.active = new_metadata
@@ -495,6 +520,7 @@ class DesktopBootstrapStore:
         """
 
         self.credentials.delete(metadata.installation_id)
+        self._credential_cache.pop(metadata.installation_id, None)
         state = self.state()
         if state.active is not None and state.active.installation_id == metadata.installation_id:
             state.active = None

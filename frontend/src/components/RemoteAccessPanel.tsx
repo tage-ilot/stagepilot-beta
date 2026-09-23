@@ -89,6 +89,9 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
   return <div aria-label="Remote Access" className="space-y-4">
     <p className="text-sm text-slate-300">Securely view or operate this StagePilot from another device. Local operation continues if Remote disconnects.</p>
     <p role="status" className="text-sm text-sky-200">{status ? labels[status.state] : "Checking Remote Access…"}</p>
+    {status?.state === "enabling" && <p className="text-sm text-slate-400">
+      Check for a system password prompt (Keychain/Credential Manager) and enter it — this can take a moment.
+    </p>}
     {status?.temporary_url ?
       <p className="text-sm text-amber-200">Temporary Remote link: the address changes after reconnection or restart. This preview is not a permanent remote address.</p> :
       <p className="text-sm text-sky-200">Stable Remote link: this installation keeps the same address after reconnecting.</p>}
