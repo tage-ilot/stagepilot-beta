@@ -855,9 +855,8 @@ export function Dashboard({
               <ActionButton action="start_next" label="Start next" tone="green" disabled={pendingAction !== null} onAction={dispatch} />
               <ActionButton action="restart_current" label="Restart current" tone="green" disabled={pendingAction !== null || !state.current_song} onAction={dispatch} />
               <ActionButton action="previous" label="Previous" tone="orange" disabled={pendingAction !== null} onAction={dispatch} />
-              <ActionButton action="next" label="Next" tone="orange" disabled={pendingAction !== null} onAction={dispatch} />
-              <ActionButton action="stop_timer" label="Stop timer" tone="red" disabled={pendingAction !== null} onAction={dispatch} />
               <ActionButton action="reload_plan" label="Reload plan" tone="blue" disabled={pendingAction !== null} onAction={dispatch} />
+              <ActionButton action="stop_timer" label="Stop timer" tone="red" disabled={pendingAction !== null} onAction={dispatch} />
               <ActionButton action="reset_position" label="Reset position" tone="red" disabled={pendingAction !== null} onAction={dispatch} />
             </div>
           </section>
