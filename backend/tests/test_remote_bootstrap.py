@@ -738,7 +738,7 @@ def test_permanently_revoked_credential_surfaces_recovery_action_and_reset_unblo
 
     from stagepilot.remote_provider import InstallationPermanentlyRevokedError
 
-    manager, credentials, fake, payload = manager_fixture(tmp_path)
+    manager, _credentials, fake, payload = manager_fixture(tmp_path)
     manager.enable()
     manager.disable()
     original_installation_id = str(payload["installationId"])
