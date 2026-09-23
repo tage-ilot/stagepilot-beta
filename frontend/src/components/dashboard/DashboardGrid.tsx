@@ -258,6 +258,25 @@ export function DashboardGrid({
     grid.batchUpdate(false);
   }, [items, mode]);
 
+  const fitLoadedWidgetsToContent = useCallback((targetMode: DashboardLayoutMode) => {
+    const activeGrid = gridRef.current;
+    if (!activeGrid) return;
+    initialSizingDone.current.add(targetMode);
+    activeGrid.batchUpdate();
+    for (const element of activeGrid.getGridItems()) {
+      const id = element.getAttribute("gs-id") as DashboardItemId | null;
+      if (!id || id === "events" || id.startsWith("spacer-")) continue;
+      const target = element.querySelector<HTMLElement>(".widget-autosize-target");
+      const node = element.gridstackNode;
+      if (!target || !node) continue;
+
+      activeGrid.update(element, { h: contentRows(target, node) });
+    }
+    activeGrid.batchUpdate(false);
+    activeGrid.compact("compact");
+    if (targetMode !== "mobile") saveGridResult();
+  }, [saveGridResult]);
+
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid || initialSizingDone.current.has(mode)) return;
@@ -265,21 +284,7 @@ export function DashboardGrid({
 
     const sizeLoadedWidgets = () => {
       if (cancelled || !gridRef.current || initialSizingDone.current.has(mode)) return;
-      initialSizingDone.current.add(mode);
-      const activeGrid = gridRef.current;
-      activeGrid.batchUpdate();
-      for (const element of activeGrid.getGridItems()) {
-        const id = element.getAttribute("gs-id") as DashboardItemId | null;
-        if (!id || id === "events" || id.startsWith("spacer-")) continue;
-        const target = element.querySelector<HTMLElement>(".widget-autosize-target");
-        const node = element.gridstackNode;
-        if (!target || !node) continue;
-
-        activeGrid.update(element, { h: contentRows(target, node) });
-      }
-      activeGrid.batchUpdate(false);
-      activeGrid.compact("compact");
-      if (mode !== "mobile") saveGridResult();
+      fitLoadedWidgetsToContent(mode);
     };
 
     const timer = window.setTimeout(() => {
@@ -290,7 +295,7 @@ export function DashboardGrid({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [items, mode, saveGridResult]);
+  }, [items, mode, fitLoadedWidgetsToContent]);
 
   useEffect(() => {
     const grid = gridRef.current;
@@ -433,8 +438,13 @@ export function DashboardGrid({
 
   const resetLayout = useCallback(() => {
     commitLayout(createDefaultDashboardLayout());
+    initialSizingDone.current.delete(modeRef.current);
     setAnnouncement("Dashboard layout reset");
-  }, [commitLayout]);
+    window.requestAnimationFrame(() => {
+      const fontsReady = document.fonts?.ready ?? Promise.resolve();
+      void fontsReady.then(() => fitLoadedWidgetsToContent(modeRef.current));
+    });
+  }, [commitLayout, fitLoadedWidgetsToContent]);
 
   return (
     <section aria-label="Customizable dashboard" className="mt-5">

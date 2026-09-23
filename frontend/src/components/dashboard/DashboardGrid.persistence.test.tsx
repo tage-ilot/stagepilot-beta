@@ -1,14 +1,14 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDefaultDashboardLayout } from "./dashboardLayout";
 import { DASHBOARD_LAYOUT_KEY, loadDashboardLayout } from "./dashboardLayoutStorage";
 import { DashboardGrid } from "./DashboardGrid";
 
 const widgets = {
-  "service-plan": <div>Service Plan content</div>,
-  "now-playing": <div>Now Playing content</div>,
-  "manual-controls": <div>Manual Controls content</div>,
+  "service-plan": <div className="widget-autosize-target">Service Plan content</div>,
+  "now-playing": <div className="widget-autosize-target">Now Playing content</div>,
+  "manual-controls": <div className="widget-autosize-target">Manual Controls content</div>,
   events: <div>Events content</div>,
 };
 
@@ -69,5 +69,75 @@ describe("dashboard layout persists across a simulated app restart", () => {
     render(<DashboardGrid widgets={widgets} />);
     const stored = loadDashboardLayout(durableStorage);
     expect(stored).toEqual(createDefaultDashboardLayout());
+  });
+});
+
+describe("a fresh install's first render matches clicking Reset Layout", () => {
+  let durableStorage: MemoryLocalStorage;
+
+  beforeEach(() => {
+    durableStorage = new MemoryLocalStorage();
+    Object.defineProperty(window, "localStorage", {
+      value: durableStorage,
+      configurable: true,
+    });
+    vi.useFakeTimers();
+    // Give the Service Plan widget real measured content: taller than its
+    // static registry default (h: 35 desktop rows * 28px cell height),
+    // so the content-fit measurement pass produces a *different* height
+    // than the raw static default -- this is what previously diverged
+    // between a fresh load (which ran the fit pass) and Reset Layout
+    // (which used to short-circuit it via `initialSizingDone`).
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.className?.includes("widget-autosize-target") ? 2000 : 0;
+      },
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    durableStorage.clear();
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+  });
+
+  const settleFit = async () => {
+    await vi.advanceTimersByTimeAsync(400);
+  };
+
+  it("renders the same widget heights as Reset Layout immediately, with no saved layout", async () => {
+    // True fresh/empty storage state: nothing saved yet.
+    expect(durableStorage.getItem(DASHBOARD_LAYOUT_KEY)).toBeNull();
+
+    const fresh = render(<DashboardGrid widgets={widgets} />);
+    await settleFit();
+    const freshHeight = screen.getByTestId("dashboard-widget-service-plan")
+      .closest(".grid-stack-item")!.getAttribute("gs-h");
+    // The fit pass ran and produced a real measured height, not the
+    // untouched static registry default (35).
+    expect(freshHeight).not.toBeNull();
+    fresh.unmount();
+
+    // Now start over with an existing (different) saved layout and click
+    // "Reset Layout" instead, on a brand-new mount.
+    durableStorage.setItem(DASHBOARD_LAYOUT_KEY, JSON.stringify({
+      ...createDefaultDashboardLayout(),
+      desktop: createDefaultDashboardLayout().desktop.map((item) => (
+        item.id === "service-plan" ? { ...item, h: 9 } : item
+      )),
+    }));
+    const existing = render(<DashboardGrid widgets={widgets} />);
+    await settleFit();
+    fireEvent.click(screen.getByRole("button", { name: "Edit layout" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset layout" }));
+    await settleFit();
+    const resetHeight = screen.getByTestId("dashboard-widget-service-plan")
+      .closest(".grid-stack-item")!.getAttribute("gs-h");
+
+    // Fresh install (no memory) and an explicit Reset Layout click must
+    // converge on the identical rendered height, not a smaller/different
+    // one that only becomes correct after the user manually resets.
+    expect(resetHeight).toBe(freshHeight);
+    existing.unmount();
   });
 });
