@@ -217,6 +217,8 @@ export function Dashboard({
   testPlanningCenterConnection = () => undefined,
   loadPlanningCenterServiceTypes = () => undefined,
   savePlanningCenter = () => undefined,
+  signInPlanningCenterOAuth = () => undefined,
+  disconnectPlanningCenter = () => undefined,
   refreshMidi,
   selectMidi,
   simulateMidi,
@@ -246,7 +248,7 @@ export function Dashboard({
   planningCenterServiceTypes?: PlanningCenterServiceType[];
   planningCenterError?: string | null;
   planningCenterMessage?: string | null;
-  pendingPlanningCenterOperation?: "test" | "load-types" | "save" | null;
+  pendingPlanningCenterOperation?: "test" | "load-types" | "save" | "oauth-sign-in" | "oauth-disconnect" | null;
   midi: MidiInputsResponse | null;
   midiMessages: MidiMonitorMessage[];
   midiError: string | null;
@@ -271,6 +273,8 @@ export function Dashboard({
     input: PlanningCenterSettingsInput,
     timezone: string,
   ) => void;
+  signInPlanningCenterOAuth?: () => void;
+  disconnectPlanningCenter?: () => void;
   refreshMidi: () => void;
   selectMidi: (inputId: string | null) => void;
   simulateMidi: (cue: MidiCueName) => void;
@@ -721,10 +725,12 @@ export function Dashboard({
           error={planningCenterError}
           message={planningCenterMessage}
           onClose={closeConnection}
+          onDisconnectOAuth={disconnectPlanningCenter}
           onLoadServiceTypes={loadPlanningCenterServiceTypes}
           onReload={() => dispatch("reload_plan")}
           onSave={savePlanningCenter}
           onSelectPlan={selectPlan}
+          onSignInOAuth={signInPlanningCenterOAuth}
           onTest={testPlanningCenterConnection}
           pendingAction={pendingAction}
           pendingOperation={pendingPlanningCenterOperation}

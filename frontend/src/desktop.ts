@@ -115,6 +115,28 @@ export const setRemoteAutostart = async (enabled: boolean): Promise<void> => {
   await invoke("set_remote_autostart", {enabled});
 };
 
+export interface PlanningCenterSignInResult {
+  code: string;
+  redirect_uri: string;
+}
+
+/// Opens the system browser to Planning Center's consent page and waits
+/// on the desktop's single-use loopback listener for the authorization
+/// code. Only available in the desktop shell (Tauri); the OAuth flow has
+/// no browser build equivalent because it needs the local loopback port.
+export const signInWithPlanningCenter = async (
+  authorizeUrlPrefix: string,
+  state: string,
+): Promise<PlanningCenterSignInResult> => {
+  if (!isTauri()) {
+    throw new Error("Signing in with Planning Center requires the StagePilot desktop app.");
+  }
+  return invoke<PlanningCenterSignInResult>("planning_center_sign_in", {
+    authorizeUrlPrefix,
+    state,
+  });
+};
+
 export const openExternalUrl = async (url: string): Promise<void> => {
   if (isTauri()) {
     await openUrl(url);

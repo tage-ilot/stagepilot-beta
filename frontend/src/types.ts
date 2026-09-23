@@ -276,7 +276,23 @@ export interface PlanningCenterStatusResponse {
   app_id: string | null;
   service_type_id: string | null;
   planning_center_secret_saved: boolean;
+  connection_method: "oauth" | "manual";
+  oauth_connected: boolean;
+  oauth_needs_reconnect: boolean;
   detail: string | null;
+}
+
+export interface PlanningCenterOAuthStartResponse {
+  authorize_url: string;
+  state: string;
+}
+
+export interface PlanningCenterOAuthStatusResponse {
+  connection_method: "oauth" | "manual";
+  connected: boolean;
+  needs_reconnect: boolean;
+  expires_at: number | null;
+  scope?: string | null;
 }
 
 export interface PlanningCenterServiceType {

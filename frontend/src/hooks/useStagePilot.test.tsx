@@ -262,6 +262,9 @@ beforeEach(() => {
     app_id: null,
     service_type_id: null,
     planning_center_secret_saved: false,
+    connection_method: "manual",
+    oauth_connected: false,
+    oauth_needs_reconnect: false,
     detail: null,
   });
   mockedGetPlanningCenterServiceTypes.mockResolvedValue([]);

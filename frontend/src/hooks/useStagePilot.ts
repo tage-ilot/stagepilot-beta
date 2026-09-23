@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  completePlanningCenterOAuth,
+  disconnectPlanningCenterOAuth,
   getAccess,
   getHealth,
   getLightsStatus,
@@ -19,6 +21,7 @@ import {
   selectMidiInput,
   selectPlanningCenterPlan,
   simulateMidiCue,
+  startPlanningCenterOAuth,
   testLightingCue,
   testPlanningCenter,
   testProPresenter,
@@ -54,7 +57,7 @@ import type {
   SongLightingCueMap,
   StateEnvelope,
 } from "../types";
-import { restartDesktopBackend } from "../desktop";
+import { restartDesktopBackend, signInWithPlanningCenter } from "../desktop";
 
 import { useDashboardAccess } from "../access/AccessContext";
 import { accessGeneration, invalidateAccess, onAccessInvalidated } from "../access/accessState";
@@ -88,7 +91,7 @@ export function useStagePilot() {
   const [planningCenterError, setPlanningCenterError] = useState<string | null>(null);
   const [planningCenterMessage, setPlanningCenterMessage] = useState<string | null>(null);
   const [pendingPlanningCenterOperation, setPendingPlanningCenterOperation] = useState<
-    "test" | "load-types" | "save" | null
+    "test" | "load-types" | "save" | "oauth-sign-in" | "oauth-disconnect" | null
   >(null);
 
   const [midi, setMidi] = useState<MidiInputsResponse | null>(null);
@@ -568,6 +571,47 @@ export function useStagePilot() {
     [canConfigure],
   );
 
+  const signInPlanningCenterOAuth = useCallback(async () => {
+    if (!canConfigure) return;
+    setPendingPlanningCenterOperation("oauth-sign-in");
+    setPlanningCenterError(null);
+    setPlanningCenterMessage(null);
+    try {
+      const { authorize_url: authorizeUrlPrefix, state } = await startPlanningCenterOAuth();
+      const { code, redirect_uri: redirectUri } = await signInWithPlanningCenter(
+        authorizeUrlPrefix,
+        state,
+      );
+      await completePlanningCenterOAuth(state, code, redirectUri);
+      setPlanningCenterStatus(await getPlanningCenterStatus());
+      setPlanningCenterMessage("Connected to Planning Center.");
+    } catch (cause) {
+      setPlanningCenterError(
+        cause instanceof Error ? cause.message : "Planning Center sign-in failed.",
+      );
+    } finally {
+      setPendingPlanningCenterOperation(null);
+    }
+  }, [canConfigure]);
+
+  const disconnectPlanningCenter = useCallback(async () => {
+    if (!canConfigure) return;
+    setPendingPlanningCenterOperation("oauth-disconnect");
+    setPlanningCenterError(null);
+    setPlanningCenterMessage(null);
+    try {
+      await disconnectPlanningCenterOAuth();
+      setPlanningCenterStatus(await getPlanningCenterStatus());
+      setPlanningCenterMessage("Disconnected from Planning Center.");
+    } catch (cause) {
+      setPlanningCenterError(
+        cause instanceof Error ? cause.message : "Could not disconnect from Planning Center.",
+      );
+    } finally {
+      setPendingPlanningCenterOperation(null);
+    }
+  }, [canConfigure]);
+
   const refreshMidi = useCallback(async () => {
     if (!canConfigure) return;
     setPendingMidiOperation("refresh");
@@ -874,6 +918,8 @@ export function useStagePilot() {
     testPlanningCenterConnection,
     loadPlanningCenterServiceTypes,
     savePlanningCenter,
+    signInPlanningCenterOAuth,
+    disconnectPlanningCenter,
     refreshMidi,
     selectMidi,
     simulateMidi,
