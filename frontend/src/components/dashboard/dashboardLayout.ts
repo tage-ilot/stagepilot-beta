@@ -37,6 +37,7 @@ export const createDefaultDashboardLayout = (): DashboardLayoutState => ({
   tablet: DASHBOARD_WIDGET_IDS.map((id) => widgetItem(id, "tablet")),
   mobileOrder: ["now-playing", "service-plan", "manual-controls", "events"],
   mobileHeights: {},
+  eventsHidden: false,
 });
 
 const validInteger = (value: unknown, minimum = 0): value is number =>
@@ -134,12 +135,14 @@ export const parseDashboardLayout = (value: unknown): DashboardLayoutState | nul
     value.mobileHeights,
     new Set(mobileOrder as DashboardItemId[]),
   );
+  const eventsHidden = typeof value.eventsHidden === "boolean" ? value.eventsHidden : false;
   return {
     version: 2,
     desktop,
     tablet,
     mobileOrder: mobileOrder as DashboardItemId[],
     mobileHeights,
+    eventsHidden,
   };
 };
 
@@ -183,6 +186,7 @@ export const migrateDashboardOrder = (value: unknown): DashboardLayoutState | nu
     tablet: packWidgetsInOrder(order, DASHBOARD_COLUMNS.tablet),
     mobileOrder: [...order],
     mobileHeights: {},
+    eventsHidden: false,
   };
 };
 

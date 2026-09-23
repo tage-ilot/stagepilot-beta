@@ -34,6 +34,12 @@ export type DashboardLayoutState = {
   // static clamp derived from the desktop layout's `h`. Optional/partial
   // so older persisted layouts (pre-mobileHeights) still parse cleanly.
   mobileHeights?: Partial<Record<DashboardItemId, number>>;
+  // User-controlled visibility for the Recent Event Stream widget. Only
+  // togglable while edit-layout mode is active; when true the widget is
+  // fully omitted (no render, no space) outside of edit mode. Optional so
+  // older persisted layouts (pre-eventsHidden) still parse cleanly and
+  // default to visible.
+  eventsHidden?: boolean;
 };
 
 export const DASHBOARD_COLUMNS: Record<DashboardLayoutMode, number> = {
