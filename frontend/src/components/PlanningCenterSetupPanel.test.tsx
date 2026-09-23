@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ApplicationState, SettingsResponse } from "../types";
+import type { ApplicationState, PlanningCenterStatusResponse, SettingsResponse } from "../types";
 import { PlanningCenterSetupPanel } from "./PlanningCenterSetupPanel";
 
 const desktop = vi.hoisted(() => ({
@@ -105,19 +105,38 @@ const state: ApplicationState = {
   last_action: null,
 };
 
-function renderPanel({ onTest = vi.fn(), onSave = vi.fn() } = {}) {
+function renderPanel({
+  onTest = vi.fn(),
+  onSave = vi.fn(),
+  onSignInOAuth = vi.fn(),
+  onDisconnectOAuth = vi.fn(),
+  status = {
+    connection_status: "disconnected",
+    configured: true,
+    app_id: "saved-app-id",
+    service_type_id: "sunday",
+    planning_center_secret_saved: true,
+    connection_method: "manual",
+    oauth_connected: false,
+    oauth_needs_reconnect: false,
+    detail: null,
+  } as PlanningCenterStatusResponse,
+  pendingOperation = null,
+} = {}) {
   render(
     <PlanningCenterSetupPanel
       error={null}
       message={null}
       onClose={vi.fn()}
+      onDisconnectOAuth={onDisconnectOAuth}
       onLoadServiceTypes={vi.fn()}
       onReload={vi.fn()}
       onSave={onSave}
       onSelectPlan={vi.fn()}
+      onSignInOAuth={onSignInOAuth}
       onTest={onTest}
       pendingAction={null}
-      pendingOperation={null}
+      pendingOperation={pendingOperation}
       pendingPlanId={null}
       serviceTypes={[
         { id: "sunday", name: "Sunday Morning" },
@@ -125,14 +144,7 @@ function renderPanel({ onTest = vi.fn(), onSave = vi.fn() } = {}) {
       ]}
       settings={settings}
       state={state}
-      status={{
-        connection_status: "disconnected",
-        configured: true,
-        app_id: "saved-app-id",
-        service_type_id: "sunday",
-        planning_center_secret_saved: true,
-        detail: null,
-      }}
+      status={status}
     />,
   );
 }
@@ -218,5 +230,87 @@ describe("PlanningCenterSetupPanel", () => {
       }),
       "America/Los_Angeles",
     );
+  });
+
+  it("shows the sign-in button by default and triggers the start-flow call", async () => {
+    const onSignInOAuth = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ onSignInOAuth });
+
+    const button = screen.getByRole("button", { name: "Sign in with Planning Center" });
+    await user.click(button);
+
+    expect(onSignInOAuth).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Connected to Planning Center")).not.toBeInTheDocument();
+  });
+
+  it("shows the connected state and hides the sign-in button once OAuth-connected", () => {
+    renderPanel({
+      status: {
+        connection_status: "connected",
+        configured: true,
+        app_id: null,
+        service_type_id: "sunday",
+        planning_center_secret_saved: false,
+        connection_method: "oauth",
+        oauth_connected: true,
+        oauth_needs_reconnect: false,
+        detail: null,
+      },
+    });
+
+    expect(screen.getByText("Connected to Planning Center")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Sign in with Planning Center" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+  });
+
+  it("the advanced/manual section still works independently when disconnected", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ onSave });
+
+    // Manual connection method keeps the disclosure expanded and the
+    // fields fully interactive, unaffected by the new OAuth UI above it.
+    await user.clear(screen.getByLabelText("Application ID"));
+    await user.type(screen.getByLabelText("Application ID"), "manual-app-id");
+    await user.type(screen.getByLabelText("Secret"), "manual-secret");
+    await user.selectOptions(screen.getByLabelText("Service type"), "wednesday");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        app_id: "manual-app-id",
+        secret: "manual-secret",
+        service_type_id: "wednesday",
+      }),
+      "America/Los_Angeles",
+    );
+  });
+
+  it("renders the reconnect-needed state distinctly from a generic error banner", () => {
+    renderPanel({
+      status: {
+        connection_status: "error",
+        configured: true,
+        app_id: null,
+        service_type_id: "sunday",
+        planning_center_secret_saved: false,
+        connection_method: "oauth",
+        oauth_connected: false,
+        oauth_needs_reconnect: true,
+        detail: null,
+      },
+    });
+
+    const reconnectAlert = screen.getByRole("alert");
+    expect(reconnectAlert).toHaveTextContent("Your Planning Center connection has expired");
+    expect(
+      screen.getByRole("button", { name: "Reconnect to Planning Center" }),
+    ).toBeInTheDocument();
+    // The generic error/message banner (a <p>, not role="alert") is a
+    // separate code path and must not render for this state.
+    expect(screen.queryByText("Planning Center connection test failed.")).not.toBeInTheDocument();
   });
 });

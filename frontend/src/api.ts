@@ -16,6 +16,8 @@ import type {
   MidiInputsResponse,
   MidiMonitorResponse,
   PersistentSettings,
+  PlanningCenterOAuthStartResponse,
+  PlanningCenterOAuthStatusResponse,
   PlanningCenterServiceType,
   PlanningCenterSettingsInput,
   PlanningCenterStatusResponse,
@@ -211,6 +213,25 @@ export const updatePlanningCenterSettings = (settings: PlanningCenterSettingsInp
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
+  });
+
+export const startPlanningCenterOAuth = () =>
+  requestJson<PlanningCenterOAuthStartResponse>("/api/v1/planning-center/oauth/start", {
+    method: "POST",
+  });
+export const completePlanningCenterOAuth = (
+  state: string,
+  code: string,
+  redirectUri: string,
+) =>
+  requestJson<PlanningCenterOAuthStatusResponse>("/api/v1/planning-center/oauth/callback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state, code, redirect_uri: redirectUri }),
+  });
+export const disconnectPlanningCenterOAuth = () =>
+  requestJson<PlanningCenterOAuthStatusResponse>("/api/v1/planning-center/oauth/disconnect", {
+    method: "POST",
   });
 
 export const getMidiInputs = () => requestJson<MidiInputsResponse>("/api/v1/midi/inputs");
