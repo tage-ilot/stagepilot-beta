@@ -717,3 +717,64 @@ def test_reactivate_surfaces_quota_exceeded_as_specific_provider_error(
             control_plane_origin="https://control.example.com",
             transport=httpx.MockTransport(limited),
         )
+
+
+def test_permanently_revoked_credential_surfaces_recovery_action_and_reset_unblocks(
+    tmp_path: Path,
+) -> None:
+    """Regression for the "revoked installation credential has no recovery
+    path" bug: a control plane that deterministically returns 401 to every
+    reactivate attempt (a genuinely, permanently revoked credential, not a
+    transient blip) must:
+
+    1. Never be silently retried into a fresh anonymous enrollment by
+       `_active()`/`enable()` itself.
+    2. Surface a specific, actionable status (`permanently_revoked=True`),
+       not a generic "try again" message that loops forever.
+    3. Have an explicit `reset_identity()` recovery action that discards the
+       dead identity and, on the very next `enable()`, provisions a genuinely
+       new installation and clears the recovery flag.
+    """
+
+    from stagepilot.remote_provider import InstallationPermanentlyRevokedError
+
+    manager, _credentials, fake, payload = manager_fixture(tmp_path)
+    manager.enable()
+    manager.disable()
+    original_installation_id = str(payload["installationId"])
+
+    def always_revoked(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reactivate"):
+            return httpx.Response(401, json={"error": "revoked"})
+        raise AssertionError(f"unexpected route {request.url.path}")
+
+    manager.transport = httpx.MockTransport(always_revoked)
+
+    # (1) and (2): every enable attempt fails with the specific error, is
+    # never silently swallowed into a fresh anonymous enrollment, and the
+    # manager's own status durably reflects the permanent failure.
+    for _ in range(3):
+        with pytest.raises(InstallationPermanentlyRevokedError):
+            manager.enable()
+    assert manager.bootstrap.state().retired is not None
+    assert manager.bootstrap.state().retired.installation_id == original_installation_id  # type: ignore[union-attr]
+    status = manager.status()
+    assert status["permanently_revoked"] is True
+    assert status["enabled"] is False
+
+    # (3): the explicit reset action discards the dead identity...
+    reset_status = manager.reset_identity()
+    assert reset_status["permanently_revoked"] is False
+    assert manager.bootstrap.state().retired is None
+    assert manager.bootstrap.state().active is None
+
+    # ...and the next enable mints a genuinely new installation via the
+    # anonymous path (the old, permanently-dead credential is never reused).
+    manager.transport = httpx.MockTransport(fake)
+    fake.reject_credential = False
+    result = manager.enable()
+    new_active = manager.bootstrap.state().active
+    assert new_active is not None
+    assert new_active.installation_id != original_installation_id
+    assert result["permanently_revoked"] is False
+    assert result["enabled"] is True

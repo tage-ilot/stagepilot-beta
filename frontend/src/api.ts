@@ -138,6 +138,7 @@ export interface RemoteStatus {
   needs_operator: boolean;
   message: string | null;
   temporary_url: boolean;
+  permanently_revoked: boolean;
 }
 export interface RemoteUser {
   id: string; email: string; role: "Viewer" | "Operator"; enabled: boolean;
@@ -152,6 +153,8 @@ export const setRemoteEnabled = (enabled: boolean) => remoteMutation<RemoteStatu
   `/api/v1/remote-access/${enabled ? "enable" : "disable"}`, "POST", {});
 export const regenerateRemote = () => remoteMutation<RemoteStatus>(
   "/api/v1/remote-access/regenerate", "POST", {});
+export const resetRemoteIdentity = () => remoteMutation<RemoteStatus>(
+  "/api/v1/remote-access/reset", "POST", {});
 export const bootstrapRemote = (email: string, password: string) => remoteMutation<RemoteUser>(
   "/api/v1/remote-access/bootstrap", "POST", {email, password});
 export const createRemoteUser = (email: string, password: string, role: RemoteUser["role"]) =>

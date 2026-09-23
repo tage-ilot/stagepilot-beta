@@ -14,6 +14,16 @@ class ProviderError(Exception):
     """Only sanitized operational messages may cross this boundary."""
 
 
+class InstallationPermanentlyRevokedError(ProviderError):
+    """The control plane has confirmed this installation's credential can
+    never be used again (401/403 on reactivate).
+
+    Distinct from a plain ProviderError so callers can tell "transient,
+    retrying might work" apart from "this identity is dead, offer a reset"
+    without parsing message text.
+    """
+
+
 class TunnelProvider(Protocol):
     def ensure(self, name: str, hostname: str, port: int) -> tuple[str, str]: ...
     def revoke(self, name: str, hostname: str) -> None: ...

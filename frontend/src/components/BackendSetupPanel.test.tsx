@@ -16,7 +16,7 @@ vi.mock("../desktop", async (original) => ({
   setRemoteAutostart: vi.fn(),
 }));
 
-const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true};
+const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true, permanently_revoked: false};
 const operator: api.RemoteUser = {id: "one", email: "operator@example.test", role: "Operator", enabled: true};
 
 const state: ApplicationState = {

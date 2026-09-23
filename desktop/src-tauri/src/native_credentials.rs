@@ -64,6 +64,10 @@ impl Drop for NativeCredentialBroker {
     }
 }
 
+fn valid_account(account: &str) -> bool {
+    matches!(account.len(), 8 | 16 | 32) && account.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn handle(mut stream: TcpStream, authorization: &str) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -79,7 +83,7 @@ fn handle(mut stream: TcpStream, authorization: &str) {
         respond(&mut stream, 404, "");
         return;
     };
-    if account.len() != 32 || !account.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !valid_account(account) {
         respond(&mut stream, 400, "");
         return;
     }
@@ -191,4 +195,31 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
         body.len()
     );
     let _ = stream.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_account;
+
+    #[test]
+    fn accepts_current_and_legacy_installation_id_lengths() {
+        // 8 hex chars: the current (beta.9+) shortened installation id.
+        assert!(valid_account("43dcc938"));
+        // 16 and 32 hex chars: legacy/back-compat installation id lengths
+        // this broker must still accept for installations enrolled before
+        // the id-shortening change.
+        assert!(valid_account("43dcc9384f7eede0"));
+        assert!(valid_account(&"a".repeat(32)));
+    }
+
+    #[test]
+    fn rejects_wrong_length_or_non_hex_accounts() {
+        assert!(!valid_account(""));
+        assert!(!valid_account("abc"));
+        assert!(!valid_account(&"a".repeat(7)));
+        assert!(!valid_account(&"a".repeat(9)));
+        assert!(!valid_account(&"a".repeat(33)));
+        assert!(!valid_account("zzzzzzzz"));
+        assert!(!valid_account("43dcc93!"));
+    }
 }

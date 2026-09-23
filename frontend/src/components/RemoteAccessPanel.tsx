@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  bootstrapRemote, createRemoteUser, deleteRemoteUser, regenerateRemote,
+  bootstrapRemote, createRemoteUser, deleteRemoteUser, regenerateRemote, resetRemoteIdentity,
   updateRemoteUser, type RemoteUser,
 } from "../api";
 import type { RemoteAccessControl } from "../hooks/useRemoteAccess";
@@ -57,6 +57,7 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
   const [edit, setEdit] = useState<RemoteUser | null>(null);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
   const passwordCleared = useRef(false);
 
   useEffect(() => {
@@ -93,6 +94,16 @@ export function RemoteAccessPanel({ control }: { control: RemoteAccessControl })
       <p className="text-sm text-sky-200">Stable Remote link: this installation keeps the same address after reconnecting.</p>}
     {status && !status.available && <p className="text-sm text-slate-300">Remote Access is unavailable on this installation. Local StagePilot is unaffected.</p>}
     {status?.provisioned && !status.credential_available && <p className="text-sm text-amber-200">The installation credential is unavailable or revoked. Remote remains off; contact beta support to recover this installation.</p>}
+    {status?.permanently_revoked && <div role="group" aria-label="Reset installation identity" className="space-y-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3">
+      <p className="text-sm text-amber-200">
+        Your previous Remote Access setup could not be restored and needs to be reset. This is safe and won't affect local StagePilot.
+      </p>
+      <button className={`${primaryButton} inline-flex items-center gap-2`} disabled={busy || resetBusy} type="button" onClick={() => {
+        if (resetBusy) return;
+        setResetBusy(true);
+        void run(async () => { await resetRemoteIdentity(); }).catch(() => undefined).finally(() => setResetBusy(false));
+      }}>{resetBusy && <ButtonSpinner />}{resetBusy ? "Resetting…" : "Reset installation identity"}</button>
+    </div>}
     {status?.state === "error" && <p className="text-sm text-slate-300">Check your Internet connection. You can disable Remote and try enabling it again.</p>}
     {status?.state === "reconnecting" && <p className="text-sm text-slate-300">Reconnecting. Check here for the current link once connected.</p>}
 

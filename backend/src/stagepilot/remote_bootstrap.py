@@ -16,7 +16,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from stagepilot.remote_files import atomic_write
-from stagepilot.remote_provider import ProviderError
+from stagepilot.remote_provider import InstallationPermanentlyRevokedError, ProviderError
 
 INSTALLATION_SCHEMA = "org.stagepilot.private-beta-installation"
 DEFAULT_CONTROL_PLANE_ORIGIN = (
@@ -438,7 +438,7 @@ class DesktopBootstrapStore:
                 "This computer has reached its enrollment limit for now. Try again later."
             )
         if response.status_code in {401, 403}:
-            raise ProviderError(
+            raise InstallationPermanentlyRevokedError(
                 "This installation's credential was revoked. Contact beta support to "
                 "recover this installation."
             )
