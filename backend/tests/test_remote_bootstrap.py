@@ -266,6 +266,39 @@ def test_new_16_char_installation_id_validates_alongside_legacy_32_char(tmp_path
     assert credentials.get(active.installation_id) == payload["installationCredential"]
 
 
+def test_new_8_char_installation_id_validates_alongside_legacy_16_and_32_char(tmp_path: Path) -> None:
+    # Newest enrollments mint an 8-hex-char installation id (sp-<8 hex
+    # chars> hostname); both older 16-char and 32-char installations must
+    # keep validating unchanged.
+    payload = bundle_payload("d" * 8)
+    credentials = MemoryCredentials()
+    store = DesktopBootstrapStore(
+        tmp_path / "remote/bootstrap.json",
+        credentials,
+        trusted_origins=TEST_ORIGINS,
+    )
+    binary = tmp_path / "resources/cloudflared"
+    binary.parent.mkdir()
+    binary.write_bytes(b"test binary")
+    fake = FakeControlPlane(payload)
+    manager = DesktopRemoteManager(
+        tmp_path / "remote",
+        binary,
+        bootstrap_store=store,
+        transport=httpx.MockTransport(fake),
+        control_plane_origin="https://control.example.com",
+    )
+
+    enabled = manager.enable()
+
+    assert enabled["provisioned"] is True
+    active = store.state().active
+    assert active is not None
+    assert active.installation_id == "d" * 8
+    assert active.hostname == f"sp-{'d' * 8}.remote.example.com"
+    assert credentials.get(active.installation_id) == payload["installationCredential"]
+
+
 def test_enrollment_honors_retry_after_with_backoff_and_jitter(tmp_path: Path) -> None:
     payload = bundle_payload()
     credentials = MemoryCredentials()

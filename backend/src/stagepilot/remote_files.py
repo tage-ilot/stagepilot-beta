@@ -84,7 +84,7 @@ def read_desired(path: Path) -> DesiredRemote:
         return DesiredRemote()
 
 
-Identifier = Annotated[str, Field(pattern=r"^[a-f0-9]{16}$|^[a-f0-9]{32}$")]
+Identifier = Annotated[str, Field(pattern=r"^[a-f0-9]{8}$|^[a-f0-9]{16}$|^[a-f0-9]{32}$")]
 
 
 class ControlConfig(BaseModel):

@@ -7,10 +7,10 @@ import { pathToFileURL } from "node:url";
 
 export const BOOTSTRAP_SCHEMA = "org.stagepilot.private-beta-bootstrap";
 export const BOOTSTRAP_VERSION = 1;
-const ID = /^[a-f0-9]{32}$/;
+const ID = /^[a-f0-9]{8}$|^[a-f0-9]{16}$|^[a-f0-9]{32}$/;
 const HOSTNAME = /^[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,128}$/;
-const CREDENTIAL = /^spi_([a-f0-9]{32})\.([A-Za-z0-9_-]{32,})$/;
+const CREDENTIAL = /^spi_([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\.([A-Za-z0-9_-]{32,})$/;
 const EXACT_KEYS = [
   "schema",
   "version",
