@@ -67,10 +67,10 @@ function renderPanel() {
 }
 
 describe("Remote Access checkbox", () => {
-  it("checking the box enables Remote and expands the panel", async () => {
-    vi.mocked(api.getRemoteStatus).mockResolvedValue({...off, needs_operator: false});
+  it("checking the box enables Remote immediately even with no Operator yet, then shows the bootstrap UI", async () => {
+    vi.mocked(api.getRemoteStatus).mockResolvedValue(off);
     vi.mocked(api.setRemoteEnabled).mockImplementation(async (enabled) => {
-      const next = {...off, enabled, state: enabled ? "enabling" as const : "off" as const, needs_operator: false};
+      const next = {...off, enabled, state: enabled ? "enabling" as const : "off" as const, needs_operator: true};
       vi.mocked(api.getRemoteStatus).mockResolvedValue(next);
       return next;
     });
@@ -83,7 +83,23 @@ describe("Remote Access checkbox", () => {
     expect(desktop.setRemoteAutostart).toHaveBeenCalledWith(true);
     await waitFor(() => expect(checkbox).toBeChecked());
     expect(checkbox.closest("label")).toHaveAttribute("aria-expanded", "true");
+
+    // Enabled, but still no Operator: the bootstrap form is a required next
+    // step and stays visible, not a precondition that was waited on.
+    expect(await screen.findByRole("heading", {name: "Create first Operator"})).toBeInTheDocument();
+    expect(screen.getByText(/Remote Access is running\. Create the first Operator/)).toBeInTheDocument();
+
+    // Creating the first Operator now must NOT call setRemoteEnabled again
+    // (it's already enabled) -- only bootstrapRemote itself.
+    vi.mocked(api.bootstrapRemote).mockResolvedValue(operator);
+    vi.mocked(api.getRemoteUsers).mockResolvedValue([operator]);
+    fireEvent.change(screen.getByLabelText("Email"), {target: {value: operator.email}});
+    fireEvent.change(screen.getByLabelText("Password"), {target: {value: "long-test-password"}});
+    fireEvent.click(screen.getByRole("button", {name: "Create Operator"}));
+    await waitFor(() => expect(api.bootstrapRemote).toHaveBeenCalledWith(operator.email, "long-test-password"));
+    expect(api.setRemoteEnabled).toHaveBeenCalledTimes(1);
   });
+
 
   it("unchecking with confirmation disables Remote and collapses the panel", async () => {
     vi.mocked(api.getRemoteStatus).mockResolvedValue({...off, enabled: true, state: "connected", needs_operator: false, url: "https://test.trycloudflare.com"});
@@ -123,28 +139,22 @@ describe("Remote Access checkbox", () => {
     expect(screen.queryByRole("group", {name: "Confirm disable Remote Access"})).not.toBeInTheDocument();
   });
 
-  it("the needs_operator first-run path still surfaces the bootstrap UI instead of silently enabling", async () => {
-    vi.mocked(api.getRemoteStatus).mockResolvedValue(off);
-    renderPanel();
-    const checkbox = await screen.findByRole("checkbox", {name: /Remote Access/});
-    expect(checkbox).not.toBeChecked();
-
-    fireEvent.click(checkbox);
-    expect(await screen.findByRole("heading", {name: "Create first Operator"})).toBeInTheDocument();
-    expect(api.setRemoteEnabled).not.toHaveBeenCalled();
-    expect(checkbox).not.toBeChecked();
-
-    vi.mocked(api.bootstrapRemote).mockResolvedValue(operator);
+  it("disabling still works identically regardless of whether an Operator exists", async () => {
+    vi.mocked(api.getRemoteStatus).mockResolvedValue({...off, enabled: true, state: "connected", needs_operator: true, url: "https://test.trycloudflare.com"});
     vi.mocked(api.setRemoteEnabled).mockImplementation(async (enabled) => {
-      const next = {...off, enabled, state: enabled ? "enabling" as const : "off" as const, needs_operator: false};
+      const next = {...off, enabled, state: enabled ? "connected" as const : "off" as const, needs_operator: true, url: enabled ? "https://test.trycloudflare.com" : null};
       vi.mocked(api.getRemoteStatus).mockResolvedValue(next);
       return next;
     });
-    fireEvent.change(screen.getByLabelText("Email"), {target: {value: operator.email}});
-    fireEvent.change(screen.getByLabelText("Password"), {target: {value: "long-test-password"}});
-    fireEvent.click(screen.getByRole("button", {name: "Create Operator and enable"}));
-    await waitFor(() => expect(api.setRemoteEnabled).toHaveBeenCalledWith(true));
-    expect(api.bootstrapRemote).toHaveBeenCalledWith(operator.email, "long-test-password");
+    renderPanel();
+    const checkbox = await screen.findByRole("checkbox", {name: /Remote Access/});
     await waitFor(() => expect(checkbox).toBeChecked());
+
+    fireEvent.click(checkbox);
+    expect(await screen.findByRole("group", {name: "Confirm disable Remote Access"})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "Confirm disable"}));
+    await waitFor(() => expect(api.setRemoteEnabled).toHaveBeenCalledWith(false));
+    expect(desktop.setRemoteAutostart).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(checkbox).not.toBeChecked());
   });
 });
