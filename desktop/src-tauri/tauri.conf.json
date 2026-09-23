@@ -20,6 +20,8 @@
         "height": 960,
         "minWidth": 640,
         "minHeight": 480,
+        "maxWidth": 1700,
+        "maxHeight": 2560,
         "decorations": false,
         "resizable": true,
         "fullscreen": false
