@@ -362,3 +362,61 @@ async def test_cancellation_is_not_swallowed() -> None:
 def test_client_requires_credentials() -> None:
     with pytest.raises(PlanningCenterConfigurationError, match="not configured"):
         PlanningCenterClient(PlanningCenterSettings())
+
+
+def oauth_settings() -> PlanningCenterSettings:
+    return PlanningCenterSettings(
+        connection_method="oauth",
+        access_token="oauth-access-token",
+        request_timeout_seconds=3,
+        user_agent="StagePilot tests (https://github.com/tage-ilot/stagepilot-beta)",
+    )
+
+
+@pytest.mark.asyncio
+async def test_oauth_connection_method_uses_bearer_authentication() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"data": [], "meta": {"total_count": 0, "count": 0, "next": None}},
+        )
+
+    async with PlanningCenterClient(oauth_settings(), transport=mock_transport(handler)) as client:
+        assert await client.list_service_types() == []
+
+    request = requests[0]
+    assert request.headers["Authorization"] == "Bearer oauth-access-token"
+    assert request.headers["X-PCO-API-Version"] == "2018-11-01"
+    assert "oauth-access-token" not in str(request.url)
+
+
+@pytest.mark.asyncio
+async def test_manual_connection_method_still_uses_basic_authentication() -> None:
+    """The existing PAT path must keep working exactly as before."""
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"data": [], "meta": {"total_count": 0, "count": 0, "next": None}},
+        )
+
+    settings = client_settings()
+    assert settings.connection_method == "manual"
+    async with PlanningCenterClient(settings, transport=mock_transport(handler)) as client:
+        assert await client.list_service_types() == []
+
+    expected = base64.b64encode(b"test-app-id:test-secret").decode("ascii")
+    assert requests[0].headers["Authorization"] == f"Basic {expected}"
+
+
+def test_oauth_without_an_access_token_is_a_configuration_error() -> None:
+    with pytest.raises(PlanningCenterConfigurationError, match="not configured"):
+        PlanningCenterClient(PlanningCenterSettings(connection_method="oauth"))

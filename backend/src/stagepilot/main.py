@@ -35,8 +35,19 @@ from stagepilot.core.plan_cache import (
 )
 from stagepilot.core.plugin import PluginManager
 from stagepilot.core.runtime import Runtime
-from stagepilot.core.settings import SettingsService
+from stagepilot.core.settings import (
+    CredentialStore,
+    MemoryCredentialStore,
+    SettingsService,
+    default_oauth_credential_store,
+)
 from stagepilot.core.state import StateStore
+from stagepilot.planning_center_oauth import (
+    ControlPlaneOAuthClient,
+    OAuthTokenStore,
+    PlanningCenterOAuthService,
+    proactive_refresh_loop,
+)
 from stagepilot.plugins.demo import DemoPlugin
 from stagepilot.plugins.lights import LightsPlugin, MidiOutputBackendFactory
 from stagepilot.plugins.midi_playback import MidiBackendFactory, MidiPlaybackPlugin
@@ -86,6 +97,8 @@ def create_app(
     dashboard_auth_enforced: bool | None = None,
     plan_cache_store: PlanCacheStore | None = None,
     remote_store: RemoteStore | None = None,
+    oauth_credential_store: CredentialStore | None = None,
+    oauth_control_plane: ControlPlaneOAuthClient | None = None,
     web_root: Path | None = None,
 ) -> FastAPI:
     """Create an independently testable StagePilot application instance."""
@@ -178,6 +191,28 @@ def create_app(
         )
         plugin_manager.register(propresenter_plugin)
 
+    planning_center_oauth = PlanningCenterOAuthService(
+        # The OAuth client_id is not a secret (only the client_secret is,
+        # and that lives in the control-plane Worker), but it is a
+        # product-wide registration value rather than something StagePilot
+        # can invent, so it is supplied by the packaged build/environment.
+        # With no client id configured, sign-in reports itself as
+        # unavailable instead of building a broken authorize URL.
+        client_id=os.environ.get("STAGEPILOT_PCO_CLIENT_ID", ""),
+        tokens=OAuthTokenStore(
+            oauth_credential_store
+            or (
+                MemoryCredentialStore()
+                if settings is not None
+                else default_oauth_credential_store()
+            )
+        ),
+        control_plane=oauth_control_plane,
+    )
+    resolved_settings_service.set_access_token_provider(
+        lambda: tokens.access_token if (tokens := planning_center_oauth.stored()) else None
+    )
+
     runtime = Runtime(
         settings=resolved_settings,
         event_bus=event_bus,
@@ -193,6 +228,7 @@ def create_app(
         propresenter_controller=propresenter_plugin,
         lights_controller=lights_plugin,
         planning_center=planning_center_plugin,
+        planning_center_oauth=planning_center_oauth,
     )
     startup_activation = StartupActivationService(
         plugin_manager=plugin_manager,
@@ -216,13 +252,25 @@ def create_app(
             _run_startup_activation(startup_activation),
             name="stagepilot-startup-activation",
         )
+        # Proactive OAuth refresh: one lifespan-owned polling task, the
+        # same shape as the managed-Remote reconcile loop, rather than a
+        # new scheduler dependency.
+        oauth_stop = asyncio.Event()
+        oauth_task = asyncio.create_task(
+            proactive_refresh_loop(planning_center_oauth, oauth_stop),
+            name="stagepilot-planning-center-oauth-refresh",
+        )
         try:
             yield
         finally:
             logger.info("application_stopping")
             activation_task.cancel()
+            oauth_stop.set()
+            oauth_task.cancel()
             with suppress(asyncio.CancelledError):
                 await activation_task
+            with suppress(asyncio.CancelledError):
+                await oauth_task
             await event_bus.publish(new_event(EventType.APPLICATION_STOPPING, source="application"))
             await plugin_manager.stop_all()
             await state_service.stop()

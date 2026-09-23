@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -31,6 +31,11 @@ from stagepilot.core.config import (
 SETTINGS_SCHEMA_VERSION: Literal[1] = 1
 KEYRING_SERVICE = "StagePilot"
 KEYRING_ACCOUNT = "planning-center-secret"
+# The OAuth token blob (access token, refresh token, expiry, reconnect
+# marker) lives under a second account in the SAME keyring service, so the
+# existing PAT secret is untouched and both auth methods can coexist for an
+# installation that switches between them.
+KEYRING_ACCOUNT_OAUTH = "planning-center-oauth"
 
 
 class SettingsFileError(RuntimeError):
@@ -47,6 +52,9 @@ class PersistentPlanningCenterSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_id: str | None = Field(default=None, max_length=255)
+    # Additive, defaults to the existing manual PAT flow so saved settings
+    # written before OAuth existed keep validating and behaving identically.
+    connection_method: Literal["oauth", "manual"] = "manual"
     service_type_id: str | None = Field(default=None, max_length=128)
     plan_title_preference: str | None = Field(default=None, max_length=255)
     preferred_service_time: str | None = Field(
@@ -124,6 +132,7 @@ class PersistentSettings(BaseModel):
             lan_access=settings.bind_host == "0.0.0.0",
             planning_center=PersistentPlanningCenterSettings(
                 app_id=app_id.get_secret_value() if app_id is not None else None,
+                connection_method=settings.planning_center.connection_method,
                 service_type_id=settings.planning_center.service_type_id,
                 plan_title_preference=settings.planning_center.plan_title_preference,
                 preferred_service_time=settings.planning_center.preferred_service_time,
@@ -145,7 +154,7 @@ class PersistentSettings(BaseModel):
             ),
         )
 
-    def to_runtime(self, secret: str | None) -> Settings:
+    def to_runtime(self, secret: str | None, access_token: str | None = None) -> Settings:
         planning_center = self.planning_center
         return Settings(
             bind_host="0.0.0.0" if self.lan_access else "127.0.0.1",
@@ -156,6 +165,8 @@ class PersistentSettings(BaseModel):
             planning_center=PlanningCenterSettings(
                 app_id=(SecretStr(planning_center.app_id) if planning_center.app_id else None),
                 secret=SecretStr(secret) if secret else None,
+                connection_method=planning_center.connection_method,
+                access_token=SecretStr(access_token) if access_token else None,
                 service_type_id=planning_center.service_type_id,
                 plan_title_preference=planning_center.plan_title_preference,
                 preferred_service_time=planning_center.preferred_service_time,
@@ -238,25 +249,34 @@ class MemorySettingsStore:
 class KeyringCredentialStore:
     """Store the Planning Center PAT secret in the operating-system credential backend."""
 
+    def __init__(self, account: str = KEYRING_ACCOUNT) -> None:
+        self._account = account
+
     def get_secret(self) -> str | None:
         try:
-            return keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+            return keyring.get_password(KEYRING_SERVICE, self._account)
         except KeyringError:
             raise CredentialStoreError("The secure credential store is unavailable.") from None
 
     def set_secret(self, secret: str) -> None:
         try:
-            keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, secret)
+            keyring.set_password(KEYRING_SERVICE, self._account, secret)
         except KeyringError:
             raise CredentialStoreError("The secure credential could not be saved.") from None
 
     def remove_secret(self) -> None:
         try:
-            keyring.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+            keyring.delete_password(KEYRING_SERVICE, self._account)
         except PasswordDeleteError:
             return
         except KeyringError:
             raise CredentialStoreError("The secure credential could not be removed.") from None
+
+
+def default_oauth_credential_store() -> CredentialStore:
+    """The keyring account holding the Planning Center OAuth token blob."""
+
+    return KeyringCredentialStore(KEYRING_ACCOUNT_OAUTH)
 
 
 class MemoryCredentialStore:
@@ -468,15 +488,36 @@ class SettingsService:
         credentials: CredentialStore,
         *,
         environ: Mapping[str, str] | None = None,
+        access_token_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self._store = store
         self._credentials = credentials
         self._environ = dict(os.environ if environ is None else environ)
+        # Supplies the current OAuth access token when
+        # `planning_center.connection_method == "oauth"`. Kept as a callable
+        # so the token blob stays owned by the OAuth service (and its
+        # keyring account) instead of being copied into this service.
+        self._access_token_provider = access_token_provider
         self._persistent = PersistentSettings()
         self._runtime: Settings | None = None
         self._secret: str | None = None
         self.warning: str | None = None
         self.credential_saved = False
+
+    def set_access_token_provider(self, provider: Callable[[], str | None] | None) -> None:
+        self._access_token_provider = provider
+        self._runtime = self._resolve(self._persistent, self._secret)
+
+    def _access_token(self, settings: PersistentSettings | None = None) -> str | None:
+        current = settings or self._persistent
+        if current.planning_center.connection_method != "oauth":
+            return None
+        if self._access_token_provider is None:
+            return None
+        try:
+            return self._access_token_provider()
+        except CredentialStoreError:
+            return None
 
     @classmethod
     def default(cls) -> SettingsService:
@@ -527,7 +568,7 @@ class SettingsService:
         secret: str | None,
         session_overrides: Mapping[str, object] | None = None,
     ) -> Settings:
-        base = settings.to_runtime(secret).model_dump(mode="python")
+        base = settings.to_runtime(secret, self._access_token(settings)).model_dump(mode="python")
         merged = _deep_merge(base, _environment_overrides(self._environ))
         if session_overrides:
             merged = _deep_merge(merged, session_overrides)
@@ -608,6 +649,21 @@ class SettingsService:
             raise
         self._persistent = updated
         self._runtime = self._resolve(updated, self._secret)
+
+    def update_connection_method(self, method: Literal["oauth", "manual"]) -> None:
+        """Switch between the manual PAT and OAuth paths.
+
+        Additive and non-destructive: any existing PAT secret is left in
+        place, so switching back to "manual" restores the previous
+        connection without re-entering credentials.
+        """
+
+        planning_center = self._persistent.planning_center.model_copy(
+            update={"connection_method": method}
+        )
+        self.save(
+            self._persistent.model_copy(update={"planning_center": planning_center}, deep=True)
+        )
 
     def persist_midi_input(self, input_name: str | None) -> None:
         midi = self._persistent.midi.model_copy(update={"input_name": input_name})

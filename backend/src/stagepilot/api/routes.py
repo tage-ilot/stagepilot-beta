@@ -45,6 +45,9 @@ from stagepilot.models.api import (
     MidiMonitorMessageResponse,
     MidiMonitorResponse,
     PendingPlanSelectionResponse,
+    PlanningCenterOAuthCallbackRequest,
+    PlanningCenterOAuthStartResponse,
+    PlanningCenterOAuthStatusResponse,
     PlanningCenterServiceTypeResponse,
     PlanningCenterSettingsUpdateRequest,
     PlanningCenterStatusResponse,
@@ -65,6 +68,10 @@ from stagepilot.models.state import (
     ConnectionStatus,
     PluginStatus,
     ServiceLoadStatus,
+)
+from stagepilot.planning_center_oauth import (
+    PlanningCenterOAuthError,
+    PlanningCenterOAuthService,
 )
 from stagepilot.plugins.planning_center.errors import (
     PlanningCenterAuthenticationError,
@@ -320,6 +327,10 @@ async def planning_center_status(request: Request) -> PlanningCenterStatusRespon
     state = await runtime.state_store.snapshot()
     settings = runtime.settings_service.effective_snapshot().planning_center
     runtime_settings = runtime.settings_service.effective_runtime_settings().planning_center
+    oauth = runtime.planning_center_oauth
+    oauth_status = (
+        oauth.status(connection_method=settings.connection_method) if oauth is not None else None
+    )
     return PlanningCenterStatusResponse(
         connection_status=state.planning_center_status,
         configured=(
@@ -328,7 +339,96 @@ async def planning_center_status(request: Request) -> PlanningCenterStatusRespon
         app_id=settings.app_id,
         service_type_id=settings.service_type_id,
         planning_center_secret_saved=runtime.settings_service.credential_saved,
+        connection_method=settings.connection_method,
+        oauth_connected=oauth_status.connected if oauth_status else False,
+        oauth_needs_reconnect=oauth_status.needs_reconnect if oauth_status else False,
         detail=state.service_load.message,
+    )
+
+
+def _oauth(request: Request) -> PlanningCenterOAuthService:
+    service = _runtime(request).planning_center_oauth
+    if service is None or not service.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="This build of StagePilot cannot sign in to Planning Center.",
+        )
+    return service
+
+
+def _raise_oauth_http_error(exc: PlanningCenterOAuthError) -> NoReturn:
+    # 401 means "this connection is genuinely dead, sign in again"; 503
+    # means "transient, try again" -- deliberately distinct so the UI never
+    # shows the alarming reconnect state for a passing network blip (the
+    # same discipline as the Remote Access credential fixes).
+    raise HTTPException(status_code=401 if exc.permanent else 503, detail=str(exc))
+
+
+@router.post("/planning-center/oauth/start", response_model=PlanningCenterOAuthStartResponse)
+async def start_planning_center_oauth(request: Request) -> PlanningCenterOAuthStartResponse:
+    service = _oauth(request)
+    try:
+        authorize_url, state = await service.start()
+    except PlanningCenterOAuthError as exc:
+        _raise_oauth_http_error(exc)
+    return PlanningCenterOAuthStartResponse(authorize_url=authorize_url, state=state)
+
+
+@router.post("/planning-center/oauth/callback", response_model=PlanningCenterOAuthStatusResponse)
+async def complete_planning_center_oauth(
+    payload: PlanningCenterOAuthCallbackRequest,
+    request: Request,
+) -> PlanningCenterOAuthStatusResponse:
+    runtime = _runtime(request)
+    service = _oauth(request)
+    try:
+        await service.complete(
+            state=payload.state,
+            code=payload.code.get_secret_value(),
+            redirect_uri=payload.redirect_uri,
+        )
+    except PlanningCenterOAuthError as exc:
+        _raise_oauth_http_error(exc)
+    except CredentialStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        await asyncio.to_thread(runtime.settings_service.update_connection_method, "oauth")
+    except (CredentialStoreError, SettingsFileError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return PlanningCenterOAuthStatusResponse.model_validate(
+        service.status(connection_method="oauth").model_dump()
+    )
+
+
+@router.get("/planning-center/oauth/status", response_model=PlanningCenterOAuthStatusResponse)
+async def planning_center_oauth_status(request: Request) -> PlanningCenterOAuthStatusResponse:
+    runtime = _runtime(request)
+    method = runtime.settings_service.effective_snapshot().planning_center.connection_method
+    service = runtime.planning_center_oauth
+    if service is None:
+        return PlanningCenterOAuthStatusResponse(
+            connection_method=method, connected=False, needs_reconnect=False
+        )
+    return PlanningCenterOAuthStatusResponse.model_validate(
+        service.status(connection_method=method).model_dump()
+    )
+
+
+@router.post("/planning-center/oauth/disconnect", response_model=PlanningCenterOAuthStatusResponse)
+async def disconnect_planning_center_oauth(
+    request: Request,
+) -> PlanningCenterOAuthStatusResponse:
+    runtime = _runtime(request)
+    service = _oauth(request)
+    try:
+        await asyncio.to_thread(service.disconnect)
+        # Fall back to the manual path; any existing PAT secret is left
+        # untouched, so a user who previously used it is simply restored.
+        await asyncio.to_thread(runtime.settings_service.update_connection_method, "manual")
+    except (CredentialStoreError, SettingsFileError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return PlanningCenterOAuthStatusResponse.model_validate(
+        service.status(connection_method="manual").model_dump()
     )
 
 
@@ -341,6 +441,11 @@ async def update_planning_center_settings(
     previous_planning_center = runtime.settings_service.snapshot().planning_center
     public_settings = PersistentPlanningCenterSettings(
         app_id=settings.app_id,
+        # The manual-settings form never changes which auth path is active:
+        # only the dedicated OAuth connect/disconnect routes do, so an
+        # OAuth-connected installation editing its service type here is not
+        # silently knocked back to the PAT path.
+        connection_method=previous_planning_center.connection_method,
         service_type_id=settings.service_type_id,
         plan_title_preference=settings.plan_title_preference,
         preferred_service_time=settings.preferred_service_time,
