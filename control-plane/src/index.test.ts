@@ -116,6 +116,8 @@ const env = {
   REMOTE_HOST_SUFFIX: 'remote.example.com',
   ADMIN_API_TOKEN: adminToken,
   INSTALLATION_SIGNING_KEY: 'installation-signing-key-at-least-32-bytes',
+  PLANNING_CENTER_CLIENT_ID: 'pco-client-id',
+  PLANNING_CENTER_CLIENT_SECRET: 'pco-client-secret-never-returned',
   GITHUB_RELEASE_TOKEN: 'github-release-token-server-side-only',
   REMOTE_PORT: '18766',
   ENROLLMENT_ENABLED: 'true',
@@ -174,7 +176,7 @@ describe('private-beta control plane', () => {
   });
 
   it('fails closed when any required Worker runtime secret is missing', async () => {
-    for (const name of ['CLOUDFLARE_API_TOKEN', 'ADMIN_API_TOKEN', 'INSTALLATION_SIGNING_KEY'] as const) {
+    for (const name of ['CLOUDFLARE_API_TOKEN', 'ADMIN_API_TOKEN', 'INSTALLATION_SIGNING_KEY', 'PLANNING_CENTER_CLIENT_ID', 'PLANNING_CENTER_CLIENT_SECRET'] as const) {
       registry = new Registry(
         { storage } as unknown as DurableObjectState,
         { ...env, [name]: undefined } as never,
@@ -1071,5 +1073,185 @@ describe('private-beta control plane', () => {
       installationPath(fresh, 'status'), 'GET', String(fresh.installationCredential),
     ));
     expect(newStatus.status).toBe(200);
+  });
+});
+
+describe('planning center OAuth routes', () => {
+  let storage: MemoryStorage;
+  let provider: FakeCloudflare;
+  let registry: Registry;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    provider = new FakeCloudflare();
+    vi.stubGlobal('fetch', provider.fetch);
+    registry = new Registry({ storage } as unknown as DurableObjectState, env as never);
+  });
+
+  async function mintFlow(): Promise<{ flow_id: string; ticket: string }> {
+    const response = await registry.fetch(request('/v1/planning-center/oauth/flow', 'POST'));
+    expect(response.status).toBe(201);
+    return (await json(response)) as { flow_id: string; ticket: string };
+  }
+
+  it('mints a flow_id/ticket pair and rate limits abusive callers', async () => {
+    const first = await mintFlow();
+    expect(first.flow_id).toMatch(/^[a-f0-9]{32}$/);
+    expect(first.ticket.length).toBeGreaterThan(0);
+
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const response = await registry.fetch(request('/v1/planning-center/oauth/flow', 'POST'));
+      expect(response.status).toBe(201);
+    }
+    const limited = await registry.fetch(request('/v1/planning-center/oauth/flow', 'POST'));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).not.toBeNull();
+  });
+
+  it('exchanges a valid flow ticket for tokens against the mocked PCO endpoint', async () => {
+    const flow = await mintFlow();
+    let capturedBody: string | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+      expect(url.toString()).toBe('https://api.planningcenteronline.com/oauth/token');
+      capturedBody = String(init?.body);
+      return new Response(JSON.stringify({
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+        token_type: 'bearer',
+        expires_in: 7200,
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    const response = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: flow.ticket,
+      code: 'auth-code-from-pco',
+      code_verifier: 'pkce-verifier',
+      redirect_uri: 'http://127.0.0.1:52847/callback',
+    }));
+    expect(response.status).toBe(200);
+    const payload = await json(response);
+    expect(payload).toEqual({
+      access_token: 'new-access-token',
+      refresh_token: 'new-refresh-token',
+      token_type: 'bearer',
+      expires_in: 7200,
+    });
+    expect(capturedBody).toContain('grant_type=authorization_code');
+    expect(capturedBody).toContain('client_secret=pco-client-secret-never-returned');
+  });
+
+  it('rejects a token exchange with a missing or invalid ticket', async () => {
+    const flow = await mintFlow();
+
+    const missing = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+      code: 'auth-code-from-pco',
+      code_verifier: 'pkce-verifier',
+      redirect_uri: 'http://127.0.0.1:52847/callback',
+    }));
+    expect(missing.status).toBe(401);
+
+    const wrongTicket = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: 'not-the-real-ticket',
+      code: 'auth-code-from-pco',
+      code_verifier: 'pkce-verifier',
+      redirect_uri: 'http://127.0.0.1:52847/callback',
+    }));
+    expect(wrongTicket.status).toBe(401);
+
+    const unknownFlow = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+      flow_id: 'f'.repeat(32),
+      ticket: flow.ticket,
+      code: 'auth-code-from-pco',
+      code_verifier: 'pkce-verifier',
+      redirect_uri: 'http://127.0.0.1:52847/callback',
+    }));
+    expect(unknownFlow.status).toBe(401);
+  });
+
+  it('rate limits abuse of the token exchange route', async () => {
+    const flow = await mintFlow();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ access_token: 'x' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })));
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+        flow_id: flow.flow_id,
+        ticket: flow.ticket,
+        code: 'auth-code-from-pco',
+        code_verifier: 'pkce-verifier',
+        redirect_uri: 'http://127.0.0.1:52847/callback',
+      }));
+      expect(response.status).toBe(200);
+    }
+    const limited = await registry.fetch(request('/v1/planning-center/oauth/token', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: flow.ticket,
+      code: 'auth-code-from-pco',
+      code_verifier: 'pkce-verifier',
+      redirect_uri: 'http://127.0.0.1:52847/callback',
+    }));
+    expect(limited.status).toBe(429);
+  });
+
+  it('refresh route exchanges a refresh_token grant and requires the same ticket', async () => {
+    const flow = await mintFlow();
+
+    const unauthorized = await registry.fetch(request('/v1/planning-center/oauth/refresh', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: 'bogus-ticket',
+      refresh_token: 'stale-refresh-token',
+    }));
+    expect(unauthorized.status).toBe(401);
+
+    let capturedBody: string | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+      expect(url.toString()).toBe('https://api.planningcenteronline.com/oauth/token');
+      capturedBody = String(init?.body);
+      return new Response(JSON.stringify({
+        access_token: 'refreshed-access-token',
+        refresh_token: 'refreshed-refresh-token',
+        token_type: 'bearer',
+        expires_in: 7200,
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    const response = await registry.fetch(request('/v1/planning-center/oauth/refresh', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: flow.ticket,
+      refresh_token: 'stale-refresh-token',
+    }));
+    expect(response.status).toBe(200);
+    const payload = await json(response);
+    expect(payload).toEqual({
+      access_token: 'refreshed-access-token',
+      refresh_token: 'refreshed-refresh-token',
+      token_type: 'bearer',
+      expires_in: 7200,
+    });
+    expect(capturedBody).toContain('grant_type=refresh_token');
+    expect(capturedBody).toContain('refresh_token=stale-refresh-token');
+  });
+
+  it('relays a PCO invalid_grant error without leaking the client secret', async () => {
+    const flow = await mintFlow();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: 'invalid_grant',
+    }), { status: 400, headers: { 'content-type': 'application/json' } })));
+
+    const response = await registry.fetch(request('/v1/planning-center/oauth/refresh', 'POST', undefined, {
+      flow_id: flow.flow_id,
+      ticket: flow.ticket,
+      refresh_token: 'revoked-refresh-token',
+    }));
+    expect(response.status).toBe(400);
+    const payload = await json(response);
+    expect(payload).toEqual({ error: 'invalid_grant' });
+    expect(JSON.stringify(payload)).not.toContain('pco-client-secret-never-returned');
   });
 });

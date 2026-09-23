@@ -22,6 +22,8 @@ function deploymentEnvironment(overrides = {}) {
     CLOUDFLARE_API_TOKEN: "provider-token-with-narrow-scope",
     ADMIN_API_TOKEN: "admin-token-with-at-least-thirty-two-characters",
     INSTALLATION_SIGNING_KEY: "independent-signing-key-at-least-thirty-two-characters",
+    PLANNING_CENTER_CLIENT_ID: "pco-client-id",
+    PLANNING_CENTER_CLIENT_SECRET: "pco-client-secret",
     ...overrides,
   };
 }
