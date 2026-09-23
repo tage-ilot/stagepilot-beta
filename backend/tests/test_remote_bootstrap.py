@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -480,16 +481,32 @@ def test_revoked_or_expired_installation_is_retired_during_reconcile(tmp_path: P
 
 
 def test_missing_native_credential_fails_closed_without_reenrollment(tmp_path: Path) -> None:
-    manager, credentials, _, payload = manager_fixture(tmp_path)
+    manager, credentials, fake, payload = manager_fixture(tmp_path)
     credentials.delete(str(payload["installationId"]))
 
-    status = manager.status()
+    # The in-memory credential cache (added to avoid redundant Keychain
+    # reads/prompts) only invalidates on OUR OWN mutation paths (set,
+    # delete, reenroll, reactivate) -- an external actor wiping the
+    # Keychain entry directly, out from under a running process, is only
+    # detected on the NEXT process start, exactly like the "once per
+    # process/update" caching contract intends. Simulate that restart here
+    # by constructing a fresh manager sharing the same (now-empty)
+    # credential store but a fresh, uncached bootstrap store.
+    restarted = DesktopRemoteManager(
+        manager.root,
+        manager.cloudflared_binary,
+        bootstrap_store=verified_store(manager.bootstrap.path, credentials),
+        transport=httpx.MockTransport(fake),
+        control_plane_origin="https://control.example.com",
+    )
+
+    status = restarted.status()
 
     assert status["provisioned"] is True
     assert status["credential_available"] is False
     with pytest.raises(ProviderError, match="credential is unavailable"):
-        manager.enable()
-    assert manager.bootstrap.state().active is not None
+        restarted.enable()
+    assert restarted.bootstrap.state().active is not None
 
 
 def test_regenerate_revokes_old_identity_and_provisions_a_new_hostname(tmp_path: Path) -> None:
@@ -717,6 +734,142 @@ def test_reactivate_surfaces_quota_exceeded_as_specific_provider_error(
             control_plane_origin="https://control.example.com",
             transport=httpx.MockTransport(limited),
         )
+
+
+def test_credential_is_cached_in_memory_after_first_successful_read(tmp_path: Path) -> None:
+    """status()/credential() reads must hit the native broker/Keychain at
+    most once per installation id per process; subsequent calls reuse the
+    in-memory cache."""
+    manager, credentials, _fake, payload = manager_fixture(tmp_path)
+    manager.enable()
+    active = manager.bootstrap.state().active
+    assert active is not None
+
+    get_calls = 0
+    original_get = credentials.get
+
+    def counting_get(installation_id: str) -> str | None:
+        nonlocal get_calls
+        get_calls += 1
+        return original_get(installation_id)
+
+    credentials.get = counting_get  # type: ignore[method-assign]
+    # Simulate this being the first read of a fresh process: clear the
+    # cache populated during enable() above so we can observe the actual
+    # broker/Keychain call count from a clean slate.
+    manager.bootstrap._credential_cache.clear()
+
+    for _ in range(5):
+        manager.status()
+
+    assert get_calls == 1
+    assert manager.bootstrap.credential(active) == payload["installationCredential"]
+    assert get_calls == 1
+
+
+def test_reenroll_invalidates_stale_cached_credential(tmp_path: Path) -> None:
+    """After reenroll()/regenerate mints a new credential, the next read
+    must reflect the NEW credential, never a stale cached value from
+    before regeneration, and the old installation id's cache entry must be
+    gone too."""
+    manager, credentials, _fake, _payload = manager_fixture(tmp_path)
+    manager.enable()
+    original_active = manager.bootstrap.state().active
+    assert original_active is not None
+    original_credential = manager.bootstrap.credential(original_active)
+    original_installation_id = original_active.installation_id
+
+    manager.regenerate()
+
+    new_active = manager.bootstrap.state().active
+    assert new_active is not None
+    assert new_active.installation_id != original_installation_id
+    new_credential = manager.bootstrap.credential(new_active)
+    assert new_credential != original_credential
+    assert credentials.get(new_active.installation_id) == new_credential
+    # The old id's credential was actually revoked/removed, and there is no
+    # stale cache entry left pointing at it either.
+    assert original_installation_id not in manager.bootstrap._credential_cache
+    assert new_active.installation_id in manager.bootstrap._credential_cache
+
+
+def test_reactivate_invalidates_stale_cached_credential(tmp_path: Path) -> None:
+    """After reactivate() (disable -> enable cycle) bumps the credential
+    generation, the cache must serve the fresh credential, not the one
+    cached before the disable."""
+    manager, _credentials, _fake, _payload = manager_fixture(tmp_path)
+    manager.enable()
+    active = manager.bootstrap.state().active
+    assert active is not None
+    original_credential = manager.bootstrap.credential(active)
+
+    manager.disable()
+    reenabled = manager.enable()
+    assert reenabled["provisioned"] is True
+
+    new_active = manager.bootstrap.state().active
+    assert new_active is not None
+    assert new_active.installation_id == active.installation_id
+    new_credential = manager.bootstrap.credential(new_active)
+    assert new_credential != original_credential
+
+
+def test_slow_credential_broker_response_within_new_timeout_does_not_error() -> None:
+    """Regression for the 3s-timeout bug: a credential broker response that
+    takes longer than a human needs to notice/read/respond to the system
+    password prompt (but still comfortably within the new timeout budget)
+    must not surface a spurious 'credential store unavailable' error."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from stagepilot.remote_bootstrap import NativeRemoteCredentialStore
+
+    delay_seconds = 8
+    credential_value = "spi_" + "a" * 8 + "." + "s" * 40
+
+    class SlowHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            time.sleep(delay_seconds)
+            body = credential_value.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:  # silence test server logs
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), SlowHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        store = NativeRemoteCredentialStore(
+            origin=f"http://127.0.0.1:{server.server_port}", authorization="test-token"
+        )
+        started = time.monotonic()
+        value = store.get("a" * 8)
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        thread.join()
+
+    # The old 3s timeout would have raised ProviderError long before the
+    # slow handler's 8s delay elapsed; the new timeout must wait it out.
+    assert elapsed >= delay_seconds
+    assert value == credential_value
+
+
+def test_native_credential_store_timeout_is_generous_not_a_few_seconds() -> None:
+    """Directly assert the httpx timeout used for the native credential
+    broker comfortably accommodates real human password-entry time,
+    instead of the old fixed 3-second value that fired mid system-prompt."""
+    import inspect
+
+    from stagepilot.remote_bootstrap import NativeRemoteCredentialStore
+
+    source = inspect.getsource(NativeRemoteCredentialStore._request)
+    assert "timeout=3," not in source
+    assert "timeout=3\n" not in source
 
 
 def test_permanently_revoked_credential_surfaces_recovery_action_and_reset_unblocks(
