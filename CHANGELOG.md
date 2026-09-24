@@ -19,6 +19,18 @@
   a fixed 50ms pre-connect sleep with a retry-connect loop and widen the
   callback wait timeout, removing a test-only timing race (no production
   behavior change). (PR #32)
+- Eliminate a further structural race in the callback wait() polling loop
+  that could still time out on macOS CI runners even with a connection
+  already queued (PR #33).
+- Fix a real production bug: `CallbackServer::wait()` detached its accept
+  thread and leaked the bound TCP listener whenever a Planning Center
+  sign-in attempt timed out or was abandoned. Since only 4 loopback ports
+  are registered with Planning Center, repeated timed-out sign-in attempts
+  by a real user could exhaust all four and break sign-in until the app
+  was restarted. Now the listener is properly shut down and joined before
+  `wait()` returns. This was also the root cause of the macOS CI flake
+  (leaked listeners from prior runs contending for the same 4-port pool).
+  (PR #34)
 
 ## [1.1.104-beta.11] - 2026-09-23
 
