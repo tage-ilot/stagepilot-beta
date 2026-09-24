@@ -48,6 +48,26 @@ cp "$UNINSTALLER_SRC" "$CONTENTS_DIR/Uninstall StagePilot.command"
 cp "$README_SRC" "$CONTENTS_DIR/README - Uninstall.txt"
 chmod +x "$CONTENTS_DIR/Uninstall StagePilot.command"
 
+# Ship the DMG payload free of extended attributes.
+#
+# macOS adds `com.apple.quarantine` to the *downloaded DMG* itself, and
+# propagates it to whatever the user drags out — that part is inherent to an
+# ad-hoc-signed, non-notarized app and cannot be prevented here. What we can
+# prevent is baking any *additional* xattrs (a stale quarantine flag from the
+# build machine, resource forks from `cp -R`) into the bundle we ship, which
+# would make Gatekeeper App Translocation stick even after the user clears the
+# flag on /Applications/StagePilot.app. `xattr -cr` on the staging folder is
+# purely subtractive: it never touches code signatures, only xattrs.
+if command -v xattr >/dev/null 2>&1; then
+  xattr -cr "$CONTENTS_DIR" || echo "warning: could not clear extended attributes on the DMG payload" >&2
+  if REMAINING="$(xattr -lr "$CONTENTS_DIR" 2>/dev/null | grep -c 'com.apple.quarantine' || true)"; then
+    [[ "$REMAINING" == "0" ]] || {
+      echo "::error::DMG payload still carries com.apple.quarantine on $REMAINING item(s)." >&2
+      exit 1
+    }
+  fi
+fi
+
 rm -f "$DMG_PATH"
 hdiutil create -volname "StagePilot" -srcfolder "$CONTENTS_DIR" -ov -format UDZO "$DMG_PATH" -quiet
 

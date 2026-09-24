@@ -28,6 +28,23 @@ export type UpdateCandidate = {
   install: (onProgress: (progress: UpdateProgress) => void) => Promise<void>;
 };
 
+/**
+ * Where StagePilot is actually running from, as reported by the Rust
+ * `install_environment` command. Mirrors `macos_install::InstallEnvironment`.
+ *
+ * `updatesBlocked` is true when macOS Gatekeeper App Translocation is running
+ * the bundle from a randomized read-only image: any in-place update install
+ * against that path is guaranteed to fail *after* the download completes and
+ * the managed backend has already been stopped, which is exactly the confusing
+ * "UPDATE INTERRUPTED" failure this guard exists to prevent.
+ */
+export type InstallEnvironment = {
+  executablePath: string | null;
+  translocated: boolean;
+  updatesBlocked: boolean;
+  guidance: string | null;
+};
+
 export type UpdateRelaunchResult = {
   updatedVersion: string;
   route: string | null;
@@ -47,6 +64,12 @@ export interface UpdaterAdapter {
    * Resolves `true` when the backend was restarted.
    */
   restartBackend?(): Promise<boolean>;
+  /**
+   * Reports the real install location. Resolves `null` when the host cannot
+   * answer (older shell, non-Tauri runtime), which is treated as "not blocked"
+   * so the happy path is never gated on this probe.
+   */
+  installEnvironment?(): Promise<InstallEnvironment | null>;
 }
 
 type RelaunchMarker = {
@@ -167,6 +190,15 @@ export const tauriUpdaterAdapter: UpdaterAdapter = {
   },
   relaunch,
   restartBackend: restartDesktopBackend,
+  installEnvironment: async () => {
+    try {
+      return await invoke<InstallEnvironment>("install_environment");
+    } catch (cause) {
+      // A shell that predates this command must not break update checks.
+      console.warn("StagePilot could not determine its install location.", cause);
+      return null;
+    }
+  },
   restoreAfterRelaunch: async () => {
     const marker = safeReadMarker();
     if (!marker) return null;

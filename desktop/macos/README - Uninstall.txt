@@ -12,6 +12,17 @@ including data that a simple "drag app to Trash" would leave behind:
   - The Planning Center access token stored in the macOS Keychain
   - Any StagePilot DMG volumes still mounted under /Volumes from a
     previous install or update
+  - Stale StagePilot.app copies left in the Trash, and any temporary
+    Gatekeeper "App Translocation" copies macOS created
+  - macOS Launch Services' memory of all of the above (rebuilt), so a
+    later launch from the Dock, Spotlight, or Finder cannot resolve to an
+    old StagePilot instead of the one you install next
+
+Why that last part matters:
+If a StagePilot DMG is still mounted, or an old copy is still in the
+Trash, macOS may keep launching that older copy — which looks exactly
+like an old version "coming back" after you reinstalled. This uninstaller
+clears all of those references.
 
 It asks for confirmation before deleting anything and does not require
 an administrator password.

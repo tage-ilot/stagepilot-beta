@@ -82,6 +82,23 @@ echo "log line" > "$APP_LOG_DIR/stagepilot-backend.log"
 VOLUME_DIR="$WORKDIR/Volumes/StagePilot-1.1.104-beta.8"
 mkdir -p "$VOLUME_DIR"
 
+# A stale StagePilot.app left in the Trash, and a stale Gatekeeper App
+# Translocation image — both were found registered with Launch Services on the
+# real machine that reported an old beta "coming back" after an uninstall.
+TRASHED_APP="$HOME/.Trash/StagePilot.app"
+mkdir -p "$TRASHED_APP/Contents/MacOS"
+FAKE_TMPDIR="$WORKDIR/tmp"
+TRANSLOCATION_DIR="$FAKE_TMPDIR/AppTranslocation/F600EA8D-857F-4C72-BB2D-F7FC242EE642/d"
+mkdir -p "$TRANSLOCATION_DIR/StagePilot.app/Contents/MacOS"
+
+LSREGISTER_STUB="$FAKE_BIN/lsregister"
+cat > "$LSREGISTER_STUB" <<'EOF'
+#!/usr/bin/env bash
+echo "lsregister $*" >> "$CALL_LOG"
+exit 0
+EOF
+chmod +x "$LSREGISTER_STUB"
+
 # The real script hardcodes /Applications and /Volumes; rewrite a working
 # copy so the test can point them at a throwaway sandbox without touching
 # the real filesystem or requiring root.
@@ -93,7 +110,8 @@ sed \
 chmod +x "$SANDBOXED"
 
 # --- Run the uninstaller non-interactively -----------------------------
-PATH="$FAKE_BIN:$PATH" STAGEPILOT_UNINSTALL_ASSUME_YES=1 bash "$SANDBOXED" > "$WORKDIR/output.log" 2>&1
+PATH="$FAKE_BIN:$PATH" TMPDIR="$FAKE_TMPDIR" STAGEPILOT_LSREGISTER="$LSREGISTER_STUB" \
+  STAGEPILOT_UNINSTALL_ASSUME_YES=1 bash "$SANDBOXED" > "$WORKDIR/output.log" 2>&1
 STATUS=$?
 
 echo "--- uninstaller output ---"
@@ -113,5 +131,11 @@ grep -q "security delete-generic-password -s StagePilot -a planning-center-secre
   || fail "expected keychain delete call not observed"
 grep -q "diskutil eject $VOLUME_DIR" "$CALL_LOG" \
   || fail "expected diskutil eject call not observed"
+[[ ! -e "$TRASHED_APP" ]] || fail "stale Trash copy of StagePilot.app was not removed"
+[[ ! -e "$FAKE_TMPDIR/AppTranslocation" ]] || fail "stale App Translocation image was not removed"
+grep -q "lsregister -kill -r -domain local -domain system -domain user" "$CALL_LOG" \
+  || fail "expected Launch Services rebuild not observed"
+grep -q "disk image(s) are still mounted" "$WORKDIR/output.log" \
+  || fail "expected stale-DMG warning not shown to the user"
 
-echo "PASS: uninstaller removed app, data, logs, keychain entry, and ejected the mounted volume."
+echo "PASS: uninstaller removed app, data, logs, keychain entry, ejected the mounted volume, cleaned stale translocation/Trash copies, and rebuilt Launch Services."
