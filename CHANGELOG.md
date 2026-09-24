@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.104-beta.12] - 2026-09-24
+
+### Added
+
+- Planning Center OAuth 2.0 sign-in: "Sign in with Planning Center" is now
+  the default connection method in Planning Center settings, using an
+  in-app browser handshake (desktop PKCE loopback listener + control-plane
+  token exchange/refresh). The existing manual App ID/Secret method is
+  kept as an Advanced/fallback option — nothing is forced to migrate.
+  Includes a connected/disconnected state indicator and a "Reconnect to
+  Planning Center" prompt if access is denied, cancelled, or later revoked
+  from Planning Center's side. (PRs #29, #30, #31)
+
+### Fixed
+
+- Eliminate a flaky race in the pco_oauth end-to-end callback test: replace
+  a fixed 50ms pre-connect sleep with a retry-connect loop and widen the
+  callback wait timeout, removing a test-only timing race (no production
+  behavior change). (PR #32)
+
 ## [1.1.104-beta.11] - 2026-09-23
 
 ### Fixed
