@@ -459,7 +459,20 @@ mod tests {
         let _ = client.read_to_string(&mut response);
         assert_eq!(worker.join().expect("join"), Ok("the-code".to_string()));
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        // Single-use: the listener is dropped, so the port is bindable again.
-        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+        // Single-use: the listener is dropped, so the port becomes bindable
+        // again. On macOS in particular the kernel can take a brief moment
+        // to actually release a just-closed listening socket even after the
+        // owning thread has fully exited, so retry the rebind with a short
+        // backoff instead of asserting on the very first attempt.
+        let rebind_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            if Instant::now() >= rebind_deadline {
+                panic!("port {port} was not released after the listener was dropped");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
