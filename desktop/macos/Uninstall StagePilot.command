@@ -8,6 +8,9 @@
 #   4. The Planning Center PAT stored in the macOS Keychain
 #      (service "StagePilot", account "planning-center-secret")
 #   5. Any mounted StagePilot DMG volumes left over from installs/updates
+#   6. Stale StagePilot.app copies in ~/.Trash and Gatekeeper App Translocation
+#      images, plus a Launch Services database rebuild so macOS stops resolving
+#      launches (Dock/Spotlight/"Open Recent") to any of those old paths
 #
 # No sudo / elevated privileges are required: everything above is owned by
 # the current user. If double-clicking this file does nothing (or macOS
@@ -47,9 +50,27 @@ if ((${#MOUNTED_VOLUMES[@]} > 0)); then
   for volume in "${MOUNTED_VOLUMES[@]}"; do
     log "  - Mounted volume:  $volume (will be ejected)"
   done
+  log ""
+  log "  NOTE: ${#MOUNTED_VOLUMES[@]} StagePilot disk image(s) are still mounted."
+  log "  macOS Launch Services can resolve a Dock/Spotlight/\"Open Recent\" launch"
+  log "  to the copy inside one of these images instead of the freshly installed"
+  log "  app, which is how an older StagePilot appears to \"come back\". They are"
+  log "  ejected below and the Launch Services database is rebuilt."
 else
   log "  - Mounted volumes: (none found)"
 fi
+TRASHED_COPIES=()
+while IFS= read -r -d '' trashed; do
+  TRASHED_COPIES+=("$trashed")
+done < <(find "$HOME/.Trash" -maxdepth 1 -iname 'StagePilot*.app' -print0 2>/dev/null || true)
+if ((${#TRASHED_COPIES[@]} > 0)); then
+  for trashed in "${TRASHED_COPIES[@]}"; do
+    log "  - Trashed copy:    $trashed (will be removed)"
+  done
+else
+  log "  - Trashed copies:  (none found)"
+fi
+log "  - Launch Services: registrations for StagePilot will be rebuilt"
 log ""
 
 if [[ "$ASSUME_YES" != "1" ]]; then
@@ -121,6 +142,52 @@ for volume in "${MOUNTED_VOLUMES[@]}"; do
     SKIPPED+=("Mounted volume $volume (eject failed; eject manually)")
   fi
 done
+
+# 7. Remove stale StagePilot.app copies sitting in the Trash, and stale
+#    Gatekeeper App Translocation images. Both remain registered with Launch
+#    Services after an "uninstall", so a later launch can resolve to one of
+#    them and run an old version out of a read-only image.
+for trashed in "${TRASHED_COPIES[@]}"; do
+  if rm -rf "$trashed" 2>/dev/null; then
+    REMOVED+=("Stale copy $trashed")
+  else
+    SKIPPED+=("Stale copy $trashed (removal failed)")
+  fi
+done
+
+TRANSLOCATED_KILLED=0
+while IFS= read -r pid; do
+  [[ -n "$pid" ]] || continue
+  kill -TERM "$pid" 2>/dev/null && TRANSLOCATED_KILLED=$((TRANSLOCATED_KILLED + 1)) || true
+done < <(pgrep -f '/AppTranslocation/.*StagePilot' 2>/dev/null || true)
+if ((TRANSLOCATED_KILLED > 0)); then
+  REMOVED+=("$TRANSLOCATED_KILLED translocated StagePilot process(es) stopped")
+fi
+
+while IFS= read -r -d '' image; do
+  if rm -rf "$image" 2>/dev/null; then
+    REMOVED+=("Translocation image $image")
+  else
+    SKIPPED+=("Translocation image $image (macOS may still hold it; it is temporary and cleared on reboot)")
+  fi
+done < <(find "${TMPDIR:-/tmp}" -maxdepth 3 -type d -name 'AppTranslocation' -print0 2>/dev/null || true)
+
+# 8. Rebuild the Launch Services database so macOS forgets every stale
+#    StagePilot.app registration (translocated images, ejected DMG volumes,
+#    trashed copies). This is what stops an old version from "coming back"
+#    when the user launches from the Dock, Spotlight, or Finder.
+#    STAGEPILOT_LSREGISTER only exists so the automated test harness can point
+#    this at a stub; a normal run always uses the real macOS binary.
+LSREGISTER="${STAGEPILOT_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
+if [[ -x "$LSREGISTER" ]]; then
+  if "$LSREGISTER" -kill -r -domain local -domain system -domain user >/dev/null 2>&1; then
+    REMOVED+=("Launch Services registrations for StagePilot (database rebuilt)")
+  else
+    SKIPPED+=("Launch Services rebuild (lsregister failed; log out and back in if an old StagePilot still launches)")
+  fi
+else
+  SKIPPED+=("Launch Services rebuild (lsregister not found on this macOS version)")
+fi
 
 log ""
 log "Done."

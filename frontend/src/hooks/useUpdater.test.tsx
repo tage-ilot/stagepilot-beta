@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
+  InstallEnvironment,
   UpdateCandidate,
   UpdaterAdapter,
   UpdateProgress,
@@ -43,6 +44,7 @@ const makeAdapter = (candidate: UpdateCandidate | null = null): Omit<UpdaterAdap
   prepareRelaunch: ReturnType<typeof vi.fn>;
   relaunch: ReturnType<typeof vi.fn>;
   restartBackend: Mock<() => Promise<boolean>>;
+  installEnvironment: Mock<() => Promise<InstallEnvironment | null>>;
 } => ({
   isEnabled: () => true,
   check: vi.fn().mockResolvedValue(candidate),
@@ -50,8 +52,25 @@ const makeAdapter = (candidate: UpdateCandidate | null = null): Omit<UpdaterAdap
   clearRelaunchMarker: vi.fn(),
   relaunch: vi.fn().mockResolvedValue(undefined),
   restartBackend: vi.fn().mockResolvedValue(true),
+  installEnvironment: vi.fn<() => Promise<InstallEnvironment | null>>().mockResolvedValue({
+    executablePath: "/Applications/StagePilot.app/Contents/MacOS/StagePilot",
+    translocated: false,
+    updatesBlocked: false,
+    guidance: null,
+  }),
   restoreAfterRelaunch: vi.fn().mockResolvedValue(null),
 });
+
+const TRANSLOCATED: InstallEnvironment = {
+  executablePath:
+    "/private/var/folders/gh/x/T/AppTranslocation/F600EA8D/d/StagePilot.app/Contents/MacOS/StagePilot",
+  translocated: true,
+  updatesBlocked: true,
+  guidance:
+    "StagePilot is running from a temporary, quarantined copy created by macOS (App Translocation). "
+    + "Quit StagePilot, open Finder → Applications, right-click StagePilot.app and choose Open once "
+    + "(or run `xattr -cr /Applications/StagePilot.app` in Terminal), then relaunch StagePilot to enable in-app updates.",
+};
 
 describe("useUpdater", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -224,6 +243,65 @@ describe("useUpdater", () => {
 
     expect(adapter.restartBackend).not.toHaveBeenCalled();
     expect(result.current.error).toBe("Could not save window state");
+  });
+
+  it("refuses to install when macOS has translocated the app bundle", async () => {
+    const install = vi.fn().mockResolvedValue(undefined);
+    const adapter = makeAdapter(makeCandidate(install));
+    adapter.installEnvironment.mockResolvedValue(TRANSLOCATED);
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+
+    expect(result.current.installBlockedReason).toContain("xattr -cr /Applications/StagePilot.app");
+
+    act(() => result.current.openConfirmation());
+    await act(() => result.current.install());
+
+    expect(install).not.toHaveBeenCalled();
+    expect(adapter.prepareRelaunch).not.toHaveBeenCalled();
+    expect(adapter.restartBackend).not.toHaveBeenCalled();
+    expect(adapter.relaunch).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("error");
+    expect(result.current.errorDialogOpen).toBe(true);
+    expect(result.current.error).toContain("App Translocation");
+    expect(result.current.error).toContain("Quit StagePilot");
+  });
+
+  it("does not block installs when the app runs from a real Applications path", async () => {
+    const install = vi.fn().mockResolvedValue(undefined);
+    const adapter = makeAdapter(makeCandidate(install));
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+
+    expect(result.current.installBlockedReason).toBeNull();
+
+    act(() => result.current.openConfirmation());
+    await act(() => result.current.install());
+
+    expect(install).toHaveBeenCalledOnce();
+    expect(adapter.relaunch).toHaveBeenCalledOnce();
+    expect(result.current.status).toBe("restarting");
+  });
+
+  it("installs normally when the shell cannot report an install location", async () => {
+    const install = vi.fn().mockResolvedValue(undefined);
+    const adapter = makeAdapter(makeCandidate(install));
+    adapter.installEnvironment.mockRejectedValue(new Error("unknown command"));
+    const { result } = renderHook(() =>
+      useUpdater({ adapter, ready: true, startupDelayMs: 10 }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    act(() => result.current.openConfirmation());
+
+    await act(() => result.current.install());
+
+    expect(result.current.installBlockedReason).toBeNull();
+    expect(install).toHaveBeenCalledOnce();
+    expect(result.current.status).toBe("restarting");
   });
 
   it("shows a success message only when a valid update marker is restored", async () => {

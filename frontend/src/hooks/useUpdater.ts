@@ -28,6 +28,11 @@ export type UpdaterState = {
   error: string | null;
   errorDialogOpen: boolean;
   successMessage: string | null;
+  /**
+   * Non-null when in-app updates cannot work from the current install location
+   * (macOS App Translocation). Carries the actionable fix instructions.
+   */
+  installBlockedReason: string | null;
 };
 
 export type UseUpdaterOptions = {
@@ -48,6 +53,7 @@ const initialState: UpdaterState = {
   error: null,
   errorDialogOpen: false,
   successMessage: null,
+  installBlockedReason: null,
 };
 
 export function useUpdater({
@@ -62,6 +68,7 @@ export function useUpdater({
   const checking = useRef<Promise<void> | null>(null);
   const installing = useRef(false);
   const lastCheckedAt = useRef(0);
+  const installBlocked = useRef<string | null>(null);
   const betaEnabledRef = useRef(betaEnabled);
   betaEnabledRef.current = betaEnabled;
 
@@ -69,6 +76,19 @@ export function useUpdater({
     if (!ready || !adapter.isEnabled() || checking.current || installing.current) return;
     const operation = (async () => {
       setState((current) => ({ ...current, status: "checking", error: null }));
+      // Probe the real install location first. On macOS a translocated bundle
+      // can never be updated in place, so the user gets the actionable fix
+      // instead of a full download that fails at install time.
+      let blockedReason: string | null = null;
+      try {
+        const environment = (await adapter.installEnvironment?.()) ?? null;
+        blockedReason = environment?.updatesBlocked
+          ? environment.guidance ?? "StagePilot cannot install updates from its current location."
+          : null;
+      } catch (cause) {
+        console.warn("StagePilot could not determine its install location.", cause);
+      }
+      installBlocked.current = blockedReason;
       try {
         const update = await adapter.check({ betaEnabled: betaEnabledRef.current });
         candidate.current = update;
@@ -83,8 +103,14 @@ export function useUpdater({
               releaseDate: update.releaseDate,
               error: null,
               errorDialogOpen: false,
+              installBlockedReason: blockedReason,
             }
-          : { ...initialState, status: "current", successMessage: current.successMessage });
+          : {
+              ...initialState,
+              status: "current",
+              successMessage: current.successMessage,
+              installBlockedReason: blockedReason,
+            });
       } catch (cause) {
         candidate.current = null;
         lastCheckedAt.current = Date.now();
@@ -94,6 +120,7 @@ export function useUpdater({
           status: "error",
           error: cause instanceof Error ? cause.message : "Update check failed.",
           errorDialogOpen: false,
+          installBlockedReason: blockedReason,
         }));
       }
     })().finally(() => {
@@ -145,6 +172,32 @@ export function useUpdater({
   const install = useCallback(async () => {
     const update = candidate.current;
     if (!update || installing.current) return;
+    // Refuse to start an install that cannot land. Doing nothing but showing the
+    // fix is strictly better than downloading, stopping the backend, and then
+    // failing to write into a read-only translocated bundle.
+    let blockedReason = installBlocked.current;
+    try {
+      const environment = (await adapter.installEnvironment?.()) ?? null;
+      if (environment) {
+        blockedReason = environment.updatesBlocked
+          ? environment.guidance ?? "StagePilot cannot install updates from its current location."
+          : null;
+        installBlocked.current = blockedReason;
+      }
+    } catch (cause) {
+      console.warn("StagePilot could not determine its install location.", cause);
+    }
+    if (blockedReason) {
+      setState((current) => ({
+        ...current,
+        status: "error",
+        error: blockedReason,
+        errorDialogOpen: true,
+        progress: null,
+        installBlockedReason: blockedReason,
+      }));
+      return;
+    }
     installing.current = true;
     // `prepare_for_update` (run inside the candidate's install, immediately
     // before the "installing" stage) deliberately kills the managed backend so

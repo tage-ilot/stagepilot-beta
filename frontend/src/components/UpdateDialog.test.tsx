@@ -17,6 +17,7 @@ const confirmation: UpdaterState = {
   error: null,
   errorDialogOpen: false,
   successMessage: null,
+  installBlockedReason: null,
 };
 
 describe("StagePilot update UI", () => {

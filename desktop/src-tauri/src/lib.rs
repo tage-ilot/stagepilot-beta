@@ -31,6 +31,8 @@ mod native_credentials;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use native_credentials::NativeCredentialBroker;
 
+mod macos_install;
+
 mod pco_oauth;
 
 const DEFAULT_PORT: u16 = 8765;
@@ -1032,6 +1034,15 @@ async fn prepare_for_update(
     app: tauri::AppHandle,
     supervisor: tauri::State<'_, BackendSupervisor>,
 ) -> Result<(), String> {
+    // Never stop the backend for an install that cannot possibly land: under
+    // macOS App Translocation the running bundle lives on a read-only image, so
+    // the in-place replacement fails *after* the backend is already down.
+    let environment = macos_install::describe();
+    if environment.updates_blocked {
+        return Err(environment
+            .guidance
+            .unwrap_or_else(|| macos_install::TRANSLOCATION_GUIDANCE.to_string()));
+    }
     let managed = supervisor.snapshot().managed;
     supervisor.update(
         &app,
@@ -1163,6 +1174,13 @@ async fn check_for_update_default(
         let rid = resources.add(update);
         ChannelUpdateMetadata { rid, ..metadata }
     }))
+}
+
+/// Reports where StagePilot is actually running from so the frontend can block
+/// in-app updates (and explain why) when macOS has translocated the bundle.
+#[tauri::command]
+fn install_environment() -> macos_install::InstallEnvironment {
+    macos_install::describe()
 }
 
 #[tauri::command]
@@ -1438,6 +1456,7 @@ pub fn run() {
             copy_backend_log,
             prepare_for_update,
             check_for_update_on_channel,
+            install_environment,
             set_remote_autostart,
             hide_application_window,
             planning_center_sign_in
@@ -1449,6 +1468,9 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             install_application_menu(app.handle()).map_err(std::io::Error::other)?;
+            // Strip our own Gatekeeper quarantine flag (when present and
+            // writable) so macOS cannot translocate the next launch.
+            macos_install::clear_own_quarantine_if_possible();
             #[cfg(target_os = "windows")]
             if let Err(message) = windows_jump_list::install() {
                 eprintln!("StagePilot could not install its Windows taskbar actions: {message}");
