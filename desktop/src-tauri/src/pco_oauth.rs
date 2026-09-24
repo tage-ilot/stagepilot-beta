@@ -22,7 +22,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// The exact loopback redirect ports registered with Planning Center.
@@ -79,6 +79,7 @@ impl CallbackServer {
         Ok(Self { listener, port })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -342,6 +343,7 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &str) 
 mod tests {
     use super::*;
     use std::net::TcpStream as ClientStream;
+    use std::time::Instant;
 
     #[test]
     fn registered_ports_are_the_four_planning_center_redirect_uris() {
