@@ -18,6 +18,10 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -99,26 +103,42 @@ impl CallbackServer {
         let expected_state = expected_state.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         let listener = self.listener;
+        let port = self.port;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
         let accept_thread = std::thread::spawn(move || loop {
             match listener.accept() {
-                Ok((stream, _)) => match handle(stream, &expected_state) {
-                    CallbackOutcome::Code(code) => {
-                        let _ = tx.send(Ok(code));
+                Ok((stream, _)) => {
+                    if thread_shutdown.load(Ordering::Relaxed) {
+                        // Woken up by our own shutdown self-connect below
+                        // (see the timeout branch), not a real callback:
+                        // drop it and let the loop exit via `listener`
+                        // going out of scope once this closure returns.
                         return;
                     }
-                    CallbackOutcome::Denied(reason) => {
-                        let _ = tx.send(Err(sign_in_error(&reason)));
-                        return;
+                    match handle(stream, &expected_state) {
+                        CallbackOutcome::Code(code) => {
+                            let _ = tx.send(Ok(code));
+                            return;
+                        }
+                        CallbackOutcome::Denied(reason) => {
+                            let _ = tx.send(Err(sign_in_error(&reason)));
+                            return;
+                        }
+                        CallbackOutcome::StateMismatch => {
+                            let _ = tx.send(Err(
+                                "Planning Center sign-in could not be verified. Try signing in again."
+                                    .to_string(),
+                            ));
+                            return;
+                        }
+                        CallbackOutcome::Ignored => {
+                            if thread_shutdown.load(Ordering::Relaxed) {
+                                return;
+                            }
+                        }
                     }
-                    CallbackOutcome::StateMismatch => {
-                        let _ = tx.send(Err(
-                            "Planning Center sign-in could not be verified. Try signing in again."
-                                .to_string(),
-                        ));
-                        return;
-                    }
-                    CallbackOutcome::Ignored => {}
-                },
+                }
                 Err(_) => return,
             }
         });
@@ -131,13 +151,24 @@ impl CallbackServer {
                 result
             }
             Err(_) => {
-                // The accept thread is still blocked inside `accept()` (no
-                // connection ever arrived) and there is no portable way to
-                // cancel a blocking accept from the outside. Detach it
-                // instead of joining: it will keep the (now-abandoned)
-                // listener alive until either a stray connection wakes it up
-                // or the process exits, but it will never block this call.
-                drop(accept_thread);
+                // The accept thread is still blocked inside the *blocking*
+                // `accept()` (no callback ever arrived) and there is no
+                // portable way to cancel that call from the outside.
+                // Previously this branch detached the thread and left the
+                // listener alive for the rest of the process's life,
+                // permanently consuming one of only four registered
+                // callback ports per abandoned sign-in attempt — a real
+                // resource leak, not just a test artifact (repeated
+                // timed-out sign-in attempts by a real user would
+                // eventually exhaust all four ports and break sign-in
+                // until the app restarted). Instead, flag the shutdown and
+                // make a local self-connection to unblock the thread's
+                // pending `accept()`, then join it so the listener is
+                // genuinely dropped (and its port released) before this
+                // call returns.
+                shutdown.store(true, Ordering::Relaxed);
+                let _ = TcpStream::connect(("127.0.0.1", port));
+                let _ = accept_thread.join();
                 Err("Planning Center sign-in was not completed in time. Try again.".to_string())
             }
         }
