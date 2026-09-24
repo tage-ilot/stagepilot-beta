@@ -11,6 +11,7 @@ __pycache__/
 .guardrails-worktree/
 .milestone-*-commit/
 .release-*-worktree/
+graphify-out/
 *.sqlite
 *.sqlite3
 *.db
