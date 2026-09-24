@@ -381,10 +381,32 @@ mod tests {
             return;
         };
         let port = server.port();
-        let worker = std::thread::spawn(move || server.wait("state-xyz", Duration::from_secs(5)));
-        // Give the accept loop a moment, then deliver the callback.
-        std::thread::sleep(Duration::from_millis(50));
-        let mut client = ClientStream::connect(("127.0.0.1", port)).expect("connect");
+        // Generous deadline for the worker's own `wait()` loop: this only
+        // needs to comfortably exceed the accept-loop's 50-100ms poll
+        // interval plus whatever scheduling delay a loaded CI runner adds;
+        // it is not what caused the original flake (the fixed pre-connect
+        // sleep above was), but a wider margin here costs nothing and adds
+        // resilience against CPU-starved CI runners.
+        let worker = std::thread::spawn(move || server.wait("state-xyz", Duration::from_secs(10)));
+        // The listener is bound synchronously inside `CallbackServer::start()`
+        // (before it returns), so the OS will happily queue an incoming
+        // connection in the accept backlog even before the spawned `wait()`
+        // thread gets scheduled and reaches its first `accept()` call. There
+        // is therefore no need to race a fixed sleep against that thread's
+        // own scheduling: retry the connect itself with a short backoff
+        // until it succeeds (or a generous deadline elapses), which removes
+        // the race entirely instead of just narrowing it.
+        let connect_deadline = Instant::now() + Duration::from_secs(2);
+        let mut client = loop {
+            match ClientStream::connect(("127.0.0.1", port)) {
+                Ok(stream) => break stream,
+                Err(error) if Instant::now() < connect_deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                    let _ = error;
+                }
+                Err(error) => panic!("connect: {error}"),
+            }
+        };
         client
             .write_all(
                 b"GET /callback?code=the-code&state=state-xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
