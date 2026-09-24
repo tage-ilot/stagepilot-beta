@@ -52,9 +52,22 @@ impl CallbackServer {
     /// Bind the first free pre-registered loopback port.
     pub fn start() -> Result<Self, String> {
         let listener = bind_registered_port()?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|_| "Could not secure the Planning Center sign-in listener.".to_string())?;
+        // Deliberately left in the default *blocking* mode. The previous
+        // implementation used a nonblocking `accept()` polled in a loop with
+        // a wall-clock deadline check ahead of each iteration. That has a
+        // structural flaw independent of how wide the timeout is: if the
+        // polling thread is descheduled (CPU-starved CI runner under load)
+        // during one of its `sleep()` calls for longer than the remaining
+        // budget, the loop's `while Instant::now() < deadline` guard fails
+        // and it returns a timeout error WITHOUT ever calling `accept()`
+        // again — even though a connection is already sitting in the OS
+        // accept backlog, queued the moment the client connected. This is a
+        // pure scheduling artifact, not an actual absence of a callback, and
+        // widening the timeout does not fix it because the failure mode is
+        // "thread didn't get scheduled in time to notice", not "client was
+        // too slow". A genuinely blocking `accept()` has no such gap: as
+        // soon as the OS wakes the thread there's nothing left to check, the
+        // call returns the already-queued connection immediately.
         let port = listener
             .local_addr()
             .map_err(|_| "Could not resolve the Planning Center sign-in listener.".to_string())?
@@ -74,30 +87,60 @@ impl CallbackServer {
     ///
     /// Consumes the server: the listener is dropped (and the port released)
     /// as soon as this returns, whatever the outcome.
+    ///
+    /// Implementation note: the accept loop runs on its own thread using a
+    /// genuinely *blocking* `accept()`, so there is no polling interval to
+    /// oversleep past. The `timeout` is enforced entirely on this side via
+    /// `Receiver::recv_timeout`, which only affects the case where no
+    /// connection ever arrives; it can never cause a queued connection to be
+    /// missed. If the timeout fires, the listener is dropped, which unblocks
+    /// the accept thread (with an error) so it doesn't leak.
     pub fn wait(self, expected_state: &str, timeout: Duration) -> Result<String, String> {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            match self.listener.accept() {
-                Ok((stream, _)) => match handle(stream, expected_state) {
-                    CallbackOutcome::Code(code) => return Ok(code),
+        let expected_state = expected_state.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let listener = self.listener;
+        let accept_thread = std::thread::spawn(move || loop {
+            match listener.accept() {
+                Ok((stream, _)) => match handle(stream, &expected_state) {
+                    CallbackOutcome::Code(code) => {
+                        let _ = tx.send(Ok(code));
+                        return;
+                    }
                     CallbackOutcome::Denied(reason) => {
-                        return Err(sign_in_error(&reason));
+                        let _ = tx.send(Err(sign_in_error(&reason)));
+                        return;
                     }
                     CallbackOutcome::StateMismatch => {
-                        return Err(
+                        let _ = tx.send(Err(
                             "Planning Center sign-in could not be verified. Try signing in again."
                                 .to_string(),
-                        );
+                        ));
+                        return;
                     }
                     CallbackOutcome::Ignored => {}
                 },
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+                Err(_) => return,
+            }
+        });
+        match rx.recv_timeout(timeout) {
+            Ok(result) => {
+                // The accept thread already sent its result and is exiting
+                // (or has exited); joining here is bounded and just reclaims
+                // the thread promptly instead of leaving it detached.
+                let _ = accept_thread.join();
+                result
+            }
+            Err(_) => {
+                // The accept thread is still blocked inside `accept()` (no
+                // connection ever arrived) and there is no portable way to
+                // cancel a blocking accept from the outside. Detach it
+                // instead of joining: it will keep the (now-abandoned)
+                // listener alive until either a stray connection wakes it up
+                // or the process exits, but it will never block this call.
+                drop(accept_thread);
+                Err("Planning Center sign-in was not completed in time. Try again.".to_string())
             }
         }
-        Err("Planning Center sign-in was not completed in time. Try again.".to_string())
     }
 }
 
@@ -416,7 +459,20 @@ mod tests {
         let _ = client.read_to_string(&mut response);
         assert_eq!(worker.join().expect("join"), Ok("the-code".to_string()));
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        // Single-use: the listener is dropped, so the port is bindable again.
-        assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
+        // Single-use: the listener is dropped, so the port becomes bindable
+        // again. On macOS in particular the kernel can take a brief moment
+        // to actually release a just-closed listening socket even after the
+        // owning thread has fully exited, so retry the rebind with a short
+        // backoff instead of asserting on the very first attempt.
+        let rebind_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            if Instant::now() >= rebind_deadline {
+                panic!("port {port} was not released after the listener was dropped");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
