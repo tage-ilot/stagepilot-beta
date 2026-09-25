@@ -832,6 +832,14 @@ fn start_backend(app: &tauri::AppHandle, supervisor: BackendSupervisor) -> Resul
                 } else {
                     "cloudflared"
                 }),
+        )
+        .env(
+            "STAGEPILOT_PCO_CLIENT_ID",
+            // Baked in at compile time by build.rs from the
+            // STAGEPILOT_PCO_CLIENT_ID build-time env var (release
+            // workflows source it from the PLANNING_CENTER_CLIENT_ID repo
+            // secret). Not a secret itself — see build.rs for rationale.
+            env!("STAGEPILOT_PCO_CLIENT_ID"),
         );
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {

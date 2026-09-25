@@ -52,6 +52,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          STAGEPILOT_PCO_CLIENT_ID: ${{ secrets.PLANNING_CENTER_CLIENT_ID }}
         run: npm --prefix desktop run build
 
       - name: Upload workflow artifact
