@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.104-beta.13] - 2026-09-25
+
+### Fixed
+
+- Planning Center "Sign in with Planning Center" now actually works in
+  packaged builds. The OAuth `client_id` was never wired into the real
+  release pipeline, so every shipped build (including beta.12) failed
+  every sign-in attempt with "This build of StagePilot cannot sign in to
+  Planning Center." The client_id is now baked into the desktop binary at
+  compile time and threaded through to the backend sidecar, sourced from
+  the same `PLANNING_CENTER_CLIENT_ID` repo secret the control-plane
+  deploy already uses.
+
 ## [1.1.104-beta.12] - 2026-09-24
 
 ### Added
