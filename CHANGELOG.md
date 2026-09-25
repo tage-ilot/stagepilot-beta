@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.104-beta.14] - 2026-09-25
+
+### Fixed
+
+- Planning Center OAuth `client_id` was resolving empty in release builds due
+  to a GitHub Actions environment-secret scoping mismatch (beta.13
+  regression) — sign-in should now actually work. Release builds now fail
+  loudly instead of silently shipping broken sign-in if this ever regresses
+  again.
+
 ## [1.1.104-beta.13] - 2026-09-25
 
 ### Fixed
