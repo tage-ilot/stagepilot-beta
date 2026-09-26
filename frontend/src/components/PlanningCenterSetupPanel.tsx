@@ -14,6 +14,103 @@ import { SetupPanelHeader } from "./SetupPanelHeader";
 
 const ALL_SERVICE_TYPES_ID = "stagepilot:all-service-types";
 
+type TimezoneOption = {
+  city: string;
+  offsetMinutes: number;
+  timezone: string;
+};
+
+// One representative city for every populated civil standard-time offset.
+// Labels stay fixed year-round; values are real IANA zones with their normal DST rules.
+export const TIMEZONE_OPTIONS: readonly TimezoneOption[] = [
+  { city: "Pago Pago", offsetMinutes: -660, timezone: "Pacific/Pago_Pago" },
+  { city: "Honolulu", offsetMinutes: -600, timezone: "Pacific/Honolulu" },
+  { city: "Taiohae", offsetMinutes: -570, timezone: "Pacific/Marquesas" },
+  { city: "Anchorage", offsetMinutes: -540, timezone: "America/Anchorage" },
+  { city: "Los Angeles", offsetMinutes: -480, timezone: "America/Los_Angeles" },
+  { city: "Phoenix", offsetMinutes: -420, timezone: "America/Phoenix" },
+  { city: "Mexico City", offsetMinutes: -360, timezone: "America/Mexico_City" },
+  { city: "New York", offsetMinutes: -300, timezone: "America/New_York" },
+  { city: "Santiago", offsetMinutes: -240, timezone: "America/Santiago" },
+  { city: "St. John’s", offsetMinutes: -210, timezone: "America/St_Johns" },
+  { city: "São Paulo", offsetMinutes: -180, timezone: "America/Sao_Paulo" },
+  { city: "Vila dos Remédios", offsetMinutes: -120, timezone: "America/Noronha" },
+  { city: "Praia", offsetMinutes: -60, timezone: "Atlantic/Cape_Verde" },
+  { city: "London", offsetMinutes: 0, timezone: "Europe/London" },
+  { city: "Lagos", offsetMinutes: 60, timezone: "Africa/Lagos" },
+  { city: "Cairo", offsetMinutes: 120, timezone: "Africa/Cairo" },
+  { city: "Istanbul", offsetMinutes: 180, timezone: "Europe/Istanbul" },
+  { city: "Tehran", offsetMinutes: 210, timezone: "Asia/Tehran" },
+  { city: "Dubai", offsetMinutes: 240, timezone: "Asia/Dubai" },
+  { city: "Kabul", offsetMinutes: 270, timezone: "Asia/Kabul" },
+  { city: "Karachi", offsetMinutes: 300, timezone: "Asia/Karachi" },
+  { city: "Delhi", offsetMinutes: 330, timezone: "Asia/Kolkata" },
+  { city: "Kathmandu", offsetMinutes: 345, timezone: "Asia/Kathmandu" },
+  { city: "Dhaka", offsetMinutes: 360, timezone: "Asia/Dhaka" },
+  { city: "Yangon", offsetMinutes: 390, timezone: "Asia/Yangon" },
+  { city: "Jakarta", offsetMinutes: 420, timezone: "Asia/Jakarta" },
+  { city: "Shanghai", offsetMinutes: 480, timezone: "Asia/Shanghai" },
+  { city: "Eucla", offsetMinutes: 525, timezone: "Australia/Eucla" },
+  { city: "Tokyo", offsetMinutes: 540, timezone: "Asia/Tokyo" },
+  { city: "Adelaide", offsetMinutes: 570, timezone: "Australia/Adelaide" },
+  { city: "Sydney", offsetMinutes: 600, timezone: "Australia/Sydney" },
+  { city: "Lord Howe Island", offsetMinutes: 630, timezone: "Australia/Lord_Howe" },
+  { city: "Nouméa", offsetMinutes: 660, timezone: "Pacific/Noumea" },
+  { city: "Auckland", offsetMinutes: 720, timezone: "Pacific/Auckland" },
+  { city: "Waitangi", offsetMinutes: 765, timezone: "Pacific/Chatham" },
+  { city: "Apia", offsetMinutes: 780, timezone: "Pacific/Apia" },
+  { city: "London, Kiribati", offsetMinutes: 840, timezone: "Pacific/Kiritimati" },
+];
+
+const formatOffset = (offsetMinutes: number) => {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = Math.floor(absoluteMinutes / 60);
+  const minutes = absoluteMinutes % 60;
+  return `UTC${sign}${hours}${minutes ? `:${minutes.toString().padStart(2, "0")}` : ""}`;
+};
+
+const offsetAt = (timezone: string, date: Date) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const representedAsUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  );
+  return Math.round((representedAsUtc - date.getTime()) / 60_000);
+};
+
+const standardOffsetForTimezone = (timezone: string) => {
+  try {
+    const january = offsetAt(timezone, new Date("2024-01-15T12:00:00Z"));
+    const july = offsetAt(timezone, new Date("2024-07-15T12:00:00Z"));
+    return Math.min(january, july);
+  } catch {
+    return null;
+  }
+};
+
+const systemTimezone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+};
+
 const formatTimestamp = (value: string | null) =>
   value ? new Date(value).toLocaleString() : "Not yet";
 
@@ -62,7 +159,10 @@ export function PlanningCenterSetupPanel({
   const [appId, setAppId] = useState("");
   const [secret, setSecret] = useState("");
   const [serviceTypeId, setServiceTypeId] = useState("");
-  const [timezone, setTimezone] = useState("America/Los_Angeles");
+  const [timezone, setTimezone] = useState(systemTimezone);
+  const [timezoneOffset, setTimezoneOffset] = useState(() => (
+    standardOffsetForTimezone(systemTimezone()) ?? 0
+  ));
   const [titlePreference, setTitlePreference] = useState("");
   const [preferredTime, setPreferredTime] = useState("");
   const [removeSecret, setRemoveSecret] = useState(false);
@@ -77,7 +177,9 @@ export function PlanningCenterSetupPanel({
     if (!settings) return;
     setAppId(settings.settings.planning_center.app_id ?? "");
     setServiceTypeId(settings.settings.planning_center.service_type_id ?? "");
-    setTimezone(settings.settings.timezone);
+    const savedTimezone = settings.settings.timezone || systemTimezone();
+    setTimezone(savedTimezone);
+    setTimezoneOffset(standardOffsetForTimezone(savedTimezone) ?? 0);
     setTitlePreference(settings.settings.planning_center.plan_title_preference ?? "");
     setPreferredTime(settings.settings.planning_center.preferred_service_time ?? "");
   }, [settings]);
@@ -328,12 +430,26 @@ export function PlanningCenterSetupPanel({
           </label>
           <label className="text-sm text-slate-300">
             <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Timezone</span>
-            <input
-              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+            <select
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 disabled:opacity-50"
               disabled={busy}
-              onChange={(event) => setTimezone(event.target.value)}
-              value={timezone}
-            />
+              onChange={(event) => {
+                const offsetMinutes = Number(event.target.value);
+                const selected = TIMEZONE_OPTIONS.find((option) => (
+                  option.offsetMinutes === offsetMinutes
+                ));
+                if (!selected) return;
+                setTimezoneOffset(offsetMinutes);
+                setTimezone(selected.timezone);
+              }}
+              value={timezoneOffset}
+            >
+              {TIMEZONE_OPTIONS.map((option) => (
+                <option key={option.offsetMinutes} value={option.offsetMinutes}>
+                  {option.city} ({formatOffset(option.offsetMinutes)})
+                </option>
+              ))}
+            </select>
           </label>
           <label className="text-sm text-slate-300">
             <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Plan title preference</span>

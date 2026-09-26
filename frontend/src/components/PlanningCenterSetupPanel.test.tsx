@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApplicationState, PlanningCenterStatusResponse, SettingsResponse } from "../types";
-import { PlanningCenterSetupPanel } from "./PlanningCenterSetupPanel";
+import { PlanningCenterSetupPanel, TIMEZONE_OPTIONS } from "./PlanningCenterSetupPanel";
 
 const desktop = vi.hoisted(() => ({
   openExternalUrl: vi.fn().mockResolvedValue(undefined),
@@ -293,7 +293,80 @@ describe("PlanningCenterSetupPanel", () => {
       "Saved securely — leave blank to keep",
     );
     expect(screen.getByLabelText("Service type")).toHaveValue("sunday");
-    expect(screen.getByLabelText("Timezone")).toHaveValue("America/Los_Angeles");
+    expect(screen.getByLabelText("Timezone")).toHaveValue("-480");
+    expect(screen.getByRole("option", { name: "Los Angeles (UTC-8)" })).toHaveProperty("selected", true);
+  });
+
+  it("renders one timezone select option per populated civil UTC offset", () => {
+    renderPanel();
+
+    const timezoneSelect = screen.getByLabelText("Timezone");
+    expect(timezoneSelect.tagName).toBe("SELECT");
+    expect(timezoneSelect.querySelector("input")).toBeNull();
+    expect(screen.getAllByRole("option").filter((option) => (
+      option.closest("select") === timezoneSelect
+    ))).toHaveLength(TIMEZONE_OPTIONS.length);
+    expect(screen.getByRole("option", { name: "New York (UTC-5)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "London (UTC+0)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Delhi (UTC+5:30)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Kathmandu (UTC+5:45)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Adelaide (UTC+9:30)" })).toBeInTheDocument();
+  });
+
+  it("defaults an unsaved timezone to the exact detected system IANA zone", async () => {
+    const resolvedOptions = Intl.DateTimeFormat().resolvedOptions();
+    const resolvedOptionsSpy = vi.spyOn(
+      Intl.DateTimeFormat.prototype,
+      "resolvedOptions",
+    ).mockReturnValue({ ...resolvedOptions, timeZone: "America/Denver" });
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+
+    try {
+      renderPanel({
+        onSave,
+        panelSettings: {
+          ...settings,
+          settings: { ...settings.settings, timezone: "" },
+        },
+      });
+
+      expect(screen.getByLabelText("Timezone")).toHaveValue("-420");
+      expect(screen.getByRole("option", { name: "Phoenix (UTC-7)" })).toHaveProperty("selected", true);
+      await user.click(screen.getByRole("button", { name: "Save settings" }));
+      expect(onSave).toHaveBeenCalledWith(expect.any(Object), "America/Denver");
+    } finally {
+      resolvedOptionsSpy.mockRestore();
+    }
+  });
+
+  it("preserves a saved IANA zone while displaying its offset bucket", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({
+      onSave,
+      panelSettings: {
+        ...settings,
+        settings: { ...settings.settings, timezone: "America/Denver" },
+      },
+    });
+
+    expect(screen.getByLabelText("Timezone")).toHaveValue("-420");
+    expect(screen.getByRole("option", { name: "Phoenix (UTC-7)" })).toHaveProperty("selected", true);
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(onSave).toHaveBeenCalledWith(expect.any(Object), "America/Denver");
+  });
+
+  it("saves the representative city’s real IANA zone after an explicit selection", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ onSave });
+
+    await user.selectOptions(screen.getByLabelText("Timezone"), "330");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.any(Object), "Asia/Kolkata");
+    expect(onSave.mock.calls[0]?.[1]).not.toMatch(/^Etc\/GMT/);
   });
 
   it("renders and saves the All service types option", async () => {
