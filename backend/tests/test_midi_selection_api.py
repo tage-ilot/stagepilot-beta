@@ -127,6 +127,22 @@ class EmptyPlanningCenterClient:
             target_date=target_date,
         )
 
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        service_type = service_types[0]
+        assert timezone_name == "America/Los_Angeles"
+        return PlanNotFoundResult(
+            service_type=service_type,
+            target_date=target_date,
+        )
+
     async def close(self) -> None:
         return None
 

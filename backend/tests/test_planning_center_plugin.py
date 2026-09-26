@@ -449,9 +449,7 @@ async def test_all_service_types_loads_every_active_type() -> None:
             service_type("84", "Midweek Services"),
         ],
     )
-    settings = configured_settings().model_copy(
-        update={"service_type_id": ALL_SERVICE_TYPES_ID}
-    )
+    settings = configured_settings().model_copy(update={"service_type_id": ALL_SERVICE_TYPES_ID})
     harness = await plugin_harness(client, settings=settings)
     try:
         await harness.plugin.start()

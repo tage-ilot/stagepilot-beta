@@ -144,6 +144,23 @@ class LoadedPlanningCenterClient:
             ),
         )
 
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        return await self.load_plan_for_date(
+            service_types[0],
+            target_date,
+            timezone_name,
+            selected_plan_id=selected_plan_id,
+            lookahead_days=lookahead_days,
+        )
+
     async def close(self) -> None:
         self.closed = True
 
