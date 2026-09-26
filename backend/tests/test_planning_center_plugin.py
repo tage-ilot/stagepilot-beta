@@ -46,6 +46,7 @@ from stagepilot.plugins.planning_center.models import (
     SkippedPlanItem,
 )
 from stagepilot.plugins.planning_center.plugin import (
+    ALL_SERVICE_TYPES_ID,
     PlanningCenterClientContract,
     PlanningCenterPlugin,
 )
@@ -82,6 +83,9 @@ class FakePlanningCenterClient:
         self.close_error = close_error
         self.list_calls = 0
         self.load_calls: list[LoadCall] = []
+        self.all_load_calls: list[
+            tuple[list[PlanningCenterServiceType], date, str, str | None, int]
+        ] = []
         self.close_calls = 0
         self.in_flight = 0
         self.max_in_flight = 0
@@ -132,6 +136,25 @@ class FakePlanningCenterClient:
             return outcome
         finally:
             self.in_flight -= 1
+
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        self.all_load_calls.append(
+            (service_types, target_date, timezone_name, selected_plan_id, lookahead_days)
+        )
+        if not self.outcomes:
+            raise AssertionError("The fake Planning Center client has no queued outcome.")
+        outcome = self.outcomes.popleft()
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
     async def close(self) -> None:
         self.close_calls += 1
@@ -412,6 +435,37 @@ async def test_startup_resolves_service_type_and_loads_configured_local_date() -
             if isinstance(event.payload, ConnectionPayload)
         ] == [ConnectionStatus.CONNECTING, ConnectionStatus.CONNECTED]
         assert len(planning_center_events(harness, EventType.SERVICE_LOADED)) == 1
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_all_service_types_loads_every_active_type() -> None:
+    client = FakePlanningCenterClient(
+        [loaded_result("plan-1")],
+        service_types=[
+            service_type("7", "Archived", archived=True),
+            service_type("42", "Weekend Services"),
+            service_type("84", "Midweek Services"),
+        ],
+    )
+    settings = configured_settings().model_copy(
+        update={"service_type_id": ALL_SERVICE_TYPES_ID}
+    )
+    harness = await plugin_harness(client, settings=settings)
+    try:
+        await harness.plugin.start()
+
+        assert client.load_calls == []
+        assert len(client.all_load_calls) == 1
+        loaded_types, target_date, timezone_name, selected_plan_id, lookahead_days = (
+            client.all_load_calls[0]
+        )
+        assert [value.id for value in loaded_types] == ["42", "84"]
+        assert target_date == SERVICE_DATE
+        assert timezone_name == TIMEZONE_NAME
+        assert selected_plan_id is None
+        assert lookahead_days == 30
     finally:
         await harness.close()
 

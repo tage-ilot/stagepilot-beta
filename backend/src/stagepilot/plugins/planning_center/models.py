@@ -145,13 +145,13 @@ class SkippedPlanItem(BaseModel):
 
 class PlanNotFoundResult(BaseModel):
     status: Literal["not_found"] = "not_found"
-    service_type: PlanningCenterServiceType
+    service_type: PlanningCenterServiceType | None = None
     target_date: date
 
 
 class PlanAmbiguousResult(BaseModel):
     status: Literal["ambiguous"] = "ambiguous"
-    service_type: PlanningCenterServiceType
+    service_type: PlanningCenterServiceType | None = None
     target_date: date
     candidates: list[PlanningCenterPlanCandidate] = Field(min_length=2)
 

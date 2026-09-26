@@ -12,6 +12,8 @@ import type {
 } from "../types";
 import { SetupPanelHeader } from "./SetupPanelHeader";
 
+const ALL_SERVICE_TYPES_ID = "stagepilot:all-service-types";
+
 const formatTimestamp = (value: string | null) =>
   value ? new Date(value).toLocaleString() : "Not yet";
 
@@ -80,7 +82,8 @@ export function PlanningCenterSetupPanel({
     setPreferredTime(settings.settings.planning_center.preferred_service_time ?? "");
   }, [settings]);
 
-  const selectedServiceTypeKnown = serviceTypes.some((value) => value.id === serviceTypeId);
+  const selectedServiceTypeKnown = serviceTypeId === ALL_SERVICE_TYPES_ID
+    || serviceTypes.some((value) => value.id === serviceTypeId);
   const valid = useMemo(
     () => Boolean(
       (connectionMethod === "oauth" || appId.trim())
@@ -314,6 +317,7 @@ export function PlanningCenterSetupPanel({
               value={serviceTypeId}
             >
               <option value="">Load and choose a service type</option>
+              <option value={ALL_SERVICE_TYPES_ID}>All service types (nearest upcoming plan)</option>
               {serviceTypeId && !selectedServiceTypeKnown && (
                 <option value={serviceTypeId}>Saved service type ({serviceTypeId})</option>
               )}

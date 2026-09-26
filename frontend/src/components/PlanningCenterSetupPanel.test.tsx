@@ -112,6 +112,7 @@ function renderPanel({
   onSignInOAuth = vi.fn(),
   onDisconnectOAuth = vi.fn(),
   panelSettings = settings,
+  panelState = state,
   status = {
     connection_status: "disconnected",
     configured: true,
@@ -145,7 +146,7 @@ function renderPanel({
         { id: "wednesday", name: "Wednesday Service" },
       ]}
       settings={panelSettings}
-      state={state}
+      state={panelState}
       status={status}
     />,
   );
@@ -293,6 +294,60 @@ describe("PlanningCenterSetupPanel", () => {
     );
     expect(screen.getByLabelText("Service type")).toHaveValue("sunday");
     expect(screen.getByLabelText("Timezone")).toHaveValue("America/Los_Angeles");
+  });
+
+  it("renders and saves the All service types option", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ onSave });
+
+    const serviceTypeSelect = screen.getByLabelText("Service type");
+    expect(screen.getByRole("option", {
+      name: "All service types (nearest upcoming plan)",
+    })).toBeInTheDocument();
+
+    await user.selectOptions(serviceTypeSelect, "stagepilot:all-service-types");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ service_type_id: "stagepilot:all-service-types" }),
+      "America/Los_Angeles",
+    );
+  });
+
+  it("shows tied All-service candidates with their service type names", () => {
+    renderPanel({
+      panelState: {
+        ...state,
+        service_load: {
+          ...state.service_load,
+          status: "ambiguous",
+          target_date: "2026-09-27",
+          candidates: [
+            {
+              id: "plan-sunday",
+              title: "Sunday Morning",
+              service_type_id: "sunday",
+              service_type_name: "Sunday Services",
+              target_date: "2026-09-27",
+              service_times: ["09:00"],
+            },
+            {
+              id: "plan-students",
+              title: "Student Service",
+              service_type_id: "students",
+              service_type_name: "Student Ministry",
+              target_date: "2026-09-27",
+              service_times: ["18:00"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(screen.getByText("Sunday Services · 09:00")).toBeInTheDocument();
+    expect(screen.getByText("Student Ministry · 18:00")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Use plan" })).toHaveLength(2);
   });
 
   it("tests temporary credentials and saves a discovered service type", async () => {
