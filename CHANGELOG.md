@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.1.104-beta.15] - 2026-09-26
+
+### Changed
+
+- The Planning Center settings panel now clearly separates settings that work
+  with either Planning Center sign-in or a manual connection from settings
+  that only apply to a manual API key. The manual-only section is now
+  collapsed by default and labeled "Manual API Connection". Several buttons
+  ("Load Service Types", "Save Settings", and related actions) previously
+  required an Application ID even when signed in with Planning Center; they
+  now work correctly for OAuth-connected users with no manual credentials
+  entered.
+- Service Type now has an "All" option that searches every active service
+  type and uses the single nearest upcoming plan across all of them, instead
+  of requiring one specific service type to be selected.
+- Timezone is now a dropdown with one entry per UTC offset (labeled by its
+  most populous city, e.g. "New York (UTC-5)") instead of requiring exact
+  IANA timezone syntax. It defaults to your system's timezone and stores the
+  real, DST-aware zone underneath the fixed label.
+
 ## [1.1.104-beta.14] - 2026-09-25
 
 ### Fixed
