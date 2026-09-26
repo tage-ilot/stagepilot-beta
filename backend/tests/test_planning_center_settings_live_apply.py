@@ -93,6 +93,18 @@ class LiveClient:
     ) -> PlanDiscoveryResult:
         return _plan(service_type.id, f"plan-{service_type.id}", target_date)
 
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        _timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        service_type = service_types[0]
+        return _plan(service_type.id, f"plan-{service_type.id}", target_date)
+
     async def close(self) -> None:
         self.closed = True
 

@@ -354,6 +354,7 @@ async def test_no_plans_returns_not_found_without_detail_requests() -> None:
 
     assert isinstance(result, PlanNotFoundResult)
     assert result.target_date == TARGET_DATE
+    assert result.service_type is not None
     assert result.service_type.id == "42"
     assert [request.url.path for request in api.requests] == ["/services/v2/service_types/42/plans"]
 

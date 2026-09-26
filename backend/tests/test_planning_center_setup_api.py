@@ -50,6 +50,17 @@ class SetupClient:
     ) -> PlanDiscoveryResult:
         raise AssertionError("Plan loading is not used during onboarding.")
 
+    async def load_plan_for_service_types(
+        self,
+        _service_types: list[PlanningCenterServiceType],
+        _target_date: date,
+        _timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        raise AssertionError("Plan loading is not used during onboarding.")
+
     async def close(self) -> None:
         self.closed = True
 
