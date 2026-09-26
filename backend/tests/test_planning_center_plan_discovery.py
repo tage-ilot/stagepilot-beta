@@ -333,9 +333,7 @@ async def test_all_service_types_ignores_types_without_plans() -> None:
     assert isinstance(result, PlanLoadedResult)
     assert result.plan.id == "plan-only"
     plan_paths = [
-        request.url.path
-        for request in api.requests
-        if request.url.path.endswith("/plans")
+        request.url.path for request in api.requests if request.url.path.endswith("/plans")
     ]
     assert plan_paths == [
         "/services/v2/service_types/42/plans",
