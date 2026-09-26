@@ -108,8 +108,10 @@ const state: ApplicationState = {
 function renderPanel({
   onTest = vi.fn(),
   onSave = vi.fn(),
+  onLoadServiceTypes = vi.fn(),
   onSignInOAuth = vi.fn(),
   onDisconnectOAuth = vi.fn(),
+  panelSettings = settings,
   status = {
     connection_status: "disconnected",
     configured: true,
@@ -129,7 +131,7 @@ function renderPanel({
       message={null}
       onClose={vi.fn()}
       onDisconnectOAuth={onDisconnectOAuth}
-      onLoadServiceTypes={vi.fn()}
+      onLoadServiceTypes={onLoadServiceTypes}
       onReload={vi.fn()}
       onSave={onSave}
       onSelectPlan={vi.fn()}
@@ -142,7 +144,7 @@ function renderPanel({
         { id: "sunday", name: "Sunday Morning" },
         { id: "wednesday", name: "Wednesday Service" },
       ]}
-      settings={settings}
+      settings={panelSettings}
       state={state}
       status={status}
     />,
@@ -150,10 +152,101 @@ function renderPanel({
 }
 
 describe("PlanningCenterSetupPanel", () => {
+  it.each([
+    ["manual", false],
+    ["oauth", true],
+  ] as const)("defaults Manual API Connection closed for %s connections", (connectionMethod, oauthConnected) => {
+    renderPanel({
+      status: {
+        connection_status: oauthConnected ? "connected" : "disconnected",
+        configured: true,
+        app_id: oauthConnected ? null : "saved-app-id",
+        service_type_id: "sunday",
+        planning_center_secret_saved: !oauthConnected,
+        connection_method: connectionMethod,
+        oauth_connected: oauthConnected,
+        oauth_needs_reconnect: false,
+        detail: null,
+      },
+    });
+
+    const summary = screen.getByText("Manual API Connection");
+    const disclosure = summary.closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.queryByText("Advanced / manual connection")).not.toBeInTheDocument();
+  });
+
+  it("keeps shared service plan settings visible outside the closed manual disclosure", () => {
+    renderPanel();
+
+    const disclosure = screen.getByText("Manual API Connection").closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByRole("heading", { name: "Service Plan Settings" })).toBeInTheDocument();
+
+    for (const label of [
+      "Service type",
+      "Timezone",
+      "Plan title preference",
+      "Preferred service time",
+    ]) {
+      expect(screen.getByLabelText(label).closest("details")).toBeNull();
+    }
+    for (const name of ["Load service types", "Save settings", "Load today’s plan"]) {
+      expect(screen.getByRole("button", { name }).closest("details")).toBeNull();
+    }
+  });
+
+  it("enables OAuth service actions without a manual Application ID or secret", async () => {
+    const onLoadServiceTypes = vi.fn();
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({
+      onLoadServiceTypes,
+      onSave,
+      panelSettings: {
+        ...settings,
+        planning_center_secret_saved: false,
+        settings: {
+          ...settings.settings,
+          planning_center: {
+            ...settings.settings.planning_center,
+            app_id: null,
+          },
+        },
+      },
+      status: {
+        connection_status: "connected",
+        configured: true,
+        app_id: null,
+        service_type_id: "sunday",
+        planning_center_secret_saved: false,
+        connection_method: "oauth",
+        oauth_connected: true,
+        oauth_needs_reconnect: false,
+        detail: null,
+      },
+    });
+
+    const loadButton = screen.getByRole("button", { name: "Load service types" });
+    const saveButton = screen.getByRole("button", { name: "Save settings" });
+    expect(loadButton).toBeEnabled();
+    expect(saveButton).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Test connection" })).not.toBeInTheDocument();
+
+    await user.click(loadButton);
+    await user.click(saveButton);
+    expect(onLoadServiceTypes).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ app_id: "", service_type_id: "sunday" }),
+      "America/Los_Angeles",
+    );
+  });
+
   it("shows PAT instructions after a one-second hover and keeps the linked panel interactive", () => {
     vi.useFakeTimers();
     try {
       renderPanel();
+      fireEvent.click(screen.getByText("Manual API Connection"));
 
       const helpButton = screen.getByRole("button", {
         name: "How to get a Planning Center Personal Access Token",
@@ -208,6 +301,7 @@ describe("PlanningCenterSetupPanel", () => {
     const user = userEvent.setup();
     renderPanel({ onSave, onTest });
 
+    await user.click(screen.getByText("Manual API Connection"));
     await user.type(screen.getByLabelText("Secret"), "replacement-secret");
     await user.click(screen.getByRole("button", { name: "Test connection" }));
 
@@ -271,8 +365,7 @@ describe("PlanningCenterSetupPanel", () => {
     const user = userEvent.setup();
     renderPanel({ onSave });
 
-    // Manual connection method keeps the disclosure expanded and the
-    // fields fully interactive, unaffected by the new OAuth UI above it.
+    await user.click(screen.getByText("Manual API Connection"));
     await user.clear(screen.getByLabelText("Application ID"));
     await user.type(screen.getByLabelText("Application ID"), "manual-app-id");
     await user.type(screen.getByLabelText("Secret"), "manual-secret");

@@ -66,18 +66,10 @@ export function PlanningCenterSetupPanel({
   const [removeSecret, setRemoveSecret] = useState(false);
   const applicationIdHelp = useDelayedHover();
 
-  // Manual/PAT users must never see their active configuration hidden
-  // behind a disclosure, so the section starts expanded when the
-  // connection method is "manual" and defaults collapsed otherwise
-  // (OAuth-connected, or a brand new not-yet-connected installation).
   const connectionMethod = status?.connection_method ?? "manual";
   const oauthConnected = status?.oauth_connected ?? false;
   const oauthNeedsReconnect = status?.oauth_needs_reconnect ?? false;
-  const [advancedOpen, setAdvancedOpen] = useState(connectionMethod === "manual");
-
-  useEffect(() => {
-    if (connectionMethod === "manual") setAdvancedOpen(true);
-  }, [connectionMethod]);
+  const [manualConnectionOpen, setManualConnectionOpen] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
@@ -90,8 +82,12 @@ export function PlanningCenterSetupPanel({
 
   const selectedServiceTypeKnown = serviceTypes.some((value) => value.id === serviceTypeId);
   const valid = useMemo(
-    () => Boolean(appId.trim() && serviceTypeId && timezone.trim()),
-    [appId, serviceTypeId, timezone],
+    () => Boolean(
+      (connectionMethod === "oauth" || appId.trim())
+      && serviceTypeId
+      && timezone.trim(),
+    ),
+    [appId, connectionMethod, serviceTypeId, timezone],
   );
   const busy = pendingOperation !== null;
 
@@ -191,186 +187,199 @@ export function PlanningCenterSetupPanel({
 
       <details
         className="mt-5 rounded-xl border border-white/10 bg-black/10 p-4"
-        open={advancedOpen}
+        open={manualConnectionOpen}
       >
         <summary
           className="cursor-pointer select-none text-sm font-bold uppercase tracking-wider text-slate-400"
           onClick={(event) => {
             event.preventDefault();
-            setAdvancedOpen((value) => !value);
+            setManualConnectionOpen((value) => !value);
           }}
         >
-          Advanced / manual connection
+          Manual API Connection
         </summary>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <div className="text-sm text-slate-300">
-          <div className="mb-1.5 flex items-center gap-1.5">
-            <label
-              className="text-xs font-bold uppercase tracking-wider text-slate-500"
-              htmlFor="planning-center-application-id"
-            >
-              Application ID
-            </label>
-            <div
-              className="relative"
-              ref={applicationIdHelp.containerRef}
-              {...applicationIdHelp.hoverProps}
-            >
-              <button
-                aria-describedby="planning-center-pat-help"
-                aria-label="How to get a Planning Center Personal Access Token"
-                className="grid h-4 w-4 place-items-center rounded-full border border-slate-500 pb-px text-[0.65rem] font-black leading-none normal-case tracking-normal text-slate-400 transition hover:border-blue-300 hover:text-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400/60"
-                type="button"
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="text-sm text-slate-300">
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <label
+                className="text-xs font-bold uppercase tracking-wider text-slate-500"
+                htmlFor="planning-center-application-id"
               >
-                ?
-              </button>
+                Application ID
+              </label>
               <div
-                className={`absolute left-0 top-full z-50 w-[min(22rem,calc(100vw-3rem))] pt-2 text-left text-sm font-normal normal-case tracking-normal transition ${applicationIdHelp.open ? "visible translate-y-0 opacity-100" : "pointer-events-none invisible translate-y-1 opacity-0"}`}
-                id="planning-center-pat-help"
-                role="tooltip"
+                className="relative"
+                ref={applicationIdHelp.containerRef}
+                {...applicationIdHelp.hoverProps}
               >
-                <div className="rounded-xl border border-blue-300/20 bg-slate-950/95 p-4 text-slate-300 shadow-2xl shadow-black/50 backdrop-blur-xl">
-                  <p className="font-semibold text-slate-100">Connect your Planning Center account</p>
-                  <p className="mt-2 leading-relaxed">
-                    Open Planning Center&apos;s{" "}
-                    <a
-                      className="font-semibold text-blue-300 underline decoration-blue-300/50 underline-offset-2 hover:text-blue-200"
-                      href="https://api.planningcenteronline.com/personal_access_tokens"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        void openExternalUrl(event.currentTarget.href);
-                      }}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Personal Access Tokens page
-                    </a>
-                    , create a new token, and give it a recognizable name. Copy
-                    its Client ID into Application ID and its Secret into the
-                    Secret field. Save the settings, then load your service types
-                    to keep StagePilot&apos;s Service Plan updated.
-                  </p>
+                <button
+                  aria-describedby="planning-center-pat-help"
+                  aria-label="How to get a Planning Center Personal Access Token"
+                  className="grid h-4 w-4 place-items-center rounded-full border border-slate-500 pb-px text-[0.65rem] font-black leading-none normal-case tracking-normal text-slate-400 transition hover:border-blue-300 hover:text-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400/60"
+                  type="button"
+                >
+                  ?
+                </button>
+                <div
+                  className={`absolute left-0 top-full z-50 w-[min(22rem,calc(100vw-3rem))] pt-2 text-left text-sm font-normal normal-case tracking-normal transition ${applicationIdHelp.open ? "visible translate-y-0 opacity-100" : "pointer-events-none invisible translate-y-1 opacity-0"}`}
+                  id="planning-center-pat-help"
+                  role="tooltip"
+                >
+                  <div className="rounded-xl border border-blue-300/20 bg-slate-950/95 p-4 text-slate-300 shadow-2xl shadow-black/50 backdrop-blur-xl">
+                    <p className="font-semibold text-slate-100">Connect your Planning Center account</p>
+                    <p className="mt-2 leading-relaxed">
+                      Open Planning Center&apos;s{" "}
+                      <a
+                        className="font-semibold text-blue-300 underline decoration-blue-300/50 underline-offset-2 hover:text-blue-200"
+                        href="https://api.planningcenteronline.com/personal_access_tokens"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void openExternalUrl(event.currentTarget.href);
+                        }}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        Personal Access Tokens page
+                      </a>
+                      , create a new token, and give it a recognizable name. Copy
+                      its Client ID into Application ID and its Secret into the
+                      Secret field. Save the settings, then load your service types
+                      to keep StagePilot&apos;s Service Plan updated.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
+            <input
+              autoComplete="username"
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+              disabled={busy}
+              id="planning-center-application-id"
+              onChange={(event) => setAppId(event.target.value)}
+              value={appId}
+            />
           </div>
-          <input
-            autoComplete="username"
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
-            disabled={busy}
-            id="planning-center-application-id"
-            onChange={(event) => setAppId(event.target.value)}
-            value={appId}
-          />
+          <label className="text-sm text-slate-300">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Secret</span>
+            <input
+              autoComplete="current-password"
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+              disabled={busy || removeSecret}
+              onChange={(event) => setSecret(event.target.value)}
+              placeholder={status?.planning_center_secret_saved ? "Saved securely — leave blank to keep" : "Enter PAT secret"}
+              type="password"
+              value={secret}
+            />
+          </label>
+          <label className="flex items-center gap-2 self-end rounded-lg border border-white/7 bg-black/20 px-3 py-2.5 text-sm text-slate-300">
+            <input
+              checked={removeSecret}
+              disabled={busy || !status?.planning_center_secret_saved}
+              onChange={(event) => {
+                setRemoveSecret(event.target.checked);
+                if (event.target.checked) setSecret("");
+              }}
+              type="checkbox"
+            />
+            Remove saved secret
+          </label>
         </div>
-        <label className="text-sm text-slate-300">
-          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Secret</span>
-          <input
-            autoComplete="current-password"
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
-            disabled={busy || removeSecret}
-            onChange={(event) => setSecret(event.target.value)}
-            placeholder={status?.planning_center_secret_saved ? "Saved securely — leave blank to keep" : "Enter PAT secret"}
-            type="password"
-            value={secret}
-          />
-        </label>
-        <label className="text-sm text-slate-300">
-          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Service type</span>
-          <select
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 disabled:opacity-50"
-            disabled={busy || serviceTypes.length === 0}
-            onChange={(event) => setServiceTypeId(event.target.value)}
-            value={serviceTypeId}
-          >
-            <option value="">Load and choose a service type</option>
-            {serviceTypeId && !selectedServiceTypeKnown && (
-              <option value={serviceTypeId}>Saved service type ({serviceTypeId})</option>
-            )}
-            {serviceTypes.map((serviceType) => (
-              <option key={serviceType.id} value={serviceType.id}>{serviceType.name}</option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm text-slate-300">
-          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Timezone</span>
-          <input
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
-            disabled={busy}
-            onChange={(event) => setTimezone(event.target.value)}
-            value={timezone}
-          />
-        </label>
-        <label className="text-sm text-slate-300">
-          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Plan title preference</span>
-          <input
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
-            disabled={busy}
-            onChange={(event) => setTitlePreference(event.target.value)}
-            placeholder="Optional, for example Sunday Morning"
-            value={titlePreference}
-          />
-        </label>
-        <label className="text-sm text-slate-300">
-          <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Preferred service time</span>
-          <input
-            className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
-            disabled={busy}
-            onChange={(event) => setPreferredTime(event.target.value)}
-            type="time"
-            value={preferredTime}
-          />
-        </label>
-        <label className="flex items-center gap-2 self-end rounded-lg border border-white/7 bg-black/20 px-3 py-2.5 text-sm text-slate-300">
-          <input
-            checked={removeSecret}
-            disabled={busy || !status?.planning_center_secret_saved}
-            onChange={(event) => {
-              setRemoveSecret(event.target.checked);
-              if (event.target.checked) setSecret("");
-            }}
-            type="checkbox"
-          />
-          Remove saved secret
-        </label>
-      </div>
 
-      <div className="mt-5 flex flex-wrap gap-2">
-        <button
-          className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
-          disabled={busy || (!secret && !status?.planning_center_secret_saved)}
-          onClick={() => onTest(testInput())}
-          type="button"
-        >
-          {pendingOperation === "test" ? "Testing…" : "Test connection"}
-        </button>
-        <button
-          className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
-          disabled={busy || !status?.planning_center_secret_saved}
-          onClick={onLoadServiceTypes}
-          type="button"
-        >
-          {pendingOperation === "load-types" ? "Loading…" : "Load service types"}
-        </button>
-        <button
-          className="rounded-lg border border-blue-500/40 bg-blue-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 disabled:opacity-40"
-          disabled={busy || !valid}
-          onClick={save}
-          type="button"
-        >
-          {pendingOperation === "save" ? "Saving…" : "Save settings"}
-        </button>
-        <button
-          className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
-          disabled={pendingAction !== null || !state.plugins.planning_center}
-          onClick={onReload}
-          type="button"
-        >
-          {pendingAction === "reload_plan" ? "Loading…" : "Load today’s plan"}
-        </button>
-      </div>
+        {!(connectionMethod === "oauth" && oauthConnected) && (
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button
+              className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
+              disabled={busy || (!secret && !status?.planning_center_secret_saved)}
+              onClick={() => onTest(testInput())}
+              type="button"
+            >
+              {pendingOperation === "test" ? "Testing…" : "Test connection"}
+            </button>
+          </div>
+        )}
       </details>
+
+      <div className="mt-5 rounded-xl border border-white/10 bg-black/10 p-4">
+        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+          Service Plan Settings
+        </h3>
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="text-sm text-slate-300">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Service type</span>
+            <select
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 disabled:opacity-50"
+              disabled={busy || serviceTypes.length === 0}
+              onChange={(event) => setServiceTypeId(event.target.value)}
+              value={serviceTypeId}
+            >
+              <option value="">Load and choose a service type</option>
+              {serviceTypeId && !selectedServiceTypeKnown && (
+                <option value={serviceTypeId}>Saved service type ({serviceTypeId})</option>
+              )}
+              {serviceTypes.map((serviceType) => (
+                <option key={serviceType.id} value={serviceType.id}>{serviceType.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-slate-300">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Timezone</span>
+            <input
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+              disabled={busy}
+              onChange={(event) => setTimezone(event.target.value)}
+              value={timezone}
+            />
+          </label>
+          <label className="text-sm text-slate-300">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Plan title preference</span>
+            <input
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+              disabled={busy}
+              onChange={(event) => setTitlePreference(event.target.value)}
+              placeholder="Optional, for example Sunday Morning"
+              value={titlePreference}
+            />
+          </label>
+          <label className="text-sm text-slate-300">
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">Preferred service time</span>
+            <input
+              className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none focus:border-blue-500/60"
+              disabled={busy}
+              onChange={(event) => setPreferredTime(event.target.value)}
+              type="time"
+              value={preferredTime}
+            />
+          </label>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button
+            className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
+            disabled={busy || !(status?.oauth_connected || status?.planning_center_secret_saved)}
+            onClick={onLoadServiceTypes}
+            type="button"
+          >
+            {pendingOperation === "load-types" ? "Loading…" : "Load service types"}
+          </button>
+          <button
+            className="rounded-lg border border-blue-500/40 bg-blue-700 px-3.5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 disabled:opacity-40"
+            disabled={busy || !valid}
+            onClick={save}
+            type="button"
+          >
+            {pendingOperation === "save" ? "Saving…" : "Save settings"}
+          </button>
+          <button
+            className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-3.5 py-2.5 text-sm font-semibold text-blue-200 transition hover:bg-blue-500/20 disabled:opacity-40"
+            disabled={pendingAction !== null || !state.plugins.planning_center}
+            onClick={onReload}
+            type="button"
+          >
+            {pendingAction === "reload_plan" ? "Loading…" : "Load today’s plan"}
+          </button>
+        </div>
+      </div>
 
       {(error || message) && (
         <p className={`mt-4 rounded-lg border px-3 py-2 text-sm ${error ? "border-rose-400/20 bg-rose-400/10 text-rose-200" : "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"}`}>
