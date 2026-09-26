@@ -55,6 +55,8 @@ from stagepilot.plugins.planning_center.models import (
     PlanNotFoundResult,
 )
 
+ALL_SERVICE_TYPES_ID = "stagepilot:all-service-types"
+
 
 class PlanningCenterClientContract(Protocol):
     async def list_service_types(self) -> list[PlanningCenterServiceType]: ...
@@ -62,6 +64,16 @@ class PlanningCenterClientContract(Protocol):
     async def load_plan_for_date(
         self,
         service_type: PlanningCenterServiceType,
+        target_date: date,
+        timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult: ...
+
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
         target_date: date,
         timezone_name: str,
         *,
@@ -372,23 +384,21 @@ class PlanningCenterPlugin(Plugin):
             client = self._require_client()
             service_types = await client.list_service_types()
             api_connected = True
-            service_type = self._configured_service_type(service_types)
-            result = await client.load_plan_for_date(
-                service_type,
+            configured_service_types = self._configured_service_types(service_types)
+            result = await self._load_plan_for_service_types(
+                client,
+                configured_service_types,
                 search_date,
-                self._timezone_name,
                 selected_plan_id=selected_plan_id,
-                lookahead_days=self._settings.upcoming_lookahead_days,
             )
             if isinstance(result, PlanAmbiguousResult) and selected_plan_id is None:
                 preferred = self._preferred_candidate(result.candidates)
                 if preferred is not None:
-                    result = await client.load_plan_for_date(
-                        service_type,
+                    result = await self._load_plan_for_service_types(
+                        client,
+                        configured_service_types,
                         search_date,
-                        self._timezone_name,
                         selected_plan_id=preferred.id,
-                        lookahead_days=self._settings.upcoming_lookahead_days,
                     )
         except PlanningCenterPlanSelectionError as exc:
             self._record_error(str(exc))
@@ -656,11 +666,19 @@ class PlanningCenterPlugin(Plugin):
             raise PlanningCenterConfigurationError("Planning Center is not initialized.")
         return self._client
 
-    def _configured_service_type(
+    def _configured_service_types(
         self,
         service_types: list[PlanningCenterServiceType],
-    ) -> PlanningCenterServiceType:
+    ) -> list[PlanningCenterServiceType]:
         configured_id = self._settings.service_type_id
+        if configured_id == ALL_SERVICE_TYPES_ID:
+            active_service_types = [value for value in service_types if not value.archived]
+            if not active_service_types:
+                raise PlanningCenterConfigurationError(
+                    "No active Planning Center service types are available."
+                )
+            return active_service_types
+
         service_type = next(
             (value for value in service_types if value.id == configured_id),
             None,
@@ -673,7 +691,31 @@ class PlanningCenterPlugin(Plugin):
             raise PlanningCenterConfigurationError(
                 "The configured Planning Center service type is archived."
             )
-        return service_type
+        return [service_type]
+
+    async def _load_plan_for_service_types(
+        self,
+        client: PlanningCenterClientContract,
+        service_types: list[PlanningCenterServiceType],
+        search_date: date,
+        *,
+        selected_plan_id: str | None,
+    ) -> PlanDiscoveryResult:
+        if self._settings.service_type_id == ALL_SERVICE_TYPES_ID:
+            return await client.load_plan_for_service_types(
+                service_types,
+                search_date,
+                self._timezone_name,
+                selected_plan_id=selected_plan_id,
+                lookahead_days=self._settings.upcoming_lookahead_days,
+            )
+        return await client.load_plan_for_date(
+            service_types[0],
+            search_date,
+            self._timezone_name,
+            selected_plan_id=selected_plan_id,
+            lookahead_days=self._settings.upcoming_lookahead_days,
+        )
 
     def _preferred_candidate(
         self,
@@ -749,7 +791,10 @@ class PlanningCenterPlugin(Plugin):
                 f"{cached.plan.date.isoformat()} and was not loaded."
             )
             return
-        if cached.plan.service_type_id != self._settings.service_type_id:
+        if (
+            self._settings.service_type_id != ALL_SERVICE_TYPES_ID
+            and cached.plan.service_type_id != self._settings.service_type_id
+        ):
             self._cache_warning = (
                 "The cached service belongs to a different Planning Center service type "
                 "and was not loaded."

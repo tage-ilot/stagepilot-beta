@@ -193,8 +193,154 @@ class LookaheadDiscoveryApi:
         return httpx.Response(200, request=request, json={"data": data})
 
 
+class MultiServiceDiscoveryApi:
+    def __init__(
+        self,
+        *,
+        plans_by_service_type: Mapping[str, list[JsonObject]],
+        plan_times_by_plan: Mapping[str, list[JsonObject]],
+        items_by_plan: Mapping[str, list[JsonObject]] | None = None,
+    ) -> None:
+        self.plans_by_service_type = dict(plans_by_service_type)
+        self.plan_times_by_plan = dict(plan_times_by_plan)
+        self.items_by_plan = dict(items_by_plan or {})
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        path = request.url.path
+        parts = path.split("/")
+        service_type_id = parts[4]
+        if path.endswith("/plans"):
+            data = self.plans_by_service_type.get(service_type_id, [])
+        elif path.endswith("/plan_times"):
+            plan_id = path.rsplit("/", 2)[-2]
+            data = self.plan_times_by_plan[plan_id]
+        elif path.endswith("/items"):
+            plan_id = path.rsplit("/", 2)[-2]
+            data = self.items_by_plan[plan_id]
+        else:
+            raise AssertionError(f"Unexpected Planning Center request: {path}")
+        return httpx.Response(200, request=request, json={"data": data})
+
+
 def mock_transport(handler: Handler) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connection_method", ["manual", "oauth"])
+async def test_all_service_types_uses_nearest_plan_across_auth_modes(
+    connection_method: str,
+) -> None:
+    api = MultiServiceDiscoveryApi(
+        plans_by_service_type={
+            "42": [plan_resource("plan-later", "Tuesday", sort_date="2026-07-14T16:00:00Z")],
+            "84": [plan_resource("plan-nearest", "Monday", sort_date="2026-07-13T16:00:00Z")],
+        },
+        plan_times_by_plan={
+            "plan-later": [plan_time_resource("time-later", "2026-07-14T16:00:00Z")],
+            "plan-nearest": [plan_time_resource("time-nearest", "2026-07-13T16:00:00Z")],
+        },
+        items_by_plan={"plan-nearest": []},
+    )
+    settings = (
+        client_settings()
+        if connection_method == "manual"
+        else PlanningCenterSettings(
+            connection_method="oauth",
+            access_token="oauth-access-token",
+            request_timeout_seconds=3,
+        )
+    )
+    service_types = [
+        weekend_service_type(),
+        PlanningCenterServiceType(id="84", name="Midweek", sequence=2),
+    ]
+
+    async with PlanningCenterClient(settings, transport=mock_transport(api)) as client:
+        result = await client.load_plan_for_service_types(
+            service_types,
+            TARGET_DATE,
+            TIMEZONE_NAME,
+            lookahead_days=30,
+        )
+
+    assert isinstance(result, PlanLoadedResult)
+    assert result.plan.id == "plan-nearest"
+    assert result.plan.service_type_id == "84"
+    assert result.plan.date == NEXT_DATE
+
+
+@pytest.mark.asyncio
+async def test_all_service_types_surfaces_cross_type_ties_as_candidates() -> None:
+    api = MultiServiceDiscoveryApi(
+        plans_by_service_type={
+            "42": [plan_resource("plan-morning", "Morning")],
+            "84": [plan_resource("plan-evening", "Evening", sort_date="2026-07-13T01:00:00Z")],
+        },
+        plan_times_by_plan={
+            "plan-morning": [plan_time_resource("time-morning", "2026-07-12T16:00:00Z")],
+            "plan-evening": [plan_time_resource("time-evening", "2026-07-13T01:00:00Z")],
+        },
+    )
+    service_types = [
+        weekend_service_type(),
+        PlanningCenterServiceType(id="84", name="Evening Services", sequence=2),
+    ]
+
+    async with PlanningCenterClient(client_settings(), transport=mock_transport(api)) as client:
+        result = await client.load_plan_for_service_types(
+            service_types,
+            TARGET_DATE,
+            TIMEZONE_NAME,
+            lookahead_days=30,
+        )
+
+    assert isinstance(result, PlanAmbiguousResult)
+    assert result.service_type is None
+    assert [candidate.id for candidate in result.candidates] == [
+        "plan-morning",
+        "plan-evening",
+    ]
+    assert [candidate.service_type_id for candidate in result.candidates] == ["42", "84"]
+
+
+@pytest.mark.asyncio
+async def test_all_service_types_ignores_types_without_plans() -> None:
+    api = MultiServiceDiscoveryApi(
+        plans_by_service_type={
+            "42": [],
+            "84": [plan_resource("plan-only", "Only plan")],
+        },
+        plan_times_by_plan={
+            "plan-only": [plan_time_resource("time-only", "2026-07-12T16:00:00Z")],
+        },
+        items_by_plan={"plan-only": []},
+    )
+    service_types = [
+        weekend_service_type(),
+        PlanningCenterServiceType(id="84", name="Midweek", sequence=2),
+    ]
+
+    async with PlanningCenterClient(client_settings(), transport=mock_transport(api)) as client:
+        result = await client.load_plan_for_service_types(
+            service_types,
+            TARGET_DATE,
+            TIMEZONE_NAME,
+        )
+
+    assert isinstance(result, PlanLoadedResult)
+    assert result.plan.id == "plan-only"
+    plan_paths = [
+        request.url.path
+        for request in api.requests
+        if request.url.path.endswith("/plans")
+    ]
+    assert plan_paths == [
+        "/services/v2/service_types/42/plans",
+        "/services/v2/service_types/84/plans",
+    ]
 
 
 @pytest.mark.asyncio

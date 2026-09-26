@@ -136,8 +136,56 @@ class PlanningCenterClient:
     ) -> PlanDiscoveryResult:
         """Load today's plan, or the nearest plan within the future search window."""
 
-        if selected_plan_id is not None:
-            self._validate_identifier(selected_plan_id, "selected plan")
+        candidates = await self._plan_candidates_for_date(
+            service_type,
+            target_date,
+            timezone_name,
+            lookahead_days=lookahead_days,
+        )
+        return await self._resolve_plan_candidates(
+            candidates,
+            {service_type.id: service_type},
+            target_date,
+            selected_plan_id=selected_plan_id,
+            not_found_service_type=service_type,
+        )
+
+    async def load_plan_for_service_types(
+        self,
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        timezone_name: str,
+        *,
+        selected_plan_id: str | None = None,
+        lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        """Load the nearest plan across all supplied active service types."""
+
+        candidates = [
+            candidate
+            for service_type in service_types
+            for candidate in await self._plan_candidates_for_date(
+                service_type,
+                target_date,
+                timezone_name,
+                lookahead_days=lookahead_days,
+            )
+        ]
+        return await self._resolve_plan_candidates(
+            candidates,
+            {service_type.id: service_type for service_type in service_types},
+            target_date,
+            selected_plan_id=selected_plan_id,
+        )
+
+    async def _plan_candidates_for_date(
+        self,
+        service_type: PlanningCenterServiceType,
+        target_date: date,
+        timezone_name: str,
+        *,
+        lookahead_days: int,
+    ) -> list[PlanningCenterPlanCandidate]:
         if not 0 <= lookahead_days <= 365:
             raise PlanningCenterConfigurationError(
                 "The Planning Center plan lookahead must be between 0 and 365 days."
@@ -162,11 +210,6 @@ class PlanningCenterClient:
             if not matching_times:
                 continue
             candidate_date = matching_times[0].date()
-            candidate_times = [
-                service_time
-                for service_time in matching_times
-                if service_time.date() == candidate_date
-            ]
             candidates.append(
                 PlanningCenterPlanCandidate(
                     id=plan_resource.id,
@@ -174,10 +217,26 @@ class PlanningCenterClient:
                     service_type_id=service_type.id,
                     service_type_name=service_type.name,
                     target_date=candidate_date,
-                    service_times=candidate_times,
+                    service_times=[
+                        service_time
+                        for service_time in matching_times
+                        if service_time.date() == candidate_date
+                    ],
                 )
             )
+        return candidates
 
+    async def _resolve_plan_candidates(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types_by_id: dict[str, PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str | None,
+        not_found_service_type: PlanningCenterServiceType | None = None,
+    ) -> PlanDiscoveryResult:
+        if selected_plan_id is not None:
+            self._validate_identifier(selected_plan_id, "selected plan")
         if candidates:
             nearest_date = min(candidate.target_date for candidate in candidates)
             candidates = [
@@ -185,10 +244,12 @@ class PlanningCenterClient:
             ]
         candidates.sort(key=lambda candidate: (candidate.service_times[0], candidate.id))
         if not candidates:
-            return PlanNotFoundResult(service_type=service_type, target_date=target_date)
+            return PlanNotFoundResult(
+                service_type=not_found_service_type,
+                target_date=target_date,
+            )
 
         candidate_date = candidates[0].target_date
-
         selected_candidate: PlanningCenterPlanCandidate | None = None
         if selected_plan_id is not None:
             selected_candidate = next(
@@ -202,13 +263,14 @@ class PlanningCenterClient:
                 )
         elif len(candidates) > 1:
             return PlanAmbiguousResult(
-                service_type=service_type,
+                service_type=not_found_service_type,
                 target_date=candidate_date,
                 candidates=candidates,
             )
         else:
             selected_candidate = candidates[0]
 
+        service_type = service_types_by_id[selected_candidate.service_type_id]
         items = await self._list_items(service_type.id, selected_candidate.id)
         songs, skipped_items = self._extract_songs(items)
         plan = ServicePlan(
