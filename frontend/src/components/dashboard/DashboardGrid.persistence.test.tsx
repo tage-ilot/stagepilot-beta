@@ -72,6 +72,44 @@ describe("dashboard layout persists across a simulated app restart", () => {
   });
 });
 
+describe("a restored custom layout is not overwritten during startup sizing", () => {
+  let durableStorage: MemoryLocalStorage;
+
+  beforeEach(() => {
+    durableStorage = new MemoryLocalStorage();
+    Object.defineProperty(window, "localStorage", {
+      value: durableStorage,
+      configurable: true,
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.className?.includes("widget-autosize-target") ? 2000 : 0;
+      },
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    durableStorage.clear();
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+  });
+
+  it("keeps a user-resized widget after the delayed mount-time pass", async () => {
+    const custom = createDefaultDashboardLayout();
+    custom.desktop = custom.desktop.map((item) => (
+      item.id === "service-plan" ? { ...item, h: 11 } : item
+    ));
+    durableStorage.setItem(DASHBOARD_LAYOUT_KEY, JSON.stringify(custom));
+
+    render(<DashboardGrid widgets={widgets} />);
+    await vi.advanceTimersByTimeAsync(400);
+
+    const restored = loadDashboardLayout(durableStorage);
+    expect(restored.desktop.find((item) => item.id === "service-plan")?.h).toBe(11);
+  });
+});
+
 describe("a fresh install's first render matches clicking Reset Layout", () => {
   let durableStorage: MemoryLocalStorage;
 

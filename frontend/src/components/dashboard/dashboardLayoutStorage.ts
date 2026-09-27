@@ -10,6 +10,11 @@ export const DASHBOARD_ORDER_V1_KEY = "stagepilot.dashboard-widget-order.v1";
 export const DASHBOARD_LAYOUT_INVALID_KEY = "stagepilot.dashboard-layout.invalid";
 
 export type DashboardLayoutStorage = Pick<Storage, "getItem" | "setItem">;
+export type DashboardLayoutLoadSource = "saved" | "migrated" | "default";
+export type DashboardLayoutLoadResult = {
+  layout: DashboardLayoutState;
+  source: DashboardLayoutLoadSource;
+};
 
 export const saveDashboardLayout = (
   storage: DashboardLayoutStorage,
@@ -23,15 +28,15 @@ export const saveDashboardLayout = (
   }
 };
 
-export const loadDashboardLayout = (
+export const loadDashboardLayoutResult = (
   storage: DashboardLayoutStorage,
-): DashboardLayoutState => {
+): DashboardLayoutLoadResult => {
   let savedValue: string | null = null;
   try {
     savedValue = storage.getItem(DASHBOARD_LAYOUT_KEY);
     if (savedValue) {
       const parsed = parseDashboardLayout(JSON.parse(savedValue));
-      if (parsed) return parsed;
+      if (parsed) return { layout: parsed, source: "saved" };
       try {
         storage.setItem(DASHBOARD_LAYOUT_INVALID_KEY, savedValue);
       } catch {
@@ -54,7 +59,7 @@ export const loadDashboardLayout = (
     const migrated = oldValue ? migrateDashboardOrder(JSON.parse(oldValue)) : null;
     if (migrated) {
       saveDashboardLayout(storage, migrated);
-      return migrated;
+      return { layout: migrated, source: "migrated" };
     }
   } catch {
     // Invalid v1 data is intentionally retained but ignored.
@@ -62,5 +67,9 @@ export const loadDashboardLayout = (
 
   const fallback = createDefaultDashboardLayout();
   saveDashboardLayout(storage, fallback);
-  return fallback;
+  return { layout: fallback, source: "default" };
 };
+
+export const loadDashboardLayout = (
+  storage: DashboardLayoutStorage,
+): DashboardLayoutState => loadDashboardLayoutResult(storage).layout;
