@@ -912,7 +912,7 @@ wheels = [
 
 [[package]]
 name = "stagepilot"
-version = "1.1.104b15"
+version = "1.1.104b16"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
@@ -921,6 +921,7 @@ dependencies = [
     { name = "keyring" },
     { name = "mido" },
     { name = "pydantic" },
+    { name = "pytest-asyncio" },
     { name = "structlog" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extra = ["standard"] },
@@ -949,6 +950,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10,<3.0" },
     { name = "pyinstaller", marker = "extra == 'packaging'", specifier = ">=6.14,<7.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9.0" },
+    { name = "pytest-asyncio", specifier = ">=0.25,<1.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25,<1.0" },
     { name = "python-rtmidi", marker = "extra == 'packaging'", specifier = ">=1.5.8,<2.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9,<1.0" },

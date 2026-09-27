@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.104-beta.16] - 2026-09-27
+
+### Fixed
+
+- The Planning Center status indicators in the dashboard header and the
+  Services widget now correctly show "connected" when signed in with
+  Planning Center OAuth, not only when a manual API key is configured.
+- Fixed a stale "Planning Center returned an invalid plan response" error
+  that could linger in the Recent Event Stream after a newer request had
+  already superseded it.
+- The Recent Event Stream now keeps informational (non-error) entries
+  visible for about 5 minutes before they disappear (previously 2 minutes),
+  while any active error continues to stay visible until it's resolved.
+
 ## [1.1.104-beta.15] - 2026-09-26
 
 ### Changed

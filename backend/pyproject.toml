@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stagepilot"
-version = "1.1.104-beta.15"
+version = "1.1.104-beta.16"
 description = "Event-driven production automation backend for StagePilot"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,6 +16,7 @@ dependencies = [
   "keyring>=25.6,<26.0",
   "mido>=1.3.3,<2.0",
   "pydantic>=2.10,<3.0",
+  "pytest-asyncio>=0.25,<1.0",
   "structlog>=24.4,<26.0",
   "tzdata>=2025.2; sys_platform == 'win32'",
   "uvicorn[standard]>=0.34,<1.0",
