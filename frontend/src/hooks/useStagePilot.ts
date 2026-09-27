@@ -864,16 +864,21 @@ export function useStagePilot() {
       });
     }
 
+    const planningCenterAuthConfigured = (
+      planningCenterStatus?.connection_method === "oauth"
+        ? planningCenterStatus.oauth_connected
+        : Boolean(settings.planning_center_secret_saved && saved.planning_center.app_id)
+    );
     if (
       saved.integration_modes.service_source === "planning_center"
-      && settings.planning_center_secret_saved
-      && saved.planning_center.app_id
+      && planningCenterAuthConfigured
       && saved.planning_center.service_type_id
     ) {
       await savePlanningCenter(saved.planning_center, saved.timezone);
     }
   }, [canActivateServices,
     refreshMidi,
+    planningCenterStatus,
     saveLights,
     savePlanningCenter,
     saveProPresenter,

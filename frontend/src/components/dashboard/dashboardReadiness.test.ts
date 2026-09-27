@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   ApplicationState,
   MidiInputsResponse,
+  PlanningCenterStatusResponse,
   ProPresenterStatusResponse,
   SettingsResponse,
 } from "../../types";
@@ -170,6 +171,53 @@ describe("dashboard integration truthfulness", () => {
     expect(checks.find((check) => check.id === "service-plan")).toMatchObject({
       label: "Planning Center plan not loaded",
       passed: false,
+    });
+  });
+
+  it("treats a connected OAuth account with a selected service type as configured", () => {
+    const productionSettings = settings({
+      service_source: "planning_center",
+      midi_source: "real",
+      timer_output: "propresenter",
+    });
+    productionSettings.settings.planning_center.service_type_id = "service";
+    const planningCenterStatus: PlanningCenterStatusResponse = {
+      connection_status: "connected",
+      configured: true,
+      app_id: null,
+      service_type_id: "service",
+      planning_center_secret_saved: false,
+      connection_method: "oauth",
+      oauth_connected: true,
+      oauth_needs_reconnect: false,
+      detail: null,
+    };
+    const connectedState = state({ planning_center_status: "connected", plugins: {} });
+    const views = buildConnectionCardViews({
+      state: connectedState,
+      settings: productionSettings,
+      planningCenterStatus,
+      midi: emptyMidi,
+      propresenter: null,
+      lights: null,
+    });
+    const checks = buildReadinessChecks({
+      state: connectedState,
+      settings: productionSettings,
+      propresenter: null,
+      live: true,
+      views,
+    });
+
+    expect(views.planningCenter).toMatchObject({
+      status: "connected",
+      configured: true,
+      mode: "real",
+    });
+    expect(checks.find((check) => check.id === "planning-center")).toMatchObject({
+      label: "Planning Center connected",
+      passed: true,
+      status: "connected",
     });
   });
 

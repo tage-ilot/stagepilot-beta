@@ -3,6 +3,7 @@ import type {
   ConnectionStatus,
   LightsStatusResponse,
   MidiInputsResponse,
+  PlanningCenterStatusResponse,
   ProPresenterStatusResponse,
   SettingsResponse,
 } from "../../types";
@@ -42,6 +43,7 @@ const statusDetail = (status: ConnectionStatus, detail: string | null | undefine
 export function buildConnectionCardViews({
   state,
   settings,
+  planningCenterStatus,
   midi,
   propresenter,
   lights,
@@ -50,6 +52,7 @@ export function buildConnectionCardViews({
   state: ApplicationState;
   stateOnly?: boolean;
   settings: SettingsResponse | null;
+  planningCenterStatus?: PlanningCenterStatusResponse | null;
   midi: MidiInputsResponse | null;
   propresenter: ProPresenterStatusResponse | null;
   lights: LightsStatusResponse | null;
@@ -69,10 +72,15 @@ export function buildConnectionCardViews({
   const midiIsSimulated = modes?.midi_source === "simulated" || (!modes && Boolean(state.plugins.demo));
   const timerIsSimulated = modes?.timer_output === "simulated" || (!modes && Boolean(state.plugins.demo));
 
+  const planningAuthConfigured = Boolean(
+    (planningCenterStatus?.connection_method === "oauth"
+      && planningCenterStatus.oauth_connected)
+    || (settings?.settings.planning_center.app_id
+      && settings.planning_center_secret_saved),
+  );
   const planningConfigured = Boolean(
-    settings?.settings.planning_center.app_id
-      && settings.planning_center_secret_saved
-      && settings.settings.planning_center.service_type_id,
+    planningAuthConfigured
+      && settings?.settings.planning_center.service_type_id,
   );
   const midiEnabled = settings?.settings.midi.enabled ?? midi?.enabled ?? false;
   const selectedMidi = midi?.selected_input_name ?? settings?.settings.midi.input_name ?? null;

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type {
   ApplicationState,
   MidiInputsResponse,
+  PlanningCenterStatusResponse,
   ProPresenterStatusResponse,
   SettingsResponse,
 } from "../types";
@@ -12,6 +13,7 @@ type SetupPanel = "planning-center" | "midi" | "propresenter" | "backend";
 export function SetupChecklist({
   state,
   settings,
+  planningCenterStatus,
   midi,
   propresenter,
   live,
@@ -19,6 +21,7 @@ export function SetupChecklist({
 }: {
   state: ApplicationState;
   settings: SettingsResponse | null;
+  planningCenterStatus?: PlanningCenterStatusResponse | null;
   midi: MidiInputsResponse | null;
   propresenter: ProPresenterStatusResponse | null;
   live: boolean;
@@ -27,12 +30,16 @@ export function SetupChecklist({
   const [visible, setVisible] = useState(true);
   const saved = settings?.settings;
   const generalComplete = saved?.onboarding.general_completed ?? false;
+  const planningAuthComplete = Boolean(
+    (planningCenterStatus?.connection_method === "oauth"
+      && planningCenterStatus.oauth_connected)
+    || (saved?.planning_center.app_id && settings?.planning_center_secret_saved),
+  );
   const planningCenterComplete = Boolean(
     saved
     && saved.integration_modes.service_source === "planning_center"
-    && saved.planning_center.app_id
-    && saved.planning_center.service_type_id
-    && settings?.planning_center_secret_saved,
+    && planningAuthComplete
+    && saved.planning_center.service_type_id,
   );
   const midiComplete = Boolean(
     saved

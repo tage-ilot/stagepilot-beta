@@ -415,6 +415,12 @@ class PlanningCenterPlugin(Plugin):
             )
             return
         except PlanningCenterError as exc:
+            # A settings/OAuth change can queue a replacement refresh while the
+            # previous request is still in flight. Do not publish that superseded
+            # request's failure as a persistent connection error: the scheduled
+            # refresh loop will immediately retry with the current client/settings.
+            if self._pending_reload:
+                return
             detail = self._with_cache_warning(str(exc))
             self._record_error(detail)
             connection_status = (

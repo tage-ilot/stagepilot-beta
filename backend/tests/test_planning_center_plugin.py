@@ -33,6 +33,7 @@ from stagepilot.models.state import (
 from stagepilot.plugins.planning_center.errors import (
     PlanningCenterConfigurationError,
     PlanningCenterError,
+    PlanningCenterResponseError,
     PlanningCenterTimeoutError,
 )
 from stagepilot.plugins.planning_center.models import (
@@ -1022,6 +1023,48 @@ async def test_successful_reload_recovers_after_a_transient_failure() -> None:
         health = await harness.plugin.health()
         assert health.status is PluginStatus.RUNNING
         assert health.last_error is None
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_queued_reload_does_not_pin_superseded_invalid_response_error() -> None:
+    client = FakePlanningCenterClient(
+        [
+            loaded_result("plan-1"),
+            PlanningCenterResponseError("Planning Center returned an invalid plan response."),
+            loaded_result("plan-2"),
+        ],
+        blocked_call_indexes={1},
+    )
+    harness = await plugin_harness(client)
+    try:
+        await harness.plugin.start()
+        await harness.event_bus.publish(
+            new_event(EventType.SERVICE_RELOAD_REQUESTED, source="test")
+        )
+        await client.load_entered.wait()
+
+        # OAuth/settings reconciliation can request a replacement refresh while
+        # the pre-change request is still in flight.
+        await harness.event_bus.publish(
+            new_event(EventType.SERVICE_RELOAD_REQUESTED, source="test")
+        )
+        client.release_load.set()
+
+        state = await wait_for_state(
+            harness.state_store,
+            lambda value: (
+                value.service_load.status is ServiceLoadStatus.LOADED
+                and value.plan is not None
+                and value.plan.id == "plan-2"
+            ),
+        )
+        await settle_scheduled_refresh()
+
+        assert state.planning_center_status is ConnectionStatus.CONNECTED
+        assert state.recent_errors == []
+        assert len(client.load_calls) == 3
     finally:
         await harness.close()
 
