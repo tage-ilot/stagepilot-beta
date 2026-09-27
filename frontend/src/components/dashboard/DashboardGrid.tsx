@@ -18,7 +18,7 @@ import {
   orderedLayoutItems,
 } from "./dashboardLayout";
 import {
-  loadDashboardLayout,
+  loadDashboardLayoutResult,
   saveDashboardLayout,
 } from "./dashboardLayoutStorage";
 import {
@@ -134,8 +134,9 @@ export function DashboardGrid({
   widgets: Record<DashboardWidgetId, ReactNode>;
   canEditLayout?: boolean;
 }) {
-  const [layout, setLayout] = useState(() =>
-    loadDashboardLayout(window.localStorage));
+  const [initialLayout] = useState(() =>
+    loadDashboardLayoutResult(window.localStorage));
+  const [layout, setLayout] = useState(initialLayout.layout);
   const [mode, setMode] = useState(() => dashboardModeForWidth(window.innerWidth));
   const [editingRequested, setEditing] = useState(false);
   const editing = canEditLayout && editingRequested;
@@ -143,7 +144,14 @@ export function DashboardGrid({
   const [announcement, setAnnouncement] = useState("");
   const gridElement = useRef<HTMLDivElement>(null);
   const gridRef = useRef<GridStack | null>(null);
-  const initialSizingDone = useRef(new Set<DashboardLayoutMode>());
+  // A valid saved desktop/tablet layout already includes the user's measured
+  // and manually resized geometry. Re-running the startup content-fit pass
+  // would overwrite it a fraction of a second after hydration. Defaults and
+  // migrated layouts still need that first fit, and mobile retains its own
+  // persisted measurement path.
+  const initialSizingDone = useRef(new Set<DashboardLayoutMode>(
+    initialLayout.source === "saved" ? ["desktop", "tablet"] : [],
+  ));
   const layoutRef = useRef(layout);
   const modeRef = useRef(mode);
   const editingRef = useRef(editing);
