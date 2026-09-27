@@ -486,6 +486,7 @@ export function Dashboard({
     state,
     stateOnly: !canConfigure,
     settings,
+    planningCenterStatus,
     midi,
     propresenter,
     lights,
@@ -500,11 +501,15 @@ export function Dashboard({
   });
   const ready = readinessPassed(checks);
   const systemError = readinessHasError(checks);
-  const EVENT_DISPLAY_WINDOW_MS = 120_000;
-  const activity = [...state.recent_events].reverse()
-    .filter((event) => clockNow - Date.parse(event.timestamp) <= EVENT_DISPLAY_WINDOW_MS)
-    .slice(0, 10);
   const pinnedError = latestActiveError(state);
+  const activeErrorEventId = pinnedError?.event_id;
+  const EVENT_DISPLAY_WINDOW_MS = 300_000;
+  const activity = [...state.recent_events].reverse()
+    .filter((event) => (
+      event.id === activeErrorEventId
+      || clockNow - Date.parse(event.timestamp) <= EVENT_DISPLAY_WINDOW_MS
+    ))
+    .slice(0, 10);
   const midiDetail = connectionViews.midi.detail;
   const timerDuration = state.timer.duration_seconds ?? state.current_song?.duration_seconds ?? 0;
   const elapsedMilliseconds = state.timer.status === "running" && state.timer.started_at
@@ -621,6 +626,7 @@ export function Dashboard({
         <SetupChecklist
           live={live}
           midi={midi}
+          planningCenterStatus={planningCenterStatus}
           onOpen={setActiveConnection}
           propresenter={propresenter}
           settings={settings}
