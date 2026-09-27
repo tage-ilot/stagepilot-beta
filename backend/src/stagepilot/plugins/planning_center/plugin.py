@@ -128,6 +128,14 @@ class PlanningCenterPlugin(Plugin):
         self._stopping = False
         self._logger = get_logger(self.name)
 
+    def prepare_start(self, settings: PlanningCenterSettings) -> None:
+        """Replace settings before the plugin manager starts this plugin."""
+
+        if self._status is not PluginStatus.STOPPED or self._client is not None:
+            msg = "Planning Center startup settings can only be prepared while stopped."
+            raise PlanningCenterError(msg)
+        self._settings = settings
+
     async def start(self) -> None:
         self._status = PluginStatus.STARTING
         self._stopping = False

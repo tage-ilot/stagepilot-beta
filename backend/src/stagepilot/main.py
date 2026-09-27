@@ -37,6 +37,7 @@ from stagepilot.core.plugin import PluginManager
 from stagepilot.core.runtime import Runtime
 from stagepilot.core.settings import (
     CredentialStore,
+    CredentialStoreError,
     MemoryCredentialStore,
     SettingsService,
     default_oauth_credential_store,
@@ -45,6 +46,7 @@ from stagepilot.core.state import StateStore
 from stagepilot.planning_center_oauth import (
     ControlPlaneOAuthClient,
     OAuthTokenStore,
+    PlanningCenterOAuthError,
     PlanningCenterOAuthService,
     proactive_refresh_loop,
 )
@@ -111,6 +113,31 @@ def create_app(
     resolved_settings_service = settings_service or (
         SettingsService.ephemeral(settings) if settings is not None else SettingsService.default()
     )
+    planning_center_oauth = PlanningCenterOAuthService(
+        # The OAuth client_id is not a secret (only the client_secret is,
+        # and that lives in the control-plane Worker), but it is a
+        # product-wide registration value rather than something StagePilot
+        # can invent, so it is supplied by the packaged build/environment.
+        client_id=os.environ.get("STAGEPILOT_PCO_CLIENT_ID", ""),
+        tokens=OAuthTokenStore(
+            oauth_credential_store
+            or (
+                MemoryCredentialStore()
+                if settings is not None
+                else default_oauth_credential_store()
+            )
+        ),
+        control_plane=oauth_control_plane,
+    )
+
+    def stored_oauth_access_token() -> str | None:
+        tokens = planning_center_oauth.stored()
+        return tokens.access_token if tokens is not None and not tokens.needs_reconnect else None
+
+    # Install the provider before loading persisted settings. Otherwise a
+    # fresh process resolves OAuth settings without the keyring token and
+    # constructs the Planning Center plugin as permanently unconfigured.
+    resolved_settings_service.set_access_token_provider(stored_oauth_access_token)
     resolved_settings = settings or resolved_settings_service.load()
     configure_logging(resolved_settings.log_level)
     logger = get_logger("application")
@@ -191,28 +218,6 @@ def create_app(
         )
         plugin_manager.register(propresenter_plugin)
 
-    planning_center_oauth = PlanningCenterOAuthService(
-        # The OAuth client_id is not a secret (only the client_secret is,
-        # and that lives in the control-plane Worker), but it is a
-        # product-wide registration value rather than something StagePilot
-        # can invent, so it is supplied by the packaged build/environment.
-        # With no client id configured, sign-in reports itself as
-        # unavailable instead of building a broken authorize URL.
-        client_id=os.environ.get("STAGEPILOT_PCO_CLIENT_ID", ""),
-        tokens=OAuthTokenStore(
-            oauth_credential_store
-            or (
-                MemoryCredentialStore()
-                if settings is not None
-                else default_oauth_credential_store()
-            )
-        ),
-        control_plane=oauth_control_plane,
-    )
-    resolved_settings_service.set_access_token_provider(
-        lambda: tokens.access_token if (tokens := planning_center_oauth.stored()) else None
-    )
-
     runtime = Runtime(
         settings=resolved_settings,
         event_bus=event_bus,
@@ -244,6 +249,26 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.info("application_starting", version=resolved_settings.version)
+        # A persisted access token can expire while StagePilot is closed.
+        # Refresh it before plugins start, then rebuild the runtime settings
+        # and hand the fresh Bearer token to the stopped Planning Center
+        # plugin so startup never attempts its first request with stale auth.
+        persistent_planning = resolved_settings_service.effective_snapshot().planning_center
+        if persistent_planning.connection_method == "oauth":
+            try:
+                await planning_center_oauth.valid_access_token()
+            except PlanningCenterOAuthError as exc:
+                logger.warning(
+                    "planning_center_oauth_startup_refresh_failed",
+                    permanent=exc.permanent,
+                )
+            except (CredentialStoreError, OSError):
+                logger.warning("planning_center_oauth_startup_refresh_unavailable")
+            resolved_settings_service.set_access_token_provider(stored_oauth_access_token)
+            if planning_center_plugin is not None:
+                planning_center_plugin.prepare_start(
+                    resolved_settings_service.effective_runtime_settings().planning_center
+                )
         await state_service.start()
         await plugin_manager.start_all()
         await event_bus.publish(new_event(EventType.APPLICATION_STARTED, source="application"))
