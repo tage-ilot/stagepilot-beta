@@ -11,8 +11,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from stagepilot.core.config import Settings
-from stagepilot.core.settings import MemoryCredentialStore
+from stagepilot.core.config import IntegrationModes, ServiceSource, Settings
+from stagepilot.core.settings import (
+    MemoryCredentialStore,
+    MemorySettingsStore,
+    PersistentPlanningCenterSettings,
+    PersistentSettings,
+    SettingsService,
+)
 from stagepilot.main import create_app
 from stagepilot.planning_center_oauth import ControlPlaneOAuthClient, OAuthTokens
 
@@ -145,6 +151,57 @@ def test_disconnect_restores_the_manual_path_without_touching_the_pat_secret(
     assert response.json()["connected"] is False
     assert status.json()["connection_method"] == "manual"
     assert store.secret is None
+
+
+def test_restart_refreshes_an_expired_stored_oauth_token_before_runtime_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An overnight restart restores and refreshes OAuth without another sign-in."""
+
+    monkeypatch.setenv("STAGEPILOT_PCO_CLIENT_ID", "client-id-1")
+    settings_store = MemorySettingsStore(
+        PersistentSettings(
+            integration_modes=IntegrationModes(service_source=ServiceSource.PLANNING_CENTER),
+            planning_center=PersistentPlanningCenterSettings(
+                connection_method="oauth",
+                service_type_id="42",
+            )
+        )
+    )
+    oauth_store = MemoryCredentialStore(
+        OAuthTokens(
+            access_token="expired-access",
+            refresh_token="persisted-refresh",
+            expires_at=time.time() - 60,
+        ).model_dump_json()
+    )
+    settings_service = SettingsService(settings_store, MemoryCredentialStore(), environ={})
+
+    application = create_app(
+        settings_service=settings_service,
+        dashboard_auth_enforced=False,
+        oauth_credential_store=oauth_store,
+        oauth_control_plane=ControlPlaneOAuthClient(
+            transport=httpx.MockTransport(control_plane_handler)
+        ),
+    )
+    with TestClient(application) as client:
+        status = client.get("/api/v1/planning-center/status")
+        runtime_settings = (
+            application.state.runtime.settings_service.effective_runtime_settings().planning_center
+        )
+        planning_plugin = application.state.runtime.planning_center
+
+    assert status.status_code == 200
+    assert status.json()["connection_method"] == "oauth"
+    assert status.json()["oauth_connected"] is True
+    assert runtime_settings.bearer_token() == "access-1"
+    assert planning_plugin is not None
+    assert planning_plugin._settings.bearer_token() == "access-1"
+    assert oauth_store.secret is not None
+    refreshed = json.loads(oauth_store.secret)
+    assert refreshed["access_token"] == "access-1"
+    assert refreshed["refresh_token"] == "refresh-1"
 
 
 def test_sign_in_is_unavailable_without_a_configured_client_id(
