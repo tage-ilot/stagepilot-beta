@@ -165,7 +165,7 @@ def test_restart_refreshes_an_expired_stored_oauth_token_before_runtime_use(
             planning_center=PersistentPlanningCenterSettings(
                 connection_method="oauth",
                 service_type_id="42",
-            )
+            ),
         )
     )
     oauth_store = MemoryCredentialStore(
