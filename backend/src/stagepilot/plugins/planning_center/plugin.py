@@ -371,7 +371,9 @@ class PlanningCenterPlugin(Plugin):
             previous_state.service_load.skipped_items if has_actionable_plan else []
         )
         previous_plan_service_type_id = (
-            previous_state.plan.service_type_id if has_actionable_plan else None
+            previous_state.plan.service_type_id
+            if has_actionable_plan and previous_state.plan is not None
+            else None
         )
         retained_target_date = (
             previous_plan_date
@@ -533,7 +535,11 @@ class PlanningCenterPlugin(Plugin):
             if result.target_date != search_date:
                 raise RuntimeError("Planning Center returned an invalid search anchor.")
             retained_plan = previous_plan_date is not None and previous_plan_type_still_active
-            target_date = previous_plan_date if retained_plan else result.target_date
+            target_date = (
+                previous_plan_date
+                if retained_plan and previous_plan_date is not None
+                else result.target_date
+            )
             if retained_plan:
                 message = (
                     "No current or upcoming Planning Center plan was found through "
