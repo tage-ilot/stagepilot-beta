@@ -32,6 +32,7 @@ from stagepilot.models.state import (
     EventSummary,
     PluginHealth,
     ServiceLoadState,
+    ServiceLoadStatus,
     ServicePlan,
     TimerState,
     TimerStatus,
@@ -315,11 +316,16 @@ class StateService:
             )
 
         def mutation(state: ApplicationState) -> None:
+            plan_type_invalidated = (
+                state.plan is not None
+                and payload.status is ServiceLoadStatus.NOT_FOUND
+                and not payload.is_stale
+            )
             if (
                 state.plan is not None
                 and payload.target_date is not None
                 and state.plan.date != payload.target_date
-            ):
+            ) or plan_type_invalidated:
                 state.plan = None
                 state.current_song = None
                 state.next_song = None
