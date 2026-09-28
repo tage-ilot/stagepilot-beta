@@ -228,6 +228,7 @@ def create_app(
         planning_center_setup=PlanningCenterSetupService(
             resolved_settings_service,
             client_factory=planning_center_client_factory,
+            oauth_service=planning_center_oauth,
         ),
         midi_controller=midi_plugin,
         propresenter_controller=propresenter_plugin,
