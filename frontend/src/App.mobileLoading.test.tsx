@@ -72,7 +72,7 @@ describe("StagePilot pre-dashboard loading screen fits narrow (mobile/tablet) vi
     // narrow widths and only reach the large desktop size at the lg: breakpoint.
     expect(heading.className.split(/\s+/)).not.toContain("text-[11.25rem]");
     expect(heading.className).toMatch(/\btext-6xl\b/);
-    expect(heading.className).toMatch(/\blg:text-\[11\.25rem\]\b/);
+    expect(heading.className).toMatch(/\blg:text-\[11\.25rem\]/);
   });
 
   it("shows the mobile-only circular spinner alongside the progress bar on a narrow viewport", async () => {
