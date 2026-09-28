@@ -1,5 +1,5 @@
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEventHandler, type Ref, type TouchEventHandler } from "react";
 
 import { LOCAL_CAPABILITIES } from "../access/accessState";
 import lightsIcon from "../assets/lights-icon-purple.png";
@@ -129,10 +129,157 @@ function ActionButton({
   );
 }
 
-function SongRow({ song, current, next }: { song: Song; current: boolean; next: boolean }) {
+const CURSOR_POPOVER_OFFSET = 14;
+const CURSOR_POPOVER_WIDTH = 288;
+const TOUCH_TAP_MAX_DRIFT = 10;
+
+function useCursorPopover(text: string | null | undefined) {
+  const [visible, setVisible] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const hasText = Boolean(text && text.trim());
+  const rowRef = useRef<HTMLElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const sizeRef = useRef({ width: CURSOR_POPOVER_WIDTH, height: 0 });
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const lastPointerRef = useRef({ x: 0, y: 0 });
+
+  const clampPosition = (clientX: number, clientY: number) => {
+    if (typeof window === "undefined") return { x: clientX, y: clientY };
+    const { width, height } = sizeRef.current;
+    const maxX = window.innerWidth - width - 8;
+    const maxY = window.innerHeight - height - 8;
+    let y = clientY + CURSOR_POPOVER_OFFSET;
+    // Flip above the cursor when there isn't room below the viewport.
+    if (height && y > maxY) {
+      const above = clientY - CURSOR_POPOVER_OFFSET - height;
+      y = above >= 8 ? above : maxY;
+    }
+    return {
+      x: Math.max(8, Math.min(clientX + CURSOR_POPOVER_OFFSET, maxX)),
+      y: Math.max(8, Math.min(y, maxY)),
+    };
+  };
+
+  // Re-measure the popover's real size once it renders, then re-clamp so
+  // long notes never extend below (or above) the viewport.
+  useLayoutEffect(() => {
+    if (!visible || !popoverRef.current) return;
+    const rect = popoverRef.current.getBoundingClientRect();
+    sizeRef.current = { width: rect.width, height: rect.height };
+    setPosition(clampPosition(lastPointerRef.current.x, lastPointerRef.current.y));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, text]);
+
+  const openAt = (clientX: number, clientY: number) => {
+    lastPointerRef.current = { x: clientX, y: clientY };
+    setPosition(clampPosition(clientX, clientY));
+    setVisible(true);
+  };
+
+  const onMouseEnter: MouseEventHandler<HTMLElement> = (event) => {
+    if (!hasText) return;
+    openAt(event.clientX, event.clientY);
+  };
+
+  const onMouseMove: MouseEventHandler<HTMLElement> = (event) => {
+    if (!hasText) return;
+    lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    setPosition(clampPosition(event.clientX, event.clientY));
+  };
+
+  const onMouseLeave = () => setVisible(false);
+
+  // Touch has no hover state: track tap start, and on release treat it as a
+  // tap (not a scroll/drag) if the finger barely moved, toggling the popover.
+  const onTouchStart: TouchEventHandler<HTMLElement> = (event) => {
+    if (!hasText) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const onTouchEnd: TouchEventHandler<HTMLElement> = (event) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!hasText || !start) return;
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    const drift = Math.hypot(touch.clientX - start.x, touch.clientY - start.y);
+    if (drift > TOUCH_TAP_MAX_DRIFT) return; // scroll/drag, not a tap
+    event.preventDefault();
+    setVisible((prevVisible) => {
+      const next = !prevVisible;
+      if (next) openAt(touch.clientX, touch.clientY);
+      setPinned(next);
+      return next;
+    });
+  };
+
+  // Tapping anywhere outside a pinned (touch-opened) popover dismisses it,
+  // without interfering with normal scrolling/tapping elsewhere.
+  useEffect(() => {
+    if (!pinned) return;
+    const handleOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (rowRef.current && target && rowRef.current.contains(target)) return;
+      if (popoverRef.current && target && popoverRef.current.contains(target)) return;
+      setVisible(false);
+      setPinned(false);
+    };
+    document.addEventListener("pointerdown", handleOutside, true);
+    return () => document.removeEventListener("pointerdown", handleOutside, true);
+  }, [pinned]);
+
+  return {
+    open: hasText && visible,
+    position,
+    popoverRef,
+    hoverProps: {
+      ref: rowRef,
+      onMouseEnter,
+      onMouseMove,
+      onMouseLeave,
+      onTouchStart,
+      onTouchEnd,
+    },
+  };
+}
+
+function CursorPopover({
+  open,
+  position,
+  text,
+  popoverRef,
+}: {
+  open: boolean;
+  position: { x: number; y: number };
+  text: string | null | undefined;
+  popoverRef?: Ref<HTMLDivElement>;
+}) {
+  if (!open || !text) return null;
   return (
-    <li className={`grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/5 px-4 py-3 ${current ? "current-song-row" : ""}`}>
-      <span className={`grid h-7 w-7 place-items-center rounded text-xs font-bold ${current ? "bg-[#ff6238] text-slate-950" : "bg-white/5 text-slate-500"}`}>
+    <div
+      ref={popoverRef}
+      className="pointer-events-none fixed z-50 w-[min(18rem,calc(100vw-1rem))] rounded-lg border border-white/10 bg-slate-950/95 p-3 text-sm text-slate-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
+      role="tooltip"
+      style={{ left: position.x, top: position.y }}
+    >
+      {text}
+    </div>
+  );
+}
+
+function SongRow({ song, current, next }: { song: Song; current: boolean; next: boolean }) {
+  const popover = useCursorPopover(song.description);
+  const { ref: popoverHoverRef, ...popoverHoverProps } = popover.hoverProps;
+  return (
+    <li
+      ref={popoverHoverRef as unknown as Ref<HTMLLIElement>}
+      className={`group grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/5 px-4 py-3 transition duration-150 ease-out hover:bg-white/[0.04] ${current ? "current-song-row" : ""}`}
+      {...popoverHoverProps}
+    >
+      <span className={`grid h-7 w-7 place-items-center rounded text-xs font-bold transition duration-150 ${current ? "bg-[#ff6238] text-slate-950" : "bg-white/5 text-slate-500 group-hover:bg-white/10"}`}>
         {song.order}
       </span>
       <div className="min-w-0">
@@ -147,14 +294,17 @@ function SongRow({ song, current, next }: { song: Song; current: boolean; next: 
       <span className={`font-mono text-sm font-semibold tabular-nums ${song.duration_seconds ? "text-slate-300" : "text-rose-300"}`}>
         {formatDuration(song.duration_seconds)}
       </span>
+      <CursorPopover open={popover.open} position={popover.position} text={song.description} popoverRef={popover.popoverRef} />
     </li>
   );
 }
 
 function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
+  const popover = useCursorPopover(item.description);
+  const { ref: refHoverRef, ...refHoverProps } = popover.hoverProps;
   if (item.reason === "header") {
     return (
-      <li className="border-t border-white/[0.04] bg-black/30 px-4 py-2">
+      <li className="border-t border-white/[0.04] bg-black/30 px-4 py-2 transition duration-150 ease-out hover:bg-black/40">
         <p className="truncate text-xs font-extrabold uppercase tracking-[0.14em] text-slate-400">
           {item.title}
         </p>
@@ -163,7 +313,11 @@ function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
   }
 
   return (
-    <li className="grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/[0.035] bg-black/20 px-4 py-3">
+    <li
+      ref={refHoverRef as unknown as Ref<HTMLLIElement>}
+      className="grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/[0.035] bg-black/20 px-4 py-3 transition duration-150 ease-out hover:bg-black/30"
+      {...refHoverProps}
+    >
       <span className="grid h-7 w-7 place-items-center rounded bg-black/25 text-xs font-bold text-slate-700">•</span>
       <div className="min-w-0">
         <p className="truncate font-medium text-slate-500">{item.title}</p>
@@ -174,6 +328,7 @@ function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
       <span className="font-mono text-sm font-semibold tabular-nums text-slate-600">
         {formatDuration(item.duration_seconds)}
       </span>
+      <CursorPopover open={popover.open} position={popover.position} text={item.description} popoverRef={popover.popoverRef} />
     </li>
   );
 }

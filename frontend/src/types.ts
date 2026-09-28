@@ -46,6 +46,7 @@ export interface Song {
   service_sequence?: number | null;
   is_generic: boolean;
   source_song_id: string | null;
+  description?: string | null;
 }
 
 export interface ServicePlan {
