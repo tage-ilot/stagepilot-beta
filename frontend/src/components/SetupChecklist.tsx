@@ -31,9 +31,9 @@ export function SetupChecklist({
   const saved = settings?.settings;
   const generalComplete = saved?.onboarding.general_completed ?? false;
   const planningAuthComplete = Boolean(
-    (planningCenterStatus?.connection_method === "oauth"
-      && planningCenterStatus.oauth_connected)
-    || (saved?.planning_center.app_id && settings?.planning_center_secret_saved),
+    planningCenterStatus?.connection_method === "oauth"
+      ? planningCenterStatus.oauth_connected && !planningCenterStatus.oauth_needs_reconnect
+      : (saved?.planning_center.app_id && settings?.planning_center_secret_saved),
   );
   const planningCenterComplete = Boolean(
     saved

@@ -81,6 +81,15 @@ class PlanningCenterClientContract(Protocol):
         lookahead_days: int = 0,
     ) -> PlanDiscoveryResult: ...
 
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanDiscoveryResult: ...
+
     async def close(self) -> None: ...
 
 
@@ -413,8 +422,8 @@ class PlanningCenterPlugin(Plugin):
             if isinstance(result, PlanAmbiguousResult) and selected_plan_id is None:
                 preferred = self._preferred_candidate(result.candidates)
                 if preferred is not None:
-                    result = await self._load_plan_for_service_types(
-                        client,
+                    result = await client.resolve_selected_plan(
+                        result.candidates,
                         configured_service_types,
                         search_date,
                         selected_plan_id=preferred.id,

@@ -329,6 +329,29 @@ describe("Recent event stream 5-minute expiry", () => {
     expect(document.querySelectorAll(".event-row")).toHaveLength(1);
     expect(document.querySelectorAll(".border-rose-400\\/15")).toHaveLength(1);
   });
+
+  it("keeps the pinned error inspectable once its raw event is evicted from recent_events", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T16:00:00Z"));
+    const state = applicationState(loadedServiceState, {
+      propresenter_status: "error",
+      recent_errors: [
+        { component: "propresenter", event_id: "evicted-error", message: "Could not connect.", timestamp: "2026-07-13T10:00:00Z" },
+      ],
+      // The matching raw event ("evicted-error") is no longer present because
+      // 100 newer events pushed it out of the capped recent_events list.
+      recent_events: [
+        { id: "still-present", type: "song_started", timestamp: "2026-07-13T15:59:45Z", source: "propresenter" },
+      ],
+    });
+    renderDashboard(loadedServiceState, { state });
+
+    expect(screen.getByText(/Could not connect\./)).toBeInTheDocument();
+    // A synthesized row keeps the pinned error's original failure inspectable
+    // in the event stream even though its raw event was evicted.
+    expect(screen.getByText("propresenter error")).toBeInTheDocument();
+    expect(screen.getByText("song_started")).toBeInTheDocument();
+  });
 });
 
 describe("Dashboard Planning Center plan states", () => {

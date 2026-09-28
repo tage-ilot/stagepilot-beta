@@ -25,6 +25,7 @@ from stagepilot.plugins.midi_playback.client import (
 from stagepilot.plugins.midi_playback.models import MidiMessage
 from stagepilot.plugins.planning_center.models import (
     PlanDiscoveryResult,
+    PlanningCenterPlanCandidate,
     PlanningCenterServiceType,
     PlanNotFoundResult,
 )
@@ -140,6 +141,19 @@ class EmptyPlanningCenterClient:
         assert timezone_name == "America/Los_Angeles"
         return PlanNotFoundResult(
             service_type=service_type,
+            target_date=target_date,
+        )
+
+    async def resolve_selected_plan(
+        self,
+        _candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanDiscoveryResult:
+        return PlanNotFoundResult(
+            service_type=service_types[0],
             target_date=target_date,
         )
 

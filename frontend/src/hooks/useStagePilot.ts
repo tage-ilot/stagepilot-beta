@@ -121,6 +121,7 @@ export function useStagePilot() {
   const liveConnectionEstablished = useRef(false);
   const previousMidiStatus = useRef<ConnectionStatus | null>(null);
   const previousProPresenterStatus = useRef<ConnectionStatus | null>(null);
+  const previousPlanningCenterStatus = useRef<ConnectionStatus | null>(null);
 
   const applyState = useCallback((nextState: ApplicationState) => {
     setState((currentState) =>
@@ -368,6 +369,18 @@ export function useStagePilot() {
     previousProPresenterStatus.current = status;
     void loadProPresenter();
   }, [loadProPresenter, state?.propresenter_status]);
+
+  useEffect(() => {
+    const status = state?.planning_center_status;
+    if (!status) return;
+    if (previousPlanningCenterStatus.current === null) {
+      previousPlanningCenterStatus.current = status;
+      return;
+    }
+    if (previousPlanningCenterStatus.current === status) return;
+    previousPlanningCenterStatus.current = status;
+    void loadPlanningCenterStatus();
+  }, [loadPlanningCenterStatus, state?.planning_center_status]);
 
   const dispatch = useCallback(
     async (action: ActionName) => {

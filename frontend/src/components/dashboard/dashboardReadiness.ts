@@ -73,10 +73,10 @@ export function buildConnectionCardViews({
   const timerIsSimulated = modes?.timer_output === "simulated" || (!modes && Boolean(state.plugins.demo));
 
   const planningAuthConfigured = Boolean(
-    (planningCenterStatus?.connection_method === "oauth"
-      && planningCenterStatus.oauth_connected)
-    || (settings?.settings.planning_center.app_id
-      && settings.planning_center_secret_saved),
+    planningCenterStatus?.connection_method === "oauth"
+      ? planningCenterStatus.oauth_connected && !planningCenterStatus.oauth_needs_reconnect
+      : (settings?.settings.planning_center.app_id
+        && settings.planning_center_secret_saved),
   );
   const planningConfigured = Boolean(
     planningAuthConfigured

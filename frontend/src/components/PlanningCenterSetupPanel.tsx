@@ -23,6 +23,7 @@ type TimezoneOption = {
 // One representative city for every populated civil standard-time offset.
 // Labels stay fixed year-round; values are real IANA zones with their normal DST rules.
 export const TIMEZONE_OPTIONS: readonly TimezoneOption[] = [
+  { city: "Baker Island", offsetMinutes: -720, timezone: "Etc/GMT+12" },
   { city: "Pago Pago", offsetMinutes: -660, timezone: "Pacific/Pago_Pago" },
   { city: "Honolulu", offsetMinutes: -600, timezone: "Pacific/Honolulu" },
   { city: "Taiohae", offsetMinutes: -570, timezone: "Pacific/Marquesas" },
