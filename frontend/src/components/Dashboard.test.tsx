@@ -735,6 +735,136 @@ describe("Service plan item hover preview", () => {
 
     expect(screen.getAllByText("Pastor John").length).toBeGreaterThan(1);
   });
+
+  it("clamps the popover so a long note near the bottom of the viewport stays fully visible", () => {
+    const originalInnerHeight = window.innerHeight;
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 480 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+      }, {
+        state: applicationState(loadedServiceState, {
+          plan: {
+            ...loadedPlan,
+            songs: [{
+              id: "item-1",
+              title: "Holy Forever",
+              duration_seconds: 336,
+              order: 1,
+              service_sequence: 20,
+              is_generic: false,
+              source_song_id: "song-1",
+              description: Array.from({ length: 13 }, (_, i) => `Line ${i + 1} of a very long note`).join("\n"),
+            }],
+          },
+        }),
+      });
+
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const row = within(list).getByText("Holy Forever").closest("li")!;
+      // Stub layout globally: jsdom returns 0-sized rects for every element,
+      // so pin the popover's measured size to what a 13-line note renders as.
+      const height = 220;
+      const getBoundingClientRectSpy = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockReturnValue({
+          width: 288,
+          height,
+          top: 0,
+          left: 0,
+          right: 288,
+          bottom: height,
+          x: 0,
+          y: 0,
+          toJSON: () => {},
+        } as DOMRect);
+
+      try {
+        // Hover near the bottom of a short (480px) viewport, as in the reported repro.
+        fireEvent.mouseEnter(row, { clientX: 100, clientY: 470 });
+
+        const tooltip = screen.getByText(/Line 1 of a very long note/, { exact: false }).closest('[role="tooltip"]') as HTMLElement;
+        const top = parseFloat(tooltip.style.top);
+        expect(top).toBeGreaterThanOrEqual(8);
+        expect(top + height).toBeLessThanOrEqual(480);
+      } finally {
+        getBoundingClientRectSpy.mockRestore();
+      }
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    }
+  });
+
+  it("opens the popover on tap and dismisses it on a second tap (touch equivalent of hover)", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 100 }] });
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 101, clientY: 101 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 101, clientY: 101 }] });
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("treats a touch drag (scroll) as not a tap, so the popover does not open", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 200 }] });
+
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("dismisses a tap-opened popover when tapping elsewhere on the page", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 100 }] });
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
 });
 
 describe("Dashboard widget layout", () => {
