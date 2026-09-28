@@ -311,6 +311,22 @@ describe("PlanningCenterSetupPanel", () => {
     expect(screen.getByRole("option", { name: "Delhi (UTC+5:30)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Kathmandu (UTC+5:45)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Adelaide (UTC+9:30)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Baker Island (UTC-12)" })).toBeInTheDocument();
+  });
+
+  it("labels a saved Etc/GMT+12 preference as UTC-12, not Pago Pago's UTC-11", () => {
+    renderPanel({
+      panelSettings: {
+        ...settings,
+        settings: {
+          ...settings.settings,
+          timezone: "Etc/GMT+12",
+        },
+      },
+    });
+
+    expect(screen.getByLabelText("Timezone")).toHaveValue("-720");
+    expect(screen.getByRole("option", { name: "Baker Island (UTC-12)" })).toHaveProperty("selected", true);
   });
 
   it("defaults an unsaved timezone to the exact detected system IANA zone", async () => {

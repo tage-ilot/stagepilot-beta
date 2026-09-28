@@ -510,6 +510,22 @@ export function Dashboard({
       || clockNow - Date.parse(event.timestamp) <= EVENT_DISPLAY_WINDOW_MS
     ))
     .slice(0, 10);
+  // The active-error summary can reference an event that has already been
+  // evicted from the capped recent_events list (after 100 newer events).
+  // Keep the pinned error inspectable in the stream by synthesizing its row
+  // from the ErrorSummary itself when the raw event is no longer present.
+  const activeErrorEventMissing = Boolean(
+    activeErrorEventId && !activity.some((event) => event.id === activeErrorEventId),
+  );
+  if (activeErrorEventMissing && pinnedError) {
+    activity.unshift({
+      id: pinnedError.event_id ?? `evicted-error-${pinnedError.timestamp}`,
+      type: `${pinnedError.component} error`,
+      timestamp: pinnedError.timestamp,
+      source: "Evicted from event stream — shown from the pinned error",
+    });
+    activity.splice(10);
+  }
   const midiDetail = connectionViews.midi.detail;
   const timerDuration = state.timer.duration_seconds ?? state.current_song?.duration_seconds ?? 0;
   const elapsedMilliseconds = state.timer.status === "running" && state.timer.started_at
