@@ -31,6 +31,7 @@ from stagepilot.main import create_app
 from stagepilot.planning_center_oauth import ControlPlaneOAuthClient, OAuthTokens
 from stagepilot.plugins.planning_center.models import (
     PlanDiscoveryResult,
+    PlanningCenterPlanCandidate,
     PlanningCenterServiceType,
     PlanNotFoundResult,
 )
@@ -93,6 +94,16 @@ class RecordingPlanningCenterClient:
         *,
         selected_plan_id: str | None = None,
         lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        return PlanNotFoundResult(service_type=service_types[0], target_date=target_date)
+
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
     ) -> PlanDiscoveryResult:
         return PlanNotFoundResult(service_type=service_types[0], target_date=target_date)
 

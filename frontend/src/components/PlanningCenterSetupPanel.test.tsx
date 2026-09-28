@@ -325,7 +325,7 @@ describe("PlanningCenterSetupPanel", () => {
       },
     });
 
-    expect(screen.getByLabelText("Timezone")).toHaveValue("-720");
+    expect(screen.getByLabelText("Timezone")).toHaveValue("Etc/GMT+12");
     expect(screen.getByRole("option", { name: "Baker Island (UTC-12)" })).toHaveProperty("selected", true);
   });
 

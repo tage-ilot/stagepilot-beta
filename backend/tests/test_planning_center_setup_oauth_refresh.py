@@ -21,6 +21,7 @@ from stagepilot.planning_center_oauth import (
 )
 from stagepilot.plugins.planning_center.models import (
     PlanDiscoveryResult,
+    PlanningCenterPlanCandidate,
     PlanningCenterServiceType,
 )
 from stagepilot.services.planning_center_setup import PlanningCenterSetupService
@@ -56,6 +57,16 @@ class RecordingClient:
         *,
         selected_plan_id: str | None = None,
         lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        raise AssertionError("Plan loading is not used by the setup service.")
+
+    async def resolve_selected_plan(
+        self,
+        _candidates: list[PlanningCenterPlanCandidate],
+        _service_types: list[PlanningCenterServiceType],
+        _target_date: date,
+        *,
+        selected_plan_id: str,
     ) -> PlanDiscoveryResult:
         raise AssertionError("Plan loading is not used by the setup service.")
 
