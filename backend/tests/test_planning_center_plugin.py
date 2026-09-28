@@ -561,9 +561,7 @@ async def test_equally_scored_preferences_remain_ambiguous() -> None:
 async def test_archived_cached_plan_type_with_no_replacement_is_not_actionable() -> None:
     cache = MemoryPlanCacheStore(
         CachedServicePlan(
-            plan=plan("cached-plan", SERVICE_DATE).model_copy(
-                update={"service_type_id": "7"}
-            ),
+            plan=plan("cached-plan", SERVICE_DATE).model_copy(update={"service_type_id": "7"}),
             last_successful_refresh=datetime(2026, 7, 11, 18, tzinfo=UTC),
         )
     )
@@ -583,9 +581,7 @@ async def test_archived_cached_plan_type_with_no_replacement_is_not_actionable()
         assert state.plan is None
         assert state.service_load.status is ServiceLoadStatus.NOT_FOUND
         assert state.service_load.is_stale is False
-        assert (
-            await harness.state_service.dispatch(ActionName.START_NEXT)
-        ).accepted is False
+        assert (await harness.state_service.dispatch(ActionName.START_NEXT)).accepted is False
     finally:
         await harness.close()
 
