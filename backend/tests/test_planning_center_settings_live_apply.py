@@ -105,6 +105,17 @@ class LiveClient:
         service_type = service_types[0]
         return _plan(service_type.id, f"plan-{service_type.id}", target_date)
 
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanDiscoveryResult:
+        service_type = service_types[0]
+        return _plan(service_type.id, f"plan-{service_type.id}", target_date)
+
     async def close(self) -> None:
         self.closed = True
 
