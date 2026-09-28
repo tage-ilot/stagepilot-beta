@@ -28,6 +28,7 @@ export const TIMEZONE_OPTIONS: readonly TimezoneOption[] = [
   { city: "Taiohae", offsetMinutes: -570, timezone: "Pacific/Marquesas" },
   { city: "Anchorage", offsetMinutes: -540, timezone: "America/Anchorage" },
   { city: "Los Angeles", offsetMinutes: -480, timezone: "America/Los_Angeles" },
+  { city: "Denver", offsetMinutes: -420, timezone: "America/Denver" },
   { city: "Phoenix", offsetMinutes: -420, timezone: "America/Phoenix" },
   { city: "Mexico City", offsetMinutes: -360, timezone: "America/Mexico_City" },
   { city: "New York", offsetMinutes: -300, timezone: "America/New_York" },
@@ -160,9 +161,6 @@ export function PlanningCenterSetupPanel({
   const [secret, setSecret] = useState("");
   const [serviceTypeId, setServiceTypeId] = useState("");
   const [timezone, setTimezone] = useState(systemTimezone);
-  const [timezoneOffset, setTimezoneOffset] = useState(() => (
-    standardOffsetForTimezone(systemTimezone()) ?? 0
-  ));
   const [titlePreference, setTitlePreference] = useState("");
   const [preferredTime, setPreferredTime] = useState("");
   const [removeSecret, setRemoveSecret] = useState(false);
@@ -179,7 +177,6 @@ export function PlanningCenterSetupPanel({
     setServiceTypeId(settings.settings.planning_center.service_type_id ?? "");
     const savedTimezone = settings.settings.timezone || systemTimezone();
     setTimezone(savedTimezone);
-    setTimezoneOffset(standardOffsetForTimezone(savedTimezone) ?? 0);
     setTitlePreference(settings.settings.planning_center.plan_title_preference ?? "");
     setPreferredTime(settings.settings.planning_center.preferred_service_time ?? "");
   }, [settings]);
@@ -434,18 +431,15 @@ export function PlanningCenterSetupPanel({
               className="w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-slate-100 disabled:opacity-50"
               disabled={busy}
               onChange={(event) => {
-                const offsetMinutes = Number(event.target.value);
-                const selected = TIMEZONE_OPTIONS.find((option) => (
-                  option.offsetMinutes === offsetMinutes
-                ));
-                if (!selected) return;
-                setTimezoneOffset(offsetMinutes);
-                setTimezone(selected.timezone);
+                setTimezone(event.target.value);
               }}
-              value={timezoneOffset}
+              value={timezone}
             >
+              {timezone && !TIMEZONE_OPTIONS.some((option) => option.timezone === timezone) && (
+                <option value={timezone}>{timezone} ({formatOffset(standardOffsetForTimezone(timezone) ?? 0)})</option>
+              )}
               {TIMEZONE_OPTIONS.map((option) => (
-                <option key={option.offsetMinutes} value={option.offsetMinutes}>
+                <option key={option.timezone} value={option.timezone}>
                   {option.city} ({formatOffset(option.offsetMinutes)})
                 </option>
               ))}

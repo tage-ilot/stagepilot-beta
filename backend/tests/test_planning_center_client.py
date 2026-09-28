@@ -4,6 +4,8 @@ import asyncio
 import base64
 import traceback
 from collections.abc import Callable
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -20,6 +22,7 @@ from stagepilot.plugins.planning_center.errors import (
     PlanningCenterTimeoutError,
     PlanningCenterTransportError,
 )
+from stagepilot.plugins.planning_center.models import PlanTimeAttributes, PlanTimeResource
 
 JsonObject = dict[str, object]
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -415,6 +418,43 @@ async def test_manual_connection_method_still_uses_basic_authentication() -> Non
 
     expected = base64.b64encode(b"test-app-id:test-secret").decode("ascii")
     assert requests[0].headers["Authorization"] == f"Basic {expected}"
+
+
+def test_matching_service_times_uses_dst_aware_zone_for_denver() -> None:
+    """Regression for Greptile P1: a plain UTC-7 offset must not resolve to a
+    fixed-offset zone (e.g. America/Phoenix) when the actual region observes DST.
+
+    A service at 06:30 UTC on 2026-07-12 is Saturday 23:30 in Phoenix (no DST,
+    fixed UTC-7) but Sunday 00:30 in Denver (DST-aware, UTC-6 in July). Using the
+    wrong IANA zone silently excludes the service from Sunday's plan.
+    """
+
+    starts_at = datetime(2026, 7, 12, 6, 30, tzinfo=UTC)
+    plan_time = PlanTimeResource(
+        type="PlanTime",
+        id="pt1",
+        attributes=PlanTimeAttributes(
+            starts_at=starts_at,
+            time_type="service",
+        ),
+    )
+    target_sunday = date(2026, 7, 12)
+
+    denver_matches = PlanningCenterClient._matching_service_times(
+        [plan_time],
+        target_sunday,
+        target_sunday,
+        ZoneInfo("America/Denver"),
+    )
+    phoenix_matches = PlanningCenterClient._matching_service_times(
+        [plan_time],
+        target_sunday,
+        target_sunday,
+        ZoneInfo("America/Phoenix"),
+    )
+
+    assert len(denver_matches) == 1
+    assert len(phoenix_matches) == 0
 
 
 def test_oauth_without_an_access_token_is_a_configuration_error() -> None:
