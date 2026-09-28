@@ -82,6 +82,11 @@ describe("a restored custom layout is not overwritten during startup sizing", ()
       configurable: true,
     });
     vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
     Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
       configurable: true,
       get() {
@@ -91,6 +96,7 @@ describe("a restored custom layout is not overwritten during startup sizing", ()
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     durableStorage.clear();
     Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
   });
@@ -105,6 +111,34 @@ describe("a restored custom layout is not overwritten during startup sizing", ()
     render(<DashboardGrid widgets={widgets} />);
     await vi.advanceTimersByTimeAsync(400);
 
+    const restored = loadDashboardLayout(durableStorage);
+    expect(restored.desktop.find((item) => item.id === "service-plan")?.h).toBe(11);
+  });
+
+  it("keeps the restored height after the widget content changes", async () => {
+    const custom = createDefaultDashboardLayout();
+    custom.desktop = custom.desktop.map((item) => (
+      item.id === "service-plan" ? { ...item, h: 11 } : item
+    ));
+    durableStorage.setItem(DASHBOARD_LAYOUT_KEY, JSON.stringify(custom));
+
+    const view = render(<DashboardGrid widgets={widgets} />);
+    await vi.advanceTimersByTimeAsync(400);
+    const servicePlan = screen.getByTestId("dashboard-widget-service-plan")
+      .closest(".grid-stack-item")!;
+    expect(servicePlan.getAttribute("gs-h")).toBe("11");
+
+    view.rerender(<DashboardGrid widgets={{
+      ...widgets,
+      "service-plan": (
+        <div className="widget-autosize-target">
+          Service Plan content with an additional item
+        </div>
+      ),
+    }} />);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(servicePlan.getAttribute("gs-h")).toBe("11");
     const restored = loadDashboardLayout(durableStorage);
     expect(restored.desktop.find((item) => item.id === "service-plan")?.h).toBe(11);
   });

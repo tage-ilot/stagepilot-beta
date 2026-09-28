@@ -145,13 +145,14 @@ export function DashboardGrid({
   const gridElement = useRef<HTMLDivElement>(null);
   const gridRef = useRef<GridStack | null>(null);
   // A valid saved desktop/tablet layout already includes the user's measured
-  // and manually resized geometry. Re-running the startup content-fit pass
-  // would overwrite it a fraction of a second after hydration. Defaults and
-  // migrated layouts still need that first fit, and mobile retains its own
-  // persisted measurement path.
-  const initialSizingDone = useRef(new Set<DashboardLayoutMode>(
-    initialLayout.source === "saved" ? ["desktop", "tablet"] : [],
-  ));
+  // and manually resized geometry. Neither the startup fit nor later content
+  // mutations should overwrite it. Defaults and migrated layouts still need
+  // the first fit, and mobile retains its own persisted measurement path.
+  const savedSizingModes = initialLayout.source === "saved"
+    ? ["desktop", "tablet"] satisfies DashboardLayoutMode[]
+    : [];
+  const initialSizingDone = useRef(new Set<DashboardLayoutMode>(savedSizingModes));
+  const preserveSavedSizing = useRef(new Set<DashboardLayoutMode>(savedSizingModes));
   const layoutRef = useRef(layout);
   const modeRef = useRef(mode);
   const editingRef = useRef(editing);
@@ -369,7 +370,11 @@ export function DashboardGrid({
       timers.delete(target);
       const activeGrid = gridRef.current;
       const node = element.gridstackNode;
-      if (!activeGrid || !node || interactingId === element.getAttribute("gs-id")) return;
+      if (
+        !activeGrid || !node
+        || preserveSavedSizing.current.has(modeRef.current)
+        || interactingId === element.getAttribute("gs-id")
+      ) return;
       const rows = contentRows(target, node);
       if (rows === node.h) return;
       activeGrid.update(element, { h: rows });
@@ -494,6 +499,7 @@ export function DashboardGrid({
   const resetLayout = useCallback(() => {
     commitLayout(createDefaultDashboardLayout());
     initialSizingDone.current.delete(modeRef.current);
+    preserveSavedSizing.current.delete(modeRef.current);
     setAnnouncement("Dashboard layout reset");
     window.requestAnimationFrame(() => {
       const fontsReady = document.fonts?.ready ?? Promise.resolve();
