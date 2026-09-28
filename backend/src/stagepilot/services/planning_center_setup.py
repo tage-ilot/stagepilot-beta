@@ -28,7 +28,7 @@ class PlanningCenterSetupService:
         settings_service: SettingsService,
         *,
         client_factory: PlanningCenterClientFactory | None = None,
-        oauth_service: "PlanningCenterOAuthService | None" = None,
+        oauth_service: PlanningCenterOAuthService | None = None,
     ) -> None:
         self._settings_service = settings_service
         self._client_factory = client_factory or PlanningCenterClient

@@ -15,8 +15,8 @@ from stagepilot.core.config import PlanningCenterSettings, Settings
 from stagepilot.core.settings import MemoryCredentialStore, SettingsService
 from stagepilot.planning_center_oauth import (
     ControlPlaneOAuthClient,
-    OAuthTokenStore,
     OAuthTokens,
+    OAuthTokenStore,
     PlanningCenterOAuthService,
 )
 from stagepilot.plugins.planning_center.models import (
@@ -98,7 +98,9 @@ def oauth_service_with_stored_tokens(
         )
 
     control_plane = ControlPlaneOAuthClient(transport=httpx.MockTransport(handler))
-    oauth = PlanningCenterOAuthService(client_id=CLIENT_ID, tokens=store, control_plane=control_plane)
+    oauth = PlanningCenterOAuthService(
+        client_id=CLIENT_ID, tokens=store, control_plane=control_plane
+    )
     return oauth, store
 
 
