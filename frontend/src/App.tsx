@@ -154,8 +154,11 @@ function StagePilotApp() {
       <>
         <DesktopTitleBar />
         <main className="grid min-h-[calc(100vh-2.25rem)] place-items-center px-6 text-center">
-          <div className="w-full max-w-4xl">
-            <h1 className="select-none font-brand text-[11.25rem] leading-none text-white">StagePilot</h1>
+          <div className="w-full max-w-4xl overflow-hidden px-2">
+            <h1 className="select-none font-brand text-6xl leading-none text-white sm:text-8xl lg:text-[11.25rem]">
+              StagePilot
+            </h1>
+            <span className="loading-spinner-circular loading-spinner-circular--mobile-only" aria-hidden="true" />
             <div
               aria-label="StagePilot startup progress"
               aria-valuemax={100}
