@@ -370,6 +370,9 @@ class PlanningCenterPlugin(Plugin):
         previous_skipped_items = (
             previous_state.service_load.skipped_items if has_actionable_plan else []
         )
+        previous_plan_service_type_id = (
+            previous_state.plan.service_type_id if has_actionable_plan else None
+        )
         retained_target_date = (
             previous_plan_date
             or (previous_candidate_date if len(previous_candidates) >= 2 else None)
@@ -393,6 +396,12 @@ class PlanningCenterPlugin(Plugin):
             service_types = await client.list_service_types()
             api_connected = True
             configured_service_types = self._configured_service_types(service_types)
+            previous_plan_type_still_active = (
+                previous_plan_service_type_id is None
+                or self._settings.service_type_id != ALL_SERVICE_TYPES_ID
+                or previous_plan_service_type_id
+                in {service_type.id for service_type in configured_service_types}
+            )
             result = await self._load_plan_for_service_types(
                 client,
                 configured_service_types,
@@ -486,6 +495,7 @@ class PlanningCenterPlugin(Plugin):
                 search_date,
                 previous_plan_date,
                 previous_skipped_items,
+                previous_plan_type_still_active,
             )
         except Exception:
             detail = "Planning Center plan projection failed unexpectedly."
@@ -516,20 +526,29 @@ class PlanningCenterPlugin(Plugin):
         search_date: date,
         previous_plan_date: date | None,
         previous_skipped_items: list[SkippedServiceItem],
+        previous_plan_type_still_active: bool = True,
     ) -> None:
         search_end_date = search_date + timedelta(days=self._settings.upcoming_lookahead_days)
         if isinstance(result, PlanNotFoundResult):
             if result.target_date != search_date:
                 raise RuntimeError("Planning Center returned an invalid search anchor.")
-            retained_plan = previous_plan_date is not None
-            target_date = previous_plan_date or result.target_date
-            message = (
-                "No current or upcoming Planning Center plan was found through "
-                f"{search_end_date.isoformat()}; keeping the previously loaded plan stale."
-                if retained_plan
-                else "No Planning Center service plan was found from "
-                f"{result.target_date.isoformat()} through {search_end_date.isoformat()}."
-            )
+            retained_plan = previous_plan_date is not None and previous_plan_type_still_active
+            target_date = previous_plan_date if retained_plan else result.target_date
+            if retained_plan:
+                message = (
+                    "No current or upcoming Planning Center plan was found through "
+                    f"{search_end_date.isoformat()}; keeping the previously loaded plan stale."
+                )
+            elif previous_plan_date is not None and not previous_plan_type_still_active:
+                message = (
+                    "The previously loaded Planning Center service's type has been archived "
+                    "and no replacement was found; the service is no longer available."
+                )
+            else:
+                message = (
+                    "No Planning Center service plan was found from "
+                    f"{result.target_date.isoformat()} through {search_end_date.isoformat()}."
+                )
             await self._publish_load_state(
                 ServiceLoadStatus.NOT_FOUND,
                 target_date,

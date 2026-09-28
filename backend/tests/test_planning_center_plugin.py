@@ -558,6 +558,39 @@ async def test_equally_scored_preferences_remain_ambiguous() -> None:
 
 
 @pytest.mark.asyncio
+async def test_archived_cached_plan_type_with_no_replacement_is_not_actionable() -> None:
+    cache = MemoryPlanCacheStore(
+        CachedServicePlan(
+            plan=plan("cached-plan", SERVICE_DATE).model_copy(
+                update={"service_type_id": "7"}
+            ),
+            last_successful_refresh=datetime(2026, 7, 11, 18, tzinfo=UTC),
+        )
+    )
+    client = FakePlanningCenterClient(
+        [not_found_result()],
+        service_types=[
+            service_type("7", "Archived", archived=True),
+            service_type("42", "Weekend Services"),
+        ],
+    )
+    settings = configured_settings().model_copy(update={"service_type_id": ALL_SERVICE_TYPES_ID})
+    harness = await plugin_harness(client, settings=settings, plan_cache_store=cache)
+    try:
+        await harness.plugin.start()
+
+        state = await harness.state_store.snapshot()
+        assert state.plan is None
+        assert state.service_load.status is ServiceLoadStatus.NOT_FOUND
+        assert state.service_load.is_stale is False
+        assert (
+            await harness.state_service.dispatch(ActionName.START_NEXT)
+        ).accepted is False
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
 async def test_planning_center_outage_restores_last_known_good_service() -> None:
     refreshed_at = datetime(2026, 7, 11, 18, tzinfo=UTC)
     cache = MemoryPlanCacheStore(
