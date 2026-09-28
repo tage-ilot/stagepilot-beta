@@ -55,6 +55,7 @@ class Song(BaseModel):
     service_sequence: int | None = Field(default=None, ge=0)
     is_generic: bool = False
     source_song_id: str | None = None
+    description: str | None = Field(default=None, max_length=10_000)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

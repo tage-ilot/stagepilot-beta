@@ -1,5 +1,5 @@
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEventHandler } from "react";
 
 import { LOCAL_CAPABILITIES } from "../access/accessState";
 import lightsIcon from "../assets/lights-icon-purple.png";
@@ -129,10 +129,64 @@ function ActionButton({
   );
 }
 
-function SongRow({ song, current, next }: { song: Song; current: boolean; next: boolean }) {
+const CURSOR_POPOVER_OFFSET = 14;
+const CURSOR_POPOVER_WIDTH = 288;
+
+function useCursorPopover(text: string | null | undefined) {
+  const [visible, setVisible] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const hasText = Boolean(text && text.trim());
+
+  const clampPosition = (clientX: number, clientY: number) => {
+    const maxX = typeof window === "undefined" ? clientX : window.innerWidth - CURSOR_POPOVER_WIDTH - 8;
+    const maxY = typeof window === "undefined" ? clientY : window.innerHeight - 8;
+    return {
+      x: Math.max(8, Math.min(clientX + CURSOR_POPOVER_OFFSET, maxX)),
+      y: Math.max(8, Math.min(clientY + CURSOR_POPOVER_OFFSET, maxY)),
+    };
+  };
+
+  const onMouseMove: MouseEventHandler<HTMLElement> = (event) => {
+    if (!hasText) return;
+    setPosition(clampPosition(event.clientX, event.clientY));
+  };
+
+  const onMouseEnter: MouseEventHandler<HTMLElement> = (event) => {
+    if (!hasText) return;
+    setPosition(clampPosition(event.clientX, event.clientY));
+    setVisible(true);
+  };
+
+  const onMouseLeave = () => setVisible(false);
+
+  return {
+    open: hasText && visible,
+    position,
+    hoverProps: { onMouseEnter, onMouseLeave, onMouseMove },
+  };
+}
+
+function CursorPopover({ open, position, text }: { open: boolean; position: { x: number; y: number }; text: string | null | undefined }) {
+  if (!open || !text) return null;
   return (
-    <li className={`grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/5 px-4 py-3 ${current ? "current-song-row" : ""}`}>
-      <span className={`grid h-7 w-7 place-items-center rounded text-xs font-bold ${current ? "bg-[#ff6238] text-slate-950" : "bg-white/5 text-slate-500"}`}>
+    <div
+      className="pointer-events-none fixed z-50 w-[min(18rem,calc(100vw-1rem))] rounded-lg border border-white/10 bg-slate-950/95 p-3 text-sm text-slate-200 shadow-2xl shadow-black/50 backdrop-blur-xl"
+      role="tooltip"
+      style={{ left: position.x, top: position.y }}
+    >
+      {text}
+    </div>
+  );
+}
+
+function SongRow({ song, current, next }: { song: Song; current: boolean; next: boolean }) {
+  const popover = useCursorPopover(song.description);
+  return (
+    <li
+      className={`group grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/5 px-4 py-3 transition duration-150 ease-out hover:bg-white/[0.04] ${current ? "current-song-row" : ""}`}
+      {...popover.hoverProps}
+    >
+      <span className={`grid h-7 w-7 place-items-center rounded text-xs font-bold transition duration-150 ${current ? "bg-[#ff6238] text-slate-950" : "bg-white/5 text-slate-500 group-hover:bg-white/10"}`}>
         {song.order}
       </span>
       <div className="min-w-0">
@@ -147,14 +201,16 @@ function SongRow({ song, current, next }: { song: Song; current: boolean; next: 
       <span className={`font-mono text-sm font-semibold tabular-nums ${song.duration_seconds ? "text-slate-300" : "text-rose-300"}`}>
         {formatDuration(song.duration_seconds)}
       </span>
+      <CursorPopover open={popover.open} position={popover.position} text={song.description} />
     </li>
   );
 }
 
 function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
+  const popover = useCursorPopover(item.description);
   if (item.reason === "header") {
     return (
-      <li className="border-t border-white/[0.04] bg-black/30 px-4 py-2">
+      <li className="border-t border-white/[0.04] bg-black/30 px-4 py-2 transition duration-150 ease-out hover:bg-black/40">
         <p className="truncate text-xs font-extrabold uppercase tracking-[0.14em] text-slate-400">
           {item.title}
         </p>
@@ -163,7 +219,10 @@ function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
   }
 
   return (
-    <li className="grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/[0.035] bg-black/20 px-4 py-3">
+    <li
+      className="grid grid-cols-[2rem_1fr_auto] items-center gap-3 border-t border-white/[0.035] bg-black/20 px-4 py-3 transition duration-150 ease-out hover:bg-black/30"
+      {...popover.hoverProps}
+    >
       <span className="grid h-7 w-7 place-items-center rounded bg-black/25 text-xs font-bold text-slate-700">•</span>
       <div className="min-w-0">
         <p className="truncate font-medium text-slate-500">{item.title}</p>
@@ -174,6 +233,7 @@ function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
       <span className="font-mono text-sm font-semibold tabular-nums text-slate-600">
         {formatDuration(item.duration_seconds)}
       </span>
+      <CursorPopover open={popover.open} position={popover.position} text={item.description} />
     </li>
   );
 }

@@ -680,6 +680,63 @@ describe("Dashboard Planning Center plan states", () => {
   });
 });
 
+describe("Service plan item hover preview", () => {
+  it("shows a cursor popover with the item description on hover, and hides it on mouse-leave", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(row);
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("does not show a popover for an item without a description", () => {
+    renderDashboard(loadedServiceState);
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+  });
+
+  it("shows a cursor popover for a reference item with a description", () => {
+    renderDashboard({
+      ...loadedServiceState,
+      skipped_items: [
+        {
+          item_id: "item-2",
+          title: "Announcements",
+          description: "Pastor John",
+          item_type: "item",
+          sequence: 30,
+          duration_seconds: 120,
+          reason: "not_song",
+        },
+      ],
+    });
+
+    const row = screen.getAllByText("Pastor John")[0]!.closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(screen.getAllByText("Pastor John").length).toBeGreaterThan(1);
+  });
+});
+
 describe("Dashboard widget layout", () => {
   it("locks layout controls by default and persists keyboard movement in edit mode", async () => {
     window.localStorage.removeItem("stagepilot.dashboard-layout.v2");

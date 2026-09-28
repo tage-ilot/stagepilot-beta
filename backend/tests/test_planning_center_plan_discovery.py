@@ -770,6 +770,7 @@ async def test_song_extraction_orders_linked_and_generic_items_and_reports_skips
                     30,
                     length=281,
                     linked_song_id="song-10",
+                    description="  Key of G  ",
                 ),
                 item_resource("item-header", "Worship", "header", 10),
                 item_resource(
@@ -812,9 +813,12 @@ async def test_song_extraction_orders_linked_and_generic_items_and_reports_skips
     assert generic.duration_seconds is None
     assert zero.duration_seconds == 0
     assert zero.source_song_id == "song-10"
+    assert zero.description is None
+    assert generic.description is None
     assert linked.is_generic is False
     assert linked.source_song_id == "song-10"
     assert linked.duration_seconds == 281
+    assert linked.description == "Key of G"
     assert [item.item_id for item in result.skipped_items] == [
         "item-header",
         "item-media",

@@ -503,6 +503,7 @@ class PlanningCenterClient:
                     service_sequence=attributes.sequence,
                     is_generic=source_song is None,
                     source_song_id=source_song.id if source_song else None,
+                    description=(attributes.description or "").strip() or None,
                 )
             )
         return songs, skipped
