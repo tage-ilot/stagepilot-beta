@@ -25,6 +25,7 @@ function StagePilotApp() {
   const {
     activateConfiguredServices,
     settings: stagePilotSettings,
+    planningCenterStatus,
   } = stagePilot;
   const [backendSupervisor, setBackendSupervisor] = useState<BackendSupervisorStatus | null>(null);
   const [dashboardVisible, setDashboardVisible] = useState(false);
@@ -80,13 +81,38 @@ function StagePilotApp() {
   }, [dashboardVisible, stagePilot.state, startupProgress.complete]);
 
   useEffect(() => {
-    if (!access.capabilities.canActivateServices || !dashboardVisible || !stagePilotSettings || startupServicesActivated.current) return;
+    // Planning Center activation needs `planningCenterStatus` to know whether
+    // an OAuth-only account (no PAT) is connected; that status is fetched
+    // asynchronously by useStagePilot, so it can still be null when this
+    // effect first fires. Without waiting for it, the readiness check in
+    // `activateConfiguredServices` sees neither a PAT nor a resolved OAuth
+    // status, so Planning Center activation is skipped -- and, because this
+    // effect only ever runs once (`startupServicesActivated`), it is never
+    // retried once the status arrives. Hold the one-shot timer until either
+    // Planning Center isn't the configured service source, or its status has
+    // resolved.
+    const planningCenterReady =
+      stagePilotSettings?.settings?.integration_modes?.service_source !== "planning_center"
+      || planningCenterStatus !== null;
+    if (
+      !access.capabilities.canActivateServices
+      || !dashboardVisible
+      || !stagePilotSettings
+      || !planningCenterReady
+      || startupServicesActivated.current
+    ) return;
     const activate = window.setTimeout(() => {
       startupServicesActivated.current = true;
       void activateConfiguredServices();
     }, 1_000);
     return () => window.clearTimeout(activate);
-  }, [access.capabilities.canActivateServices, activateConfiguredServices, dashboardVisible, stagePilotSettings]);
+  }, [
+    access.capabilities.canActivateServices,
+    activateConfiguredServices,
+    dashboardVisible,
+    planningCenterStatus,
+    stagePilotSettings,
+  ]);
 
   if (!stagePilot.state || !dashboardVisible) {
     const retryBackend = async () => {

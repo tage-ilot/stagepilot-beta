@@ -508,6 +508,19 @@ class SettingsService:
         self._access_token_provider = provider
         self._runtime = self._resolve(self._persistent, self._secret)
 
+    def refresh_access_token(self) -> None:
+        """Re-resolve the cached runtime settings from the access token provider.
+
+        `effective_runtime_settings()` returns a cached `Settings` snapshot, so
+        an OAuth access token refreshed in the background (or just before an
+        on-demand request) is not picked up automatically. Callers that just
+        forced a token refresh must call this before reading runtime settings
+        again, otherwise they observe the stale cached (possibly expired)
+        access token.
+        """
+
+        self._runtime = self._resolve(self._persistent, self._secret)
+
     def _access_token(self, settings: PersistentSettings | None = None) -> str | None:
         current = settings or self._persistent
         if current.planning_center.connection_method != "oauth":
