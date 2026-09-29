@@ -45,9 +45,7 @@ def _dummy_bootstrap() -> DesktopBootstrapStore:
 def _recording_sender() -> tuple[list[dict[str, object]], AlertSender]:
     calls: list[dict[str, object]] = []
 
-    def sender(
-        bootstrap: DesktopBootstrapStore, payload: dict[str, object]
-    ) -> bool:
+    def sender(bootstrap: DesktopBootstrapStore, payload: dict[str, object]) -> bool:
         calls.append(payload)
         return True
 

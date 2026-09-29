@@ -62,9 +62,7 @@ class AlertResult:
 
 
 class AlertSender(Protocol):
-    def __call__(
-        self, bootstrap: DesktopBootstrapStore, payload: dict[str, object]
-    ) -> bool: ...
+    def __call__(self, bootstrap: DesktopBootstrapStore, payload: dict[str, object]) -> bool: ...
 
 
 def send_control_plane_alert(
@@ -99,8 +97,7 @@ def send_control_plane_alert(
         )
         try:
             response = http.post(
-                f"{active.control_plane_origin}/v1/installations/"
-                f"{active.installation_id}/alerts",
+                f"{active.control_plane_origin}/v1/installations/{active.installation_id}/alerts",
                 headers={"authorization": f"Bearer {credential}"},
                 json=payload,
             )
