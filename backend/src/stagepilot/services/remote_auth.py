@@ -292,6 +292,18 @@ class RemoteStore:
                 return None
             return RemoteSession(row["id"], row["email"], RemoteRole(row["role"]), row["expires"])
 
+    def reset_login_attempts(self) -> None:
+        """Clear the login throttle counters for this installation.
+
+        Idempotent and safe to run when no counters exist: it only drops rows
+        from `attempts` (the same table `_throttle()` maintains and prunes),
+        never users or sessions. Applied in response to an operator-queued
+        `rate_limit_reset` action from the control plane.
+        """
+
+        with self._db() as db:
+            db.execute("DELETE FROM attempts")
+
     def revoke(self, token: str, *, all_sessions: bool = False) -> None:
         with self._db() as db:
             if all_sessions:

@@ -134,7 +134,13 @@ All routes except health and enrollment require an authorization bearer.
 | `POST /v1/installations/enroll` | public beta app | Idempotent transparent enrollment; body `{nonce}` |
 | `GET /v1/admin/metrics` | administrator | Sanitized aggregate counters only |
 | `POST /v1/admin/installations/:id/revoke` | administrator | Permanent credential and resource revocation |
-| `GET /v1/installations/:id/status` | matching installation | Sanitized lifecycle state |
+| `GET /v1/installations/:id/status` | matching installation | Sanitized lifecycle state plus any operator-queued `pendingActions` |
+| `POST /v1/installations/:id/rate-limit/reset` | administrator | Queues a `rate_limit_reset` pending action for that one installation |
+| `POST /v1/installations/:id/pending-actions/:actionId/ack` | matching installation | Clears a pending action after it was applied locally |
+| `POST /v1/installations/:id/approval-requests` | matching installation | Raises an operator sign-off request; body `{reason}` |
+| `GET /v1/installations/:id/approval-requests` | matching installation | Polls its own requests for approved/denied outcomes |
+| `GET /v1/admin/approval-requests` | administrator | Lists requests (`?status=pending` by default) |
+| `POST /v1/admin/approval-requests/:requestId/decide` | administrator | Final approve/deny; body `{approved}` |
 | `POST /v1/installations/:id/provision` | matching installation | Idempotent exact-generation provision; body `{generation}` |
 | `POST /v1/installations/:id/disable` | matching installation | Fail-closed cleanup |
 | `POST /v1/installations/:id/reconcile` | matching installation | Resume persisted desired lifecycle |
