@@ -1236,6 +1236,60 @@ describe('fleet alert ingestion and admin endpoints', () => {
     const response = await registry.fetch(request('/v1/admin/alerts/does-not-exist/acknowledge', 'POST', adminToken));
     expect(response.status).toBe(404);
   });
+
+  it('carries the installation\'s current location onto the alert, and updates on the next forward after a check-in', async () => {
+    const installation = await enroll(registry, 'alert-geo-0001');
+    const credential = String(installation.installationCredential);
+
+    await registry.fetch(requestWithCf(
+      installationPath(installation, 'status'), 'GET', credential, undefined,
+      { city: 'Austin', region: 'Texas', country: 'US' },
+    ));
+
+    const created = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', credential, alertBody(),
+    ));
+    expect(created.status).toBe(201);
+    const firstBody = await json(created);
+    expect(firstBody.location).toBe('Austin');
+
+    const listAfterFirst = await registry.fetch(request('/v1/admin/alerts', 'GET', adminToken));
+    const listAfterFirstBody = await json(listAfterFirst) as { alerts: Record<string, unknown>[] };
+    expect(listAfterFirstBody.alerts[0]?.location).toBe('Austin');
+
+    // Installation moves; a later check-in updates its known location, but
+    // the already-stored alert record is not retroactively rewritten.
+    await registry.fetch(requestWithCf(
+      installationPath(installation, 'reconcile'), 'POST', credential, undefined,
+      { city: 'Denver', region: 'Colorado', country: 'US' },
+    ));
+    const listAfterMove = await registry.fetch(request('/v1/admin/alerts', 'GET', adminToken));
+    const listAfterMoveBody = await json(listAfterMove) as { alerts: Record<string, unknown>[] };
+    expect(listAfterMoveBody.alerts[0]?.location).toBe('Austin');
+
+    // The NEXT forwarded/re-forwarded occurrence of that same alert picks
+    // up the newly-current location.
+    const updated = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', credential,
+      alertBody({ count: 2, last_seen: '2026-01-01T00:20:00.000Z' }),
+    ));
+    expect(updated.status).toBe(200);
+    const updatedBody = await json(updated);
+    expect(updatedBody.location).toBe('Denver');
+
+    const listAfterUpdate = await registry.fetch(request('/v1/admin/alerts', 'GET', adminToken));
+    const listAfterUpdateBody = await json(listAfterUpdate) as { alerts: Record<string, unknown>[] };
+    expect(listAfterUpdateBody.alerts[0]?.location).toBe('Denver');
+  });
+
+  it('falls back to "Unknown" for an alert from an installation with no known location', async () => {
+    const installation = await enroll(registry, 'alert-geo-unknown-0001');
+    const created = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential), alertBody(),
+    ));
+    expect(created.status).toBe(201);
+    expect((await json(created)).location).toBe('Unknown');
+  });
 });
 
 describe('fleet city list (edge geolocation, never raw IP)', () => {

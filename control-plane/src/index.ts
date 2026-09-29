@@ -86,6 +86,12 @@ interface AlertRecord {
   status: 'open' | 'acknowledged';
   createdAt: string;
   updatedAt: string;
+  // Display-ready location string, e.g. "Austin, TX" or "Unknown", copied
+  // from the installation's lastCity/lastRegion/lastCountry (Cloudflare
+  // edge geolocation) at the time the alert was ingested/re-forwarded. Not
+  // retroactively updated on older records -- matches "current state at
+  // time of event" semantics used elsewhere in this system.
+  location: string;
 }
 
 // Fleet admin action queued for one installation. The Worker cannot reach
@@ -345,6 +351,13 @@ function publicInstallation(installation: Installation): Record<string, unknown>
   };
 }
 
+function formatInstallationLocation(installation: Installation): string {
+  return installation.lastCity
+    ?? installation.lastRegion
+    ?? installation.lastCountry
+    ?? 'Unknown';
+}
+
 function publicAlert(alert: AlertRecord): Record<string, unknown> {
   return {
     alertId: alert.id,
@@ -359,6 +372,7 @@ function publicAlert(alert: AlertRecord): Record<string, unknown> {
     status: alert.status,
     createdAt: alert.createdAt,
     updatedAt: alert.updatedAt,
+    location: alert.location,
   };
 }
 
@@ -1315,6 +1329,7 @@ export class Registry {
     const key = `alert:${installation.id}:${category}:${hash}`;
     const now = new Date().toISOString();
     const existing = await this.state.storage.get<AlertRecord>(key);
+    const location = formatInstallationLocation(installation);
     const record: AlertRecord = existing
       ? {
         ...existing,
@@ -1328,6 +1343,7 @@ export class Registry {
         // notify fresh" semantics.
         status: 'open',
         updatedAt: now,
+        location,
       }
       : {
         id: `${installation.id}:${category}:${hash}`,
@@ -1342,6 +1358,7 @@ export class Registry {
         status: 'open',
         createdAt: now,
         updatedAt: now,
+        location,
       };
     await this.state.storage.put(key, record);
     return reply(publicAlert(record), existing ? 200 : 201);
@@ -1358,10 +1375,7 @@ export class Registry {
     const counts = new Map<string, number>();
     for (const installation of rows.values()) {
       if (installation.revoked) continue;
-      const location = installation.lastCity
-        ?? installation.lastRegion
-        ?? installation.lastCountry
-        ?? 'Unknown';
+      const location = formatInstallationLocation(installation);
       counts.set(location, (counts.get(location) ?? 0) + 1);
     }
     const cities = [...counts.entries()]

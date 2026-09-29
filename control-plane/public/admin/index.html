@@ -382,7 +382,7 @@
       row.appendChild(dot);
 
       var main = el('div', 'row-main');
-      main.appendChild(el('div', 'row-title', categoryLabel(alert.category) + ' — ' + alert.installationId));
+      main.appendChild(el('div', 'row-title', categoryLabel(alert.category) + ' — ' + alert.installationId + (alert.location ? ' · ' + alert.location : '')));
       main.appendChild(el('div', 'row-sub', alert.message));
       main.appendChild(el('div', 'row-meta', timeAgo(alert.lastSeen) + (alert.count > 1 ? ' · seen ' + alert.count + ' times' : '')));
 
