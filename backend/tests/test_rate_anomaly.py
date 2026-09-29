@@ -98,9 +98,7 @@ def test_event_under_threshold_does_not_alert(tmp_path: Path) -> None:
     rate_store, alert_store = _stores(tmp_path, clock)
 
     for _ in range(9):
-        record_event(
-            "update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store)
 
     assert alert_store.list_open() == []
 
@@ -131,9 +129,7 @@ def test_event_over_threshold_relies_on_cooldown_not_new_alerts(tmp_path: Path) 
     rate_store, alert_store = _stores(tmp_path, clock)
 
     for _ in range(15):
-        record_event(
-            "update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store)
 
     # Still exactly one open alert row (not one per trip): alert_critical's
     # own 15 minute cooldown/dedup engine absorbed the repeated threshold
@@ -149,9 +145,7 @@ def test_window_rolls_over_after_an_hour(tmp_path: Path) -> None:
     rate_store, alert_store = _stores(tmp_path, clock)
 
     for _ in range(9):
-        record_event(
-            "update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store)
     assert alert_store.list_open() == []
 
     clock.advance(WINDOW_SECONDS + 1)
@@ -170,13 +164,9 @@ def test_different_source_keys_tracked_independently(tmp_path: Path) -> None:
     rate_store, alert_store = _stores(tmp_path, clock)
 
     for _ in range(10):
-        record_event(
-            "update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store)
     for _ in range(3):
-        record_event(
-            "update_check", "198.51.100.9", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "198.51.100.9", rate_store=rate_store, alert_store=alert_store)
 
     open_alerts = alert_store.list_open()
     assert len(open_alerts) == 1
@@ -188,9 +178,7 @@ def test_different_event_types_use_own_threshold(tmp_path: Path) -> None:
     rate_store, alert_store = _stores(tmp_path, clock)
 
     for _ in range(10):
-        record_event(
-            "update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
-        )
+        record_event("update_check", "203.0.113.5", rate_store=rate_store, alert_store=alert_store)
     for _ in range(10):
         record_event(
             "remote_login_attempt", "203.0.113.5", rate_store=rate_store, alert_store=alert_store
