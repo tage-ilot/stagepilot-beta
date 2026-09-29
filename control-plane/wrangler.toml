@@ -30,6 +30,10 @@ new_sqlite_classes = ["Registry"]
 # GITHUB_RELEASE_TOKEN.
 # Do not add deployment-specific placeholders or secret values to this file.
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 [observability]
 enabled = true
 

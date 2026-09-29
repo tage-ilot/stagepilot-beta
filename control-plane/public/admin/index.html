@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>StagePilot Fleet Admin</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #090d12;
+    --text: #f8f4ec;
+    --muted: #9aa9bb;
+    --quiet: #718096;
+    --accent: #ff6238;
+    --success: #42dda4;
+    --warning: #f6c453;
+    --danger: #fb7185;
+    --info: #7dd3fc;
+    --panel-shadow: 5px 6px 0 rgb(3 7 12 / 0.32), 0 18px 48px rgb(0 0 0 / 0.24);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+  }
+
+  header.top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  header.top h1 {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  header.top .sub {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .token-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+
+  .token-bar input {
+    flex: 1;
+    min-width: 0;
+    background: #10161d;
+    border: 1px solid #1e2733;
+    border-radius: 8px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    color: var(--text);
+    background: #1a232e;
+  }
+
+  button:hover { background: #222e3b; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  button.primary {
+    background: var(--accent);
+    color: #1a0a04;
+  }
+  button.primary:hover { background: #ff7550; }
+
+  button.danger-btn {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid rgb(251 113 133 / 0.4);
+  }
+
+  button.ghost {
+    background: transparent;
+    border: 1px solid #1e2733;
+    color: var(--muted);
+  }
+
+  .summary-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: #10161d;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--panel-shadow);
+  }
+
+  .stat-card .num {
+    font-size: 28px;
+    font-weight: 700;
+  }
+
+  .stat-card .label {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  section.panel {
+    background: #0d1219;
+    border-radius: 12px;
+    box-shadow: var(--panel-shadow);
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+
+  section.panel h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+    padding: 14px 16px;
+    border-bottom: 1px solid #1a222c;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #151b23;
+  }
+
+  .row:last-child { border-bottom: none; }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .dot.warning { background: var(--warning); }
+  .dot.critical { background: var(--danger); }
+
+  .row-main { flex: 1; min-width: 0; }
+
+  .row-title {
+    font-weight: 600;
+    font-size: 13.5px;
+  }
+
+  .row-sub {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  .row-meta {
+    color: var(--quiet);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
+  details.tech {
+    margin-top: 6px;
+  }
+  details.tech summary {
+    color: var(--quiet);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  details.tech pre {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .row-actions { flex: none; display: flex; gap: 8px; }
+
+  .empty {
+    padding: 24px 16px;
+    color: var(--quiet);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .status-line {
+    font-size: 12px;
+    color: var(--quiet);
+    margin-bottom: 12px;
+    min-height: 16px;
+  }
+  .status-line.error { color: var(--danger); }
+  .status-line.ok { color: var(--success); }
+
+  .badge-info { color: var(--info); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>StagePilot Fleet Admin</h1>
+      <div class="sub">Alerts and requests across every installation</div>
+    </div>
+    <button id="refresh-btn" class="ghost">Refresh</button>
+  </header>
+
+  <div class="token-bar">
+    <input id="token-input" type="password" placeholder="Admin token" autocomplete="off" />
+    <button id="save-token" class="primary">Connect</button>
+  </div>
+  <div id="status-line" class="status-line"></div>
+
+  <div class="summary-row">
+    <div class="stat-card">
+      <div class="num" id="stat-installations">–</div>
+      <div class="label">Installations</div>
+    </div>
+    <div class="stat-card">
+      <div class="num" id="stat-alerts">–</div>
+      <div class="label">Open alerts</div>
+    </div>
+    <div class="stat-card">
+      <div class="num" id="stat-requests">–</div>
+      <div class="label">New requests</div>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Alerts</h2>
+    <div id="alerts-list"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Requests</h2>
+    <div id="requests-list"></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var TOKEN_KEY = 'stagepilot_admin_token';
+  var els = {
+    tokenInput: document.getElementById('token-input'),
+    saveToken: document.getElementById('save-token'),
+    refreshBtn: document.getElementById('refresh-btn'),
+    statusLine: document.getElementById('status-line'),
+    statInstallations: document.getElementById('stat-installations'),
+    statAlerts: document.getElementById('stat-alerts'),
+    statRequests: document.getElementById('stat-requests'),
+    alertsList: document.getElementById('alerts-list'),
+    requestsList: document.getElementById('requests-list'),
+  };
+
+  var CATEGORY_LABELS = {
+    rate_limit_exhausted: 'Rate limit hit',
+    oauth_disconnected: 'Connection lost',
+    heartbeat_stale: 'Went quiet',
+  };
+
+  function categoryLabel(category) {
+    if (CATEGORY_LABELS[category]) return CATEGORY_LABELS[category];
+    return category.replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+  }
+
+  function timeAgo(iso) {
+    var then = new Date(iso).getTime();
+    if (isNaN(then)) return '';
+    var diffSec = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (diffSec < 60) return 'just now';
+    var diffMin = Math.round(diffSec / 60);
+    if (diffMin < 60) return diffMin + (diffMin === 1 ? ' minute ago' : ' minutes ago');
+    var diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return diffHr + (diffHr === 1 ? ' hour ago' : ' hours ago');
+    var diffDay = Math.round(diffHr / 24);
+    return diffDay + (diffDay === 1 ? ' day ago' : ' days ago');
+  }
+
+  function getToken() {
+    return localStorage.getItem(TOKEN_KEY) || '';
+  }
+
+  function setToken(t) {
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else localStorage.removeItem(TOKEN_KEY);
+  }
+
+  function setStatus(msg, kind) {
+    els.statusLine.textContent = msg || '';
+    els.statusLine.className = 'status-line' + (kind ? ' ' + kind : '');
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    headers.Authorization = 'Bearer ' + getToken();
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    return fetch(path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    }).then(function (res) {
+      if (res.status === 401) {
+        setStatus('Wrong token, or it expired. Enter it again.', 'error');
+        throw new Error('unauthorized');
+      }
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error((data && data.error) || 'request failed');
+        return data;
+      });
+    });
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function renderEmpty(container, text) {
+    container.innerHTML = '';
+    container.appendChild(el('div', 'empty', text));
+  }
+
+  function renderAlerts(alerts) {
+    els.alertsList.innerHTML = '';
+    if (!alerts.length) return renderEmpty(els.alertsList, 'No open alerts. Everything looks fine.');
+    alerts.forEach(function (alert) {
+      var row = el('div', 'row');
+      row.dataset.alertId = alert.alertId;
+
+      var dot = el('div', 'dot ' + (alert.severity === 'critical' ? 'critical' : 'warning'));
+      row.appendChild(dot);
+
+      var main = el('div', 'row-main');
+      main.appendChild(el('div', 'row-title', categoryLabel(alert.category) + ' — ' + alert.installationId));
+      main.appendChild(el('div', 'row-sub', alert.message));
+      main.appendChild(el('div', 'row-meta', timeAgo(alert.lastSeen) + (alert.count > 1 ? ' · seen ' + alert.count + ' times' : '')));
+
+      var details = document.createElement('details');
+      details.className = 'tech';
+      var summary = document.createElement('summary');
+      summary.textContent = 'Details';
+      details.appendChild(summary);
+      var pre = document.createElement('pre');
+      pre.textContent = 'category: ' + alert.category + '\nsubject: ' + alert.subject + '\nfirst seen: ' + alert.firstSeen + '\nlast seen: ' + alert.lastSeen;
+      details.appendChild(pre);
+      main.appendChild(details);
+
+      row.appendChild(main);
+
+      var actions = el('div', 'row-actions');
+      var actionBtn = el('button', 'primary', alert.category === 'rate_limit_exhausted' ? 'Reset limit' : 'Mark done');
+      actionBtn.addEventListener('click', function () { handleAlertAction(alert, row, actionBtn); });
+      actions.appendChild(actionBtn);
+      row.appendChild(actions);
+
+      els.alertsList.appendChild(row);
+    });
+  }
+
+  function handleAlertAction(alert, row, btn) {
+    btn.disabled = true;
+    var task;
+    if (alert.category === 'rate_limit_exhausted') {
+      task = api('/v1/installations/' + encodeURIComponent(alert.installationId) + '/rate-limit/reset', { method: 'POST' })
+        .then(function () { return api('/v1/admin/alerts/' + encodeURIComponent(alert.alertId) + '/acknowledge', { method: 'POST' }); });
+    } else {
+      task = api('/v1/admin/alerts/' + encodeURIComponent(alert.alertId) + '/acknowledge', { method: 'POST' });
+    }
+    task.then(function () {
+      row.remove();
+      setStatus('Done.', 'ok');
+      refreshCounts();
+    }).catch(function (err) {
+      btn.disabled = false;
+      setStatus('Could not do that: ' + err.message, 'error');
+    });
+  }
+
+  function renderRequests(requests) {
+    els.requestsList.innerHTML = '';
+    if (!requests.length) return renderEmpty(els.requestsList, 'No new requests.');
+    requests.forEach(function (reqItem) {
+      var row = el('div', 'row');
+      row.dataset.requestId = reqItem.requestId;
+
+      var main = el('div', 'row-main');
+      main.appendChild(el('div', 'row-title', 'New request — ' + reqItem.installationId));
+      main.appendChild(el('div', 'row-sub', reqItem.reason));
+      main.appendChild(el('div', 'row-meta', timeAgo(reqItem.createdAt)));
+      row.appendChild(main);
+
+      var actions = el('div', 'row-actions');
+      var approveBtn = el('button', 'primary', 'Approve');
+      var denyBtn = el('button', 'danger-btn', 'Deny');
+      approveBtn.addEventListener('click', function () { handleDecision(reqItem, row, true, [approveBtn, denyBtn]); });
+      denyBtn.addEventListener('click', function () { handleDecision(reqItem, row, false, [approveBtn, denyBtn]); });
+      actions.appendChild(approveBtn);
+      actions.appendChild(denyBtn);
+      row.appendChild(actions);
+
+      els.requestsList.appendChild(row);
+    });
+  }
+
+  function handleDecision(reqItem, row, approved, btns) {
+    btns.forEach(function (b) { b.disabled = true; });
+    api('/v1/admin/approval-requests/' + encodeURIComponent(reqItem.requestId) + '/decide', {
+      method: 'POST',
+      body: { approved: approved },
+    }).then(function () {
+      row.remove();
+      setStatus('Done.', 'ok');
+      refreshCounts();
+    }).catch(function (err) {
+      btns.forEach(function (b) { b.disabled = false; });
+      setStatus('Could not do that: ' + err.message, 'error');
+    });
+  }
+
+  function refreshCounts() {
+    var alertsCount = els.alertsList.querySelectorAll('.row').length;
+    var requestsCount = els.requestsList.querySelectorAll('.row').length;
+    els.statAlerts.textContent = String(alertsCount);
+    els.statRequests.textContent = String(requestsCount);
+  }
+
+  function loadAll() {
+    if (!getToken()) {
+      setStatus('Enter your admin token to load the fleet.', null);
+      return;
+    }
+    setStatus('Loading…', null);
+    Promise.all([
+      api('/v1/admin/metrics'),
+      api('/v1/admin/alerts?status=open'),
+      api('/v1/admin/approval-requests?status=pending'),
+    ]).then(function (results) {
+      var metrics = results[0];
+      var alertsData = results[1];
+      var requestsData = results[2];
+      els.statInstallations.textContent = String(metrics.activeInstallations != null ? metrics.activeInstallations : '–');
+      renderAlerts(alertsData.alerts || []);
+      renderRequests(requestsData.requests || []);
+      refreshCounts();
+      setStatus('Up to date.', 'ok');
+    }).catch(function (err) {
+      if (err.message !== 'unauthorized') setStatus('Could not load: ' + err.message, 'error');
+    });
+  }
+
+  els.saveToken.addEventListener('click', function () {
+    setToken(els.tokenInput.value.trim());
+    els.tokenInput.value = '';
+    loadAll();
+  });
+
+  els.tokenInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') els.saveToken.click();
+  });
+
+  els.refreshBtn.addEventListener('click', loadAll);
+
+  if (getToken()) loadAll();
+  else setStatus('Enter your admin token to load the fleet.', null);
+})();
+</script>
+</body>
+</html>
