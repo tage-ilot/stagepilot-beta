@@ -27,6 +27,9 @@ interface Env {
   // promoted to stable or opened to real friend-beta users -- do not ship
   // the 1-hour window as the permanent default.
   ENROLLMENT_WINDOW_SECONDS?: string;
+  // Static asset binding for the fleet admin panel (control-plane/public),
+  // configured via the [assets] block in wrangler.toml.
+  ASSETS?: Fetcher;
 }
 
 type Phase = 'disabled' | 'enabling' | 'provisioned' | 'revoking';
@@ -1652,6 +1655,16 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') return reply({ status: 'ok' });
+    // Fleet admin panel: a static page served straight from the assets
+    // binding, kept separate from the Registry Durable Object (which only
+    // ever serves the JSON /v1/... API the panel's own JS calls).
+    if (request.method === 'GET' && (url.pathname === '/admin' || url.pathname === '/admin/')) {
+      const assetUrl = new URL('/admin/index.html', url);
+      return env.ASSETS ? await env.ASSETS.fetch(new Request(assetUrl.toString(), request)) : reply({ error: 'not found' }, 404);
+    }
+    if (request.method === 'GET' && url.pathname.startsWith('/admin/') && env.ASSETS) {
+      return await env.ASSETS.fetch(request);
+    }
     const id = env.REGISTRY.idFromName('stagepilot-private-beta-v1');
     return env.REGISTRY.get(id).fetch(request);
   },
