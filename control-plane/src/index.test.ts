@@ -1076,6 +1076,154 @@ describe('private-beta control plane', () => {
   });
 });
 
+describe('fleet alert ingestion and admin endpoints', () => {
+  let storage: MemoryStorage;
+  let provider: FakeCloudflare;
+  let registry: Registry;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    provider = new FakeCloudflare();
+    vi.stubGlobal('fetch', provider.fetch);
+    registry = new Registry({ storage } as unknown as DurableObjectState, env as never);
+  });
+
+  function alertBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      category: 'sync_failure',
+      subject: 'planning_center',
+      message: 'Planning Center sync failed 5 times',
+      severity: 'critical',
+      first_seen: '2026-01-01T00:00:00.000Z',
+      last_seen: '2026-01-01T00:10:00.000Z',
+      count: 5,
+      ...overrides,
+    };
+  }
+
+  it('rejects an alert POST for an installation that does not exist', async () => {
+    const response = await registry.fetch(request(
+      '/v1/installations/deadbeef/alerts', 'POST', 'irrelevant-credential', alertBody(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects an alert POST with the wrong installation credential', async () => {
+    const installation = await enroll(registry, 'alert-auth-0001');
+    const response = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', 'not-the-real-credential', alertBody(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects an alert POST for a revoked installation', async () => {
+    const installation = await enroll(registry, 'alert-auth-0002');
+    const revoke = await registry.fetch(request(
+      installationPath(installation, 'revoke'), 'POST', String(installation.installationCredential),
+    ));
+    expect(revoke.status).toBe(200);
+    const response = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential), alertBody(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects a malformed alert body', async () => {
+    const installation = await enroll(registry, 'alert-invalid-0001');
+    const response = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential),
+      alertBody({ severity: 'not-a-severity' }),
+    ));
+    expect(response.status).toBe(400);
+  });
+
+  it('accepts and stores a valid alert, then updates it in place on re-forward', async () => {
+    const installation = await enroll(registry, 'alert-store-0001');
+    const created = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential), alertBody(),
+    ));
+    expect(created.status).toBe(201);
+    const firstBody = await json(created);
+    expect(firstBody.status).toBe('open');
+    expect(firstBody.installationId).toBe(installation.installationId);
+
+    const updated = await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential),
+      alertBody({ count: 8, last_seen: '2026-01-01T00:20:00.000Z' }),
+    ));
+    expect(updated.status).toBe(200);
+    const secondBody = await json(updated);
+    expect(secondBody.alertId).toBe(firstBody.alertId);
+    expect(secondBody.count).toBe(8);
+  });
+
+  it('requires the admin bearer token for GET /v1/admin/alerts, matching /v1/admin/metrics', async () => {
+    const missing = await registry.fetch(request('/v1/admin/alerts', 'GET'));
+    expect(missing.status).toBe(401);
+    const wrong = await registry.fetch(request('/v1/admin/alerts', 'GET', 'wrong-token-not-admin-at-all-x'));
+    expect(wrong.status).toBe(401);
+    const authorized = await registry.fetch(request('/v1/admin/alerts', 'GET', adminToken));
+    expect(authorized.status).toBe(200);
+  });
+
+  it('requires the admin bearer token for the acknowledge route', async () => {
+    const installation = await enroll(registry, 'alert-ack-auth-0001');
+    await registry.fetch(request(
+      installationPath(installation, 'alerts'), 'POST', String(installation.installationCredential), alertBody(),
+    ));
+    const response = await registry.fetch(request('/v1/admin/alerts/whatever/acknowledge', 'POST'));
+    expect(response.status).toBe(401);
+  });
+
+  it('lists alerts from multiple installations without mixing attribution, supports status filter, and acknowledge flips status', async () => {
+    const installationA = await enroll(registry, 'alert-fleet-a-0001');
+    const installationB = await enroll(registry, 'alert-fleet-b-0001');
+    await registry.fetch(request(
+      installationPath(installationA, 'alerts'), 'POST', String(installationA.installationCredential),
+      alertBody({ category: 'sync_failure', subject: 'planning_center' }),
+    ));
+    const bAlertResponse = await registry.fetch(request(
+      installationPath(installationB, 'alerts'), 'POST', String(installationB.installationCredential),
+      alertBody({ category: 'disk_space', subject: 'recordings_volume', message: 'Disk nearly full' }),
+    ));
+    const bAlert = await json(bAlertResponse);
+
+    const listAll = await registry.fetch(request('/v1/admin/alerts', 'GET', adminToken));
+    expect(listAll.status).toBe(200);
+    const allBody = await json(listAll) as { alerts: Record<string, unknown>[] };
+    expect(allBody.alerts).toHaveLength(2);
+    const byInstallation = new Map(allBody.alerts.map((alert) => [alert.installationId, alert]));
+    expect(byInstallation.get(String(installationA.installationId))?.category).toBe('sync_failure');
+    expect(byInstallation.get(String(installationB.installationId))?.category).toBe('disk_space');
+
+    const openOnly = await registry.fetch(request('/v1/admin/alerts?status=open', 'GET', adminToken));
+    expect((await json(openOnly) as { alerts: unknown[] }).alerts).toHaveLength(2);
+    const acknowledgedOnly = await registry.fetch(request('/v1/admin/alerts?status=acknowledged', 'GET', adminToken));
+    expect((await json(acknowledgedOnly) as { alerts: unknown[] }).alerts).toHaveLength(0);
+
+    const acknowledge = await registry.fetch(request(
+      `/v1/admin/alerts/${String(bAlert.alertId)}/acknowledge`, 'POST', adminToken,
+    ));
+    expect(acknowledge.status).toBe(200);
+    expect((await json(acknowledge)).status).toBe('acknowledged');
+
+    const afterAckOpen = await registry.fetch(request('/v1/admin/alerts?status=open', 'GET', adminToken));
+    const afterAckOpenBody = await json(afterAckOpen) as { alerts: Record<string, unknown>[] };
+    expect(afterAckOpenBody.alerts).toHaveLength(1);
+    expect(afterAckOpenBody.alerts[0]?.installationId).toBe(installationA.installationId);
+
+    const afterAckAcked = await registry.fetch(request('/v1/admin/alerts?status=acknowledged', 'GET', adminToken));
+    const afterAckAckedBody = await json(afterAckAcked) as { alerts: Record<string, unknown>[] };
+    expect(afterAckAckedBody.alerts).toHaveLength(1);
+    expect(afterAckAckedBody.alerts[0]?.installationId).toBe(installationB.installationId);
+  });
+
+  it('404s acknowledging an unknown alert id', async () => {
+    const response = await registry.fetch(request('/v1/admin/alerts/does-not-exist/acknowledge', 'POST', adminToken));
+    expect(response.status).toBe(404);
+  });
+});
+
 describe('planning center OAuth routes', () => {
   let storage: MemoryStorage;
   let provider: FakeCloudflare;
