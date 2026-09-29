@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.1.104-beta.18] - 2026-09-29
+
+### Added
+
+- Fleet alerting infrastructure, end to end. The backend now has a critical
+  alert store that deduplicates repeated alerts and holds a 15-minute cooldown
+  per alert key, so a persistent fault notifies once instead of flooding
+  (#57), plus a sliding-window rate-anomaly watcher with per-event-type
+  thresholds that raises an alert when an event type spikes abnormally (#58).
+  Critical alerts are forwarded from the installation to the fleet control
+  plane with serialized timestamps (#61).
+- Fleet control plane alert handling: an ingestion endpoint that accepts
+  installation alerts, plus admin endpoints to list and acknowledge them
+  (#60), and admin actions to reset an installation's rate limit and to
+  request approval from it (#62).
+- A static, StagePilot-styled fleet admin panel served by the control plane
+  for reviewing alerts and driving those admin actions (#63).
+- A fleet city list derived from edge geolocation at the control-plane
+  boundary. Raw client IP addresses are never stored or returned — only the
+  coarse city/region derived at the edge (#66). Alerts in both the admin list
+  and the admin panel now show which installation location they came from
+  (#67).
+
+### Changed
+
+- Service Plan hover-to-preview now shows a title heading on the preview
+  card, and the hover-intent delay moved to the widget level at 0.5s, so
+  sweeping the pointer across several items no longer flickers a preview open
+  for each one (#59).
+
+### Fixed
+
+- Planning Center OAuth: completing the OAuth connect flow no longer leaves
+  the dashboard stuck in `connection:error` until the user manually walked
+  through the reconnect steps. The connection is now activated as part of the
+  OAuth callback, across all Planning Center service types (#56).
+- The loading bar's blue edge mark is replaced with a thin line in the
+  outline color, matching the rest of the loading treatment instead of
+  introducing an off-palette blue (#64).
+- The mobile-responsive loading-screen fix now also applies to the web
+  dashboard access gate and the PIN gate, which were still rendering the
+  oversized desktop loading screen on phones and tablets (#65).
+
 ## [1.1.104-beta.17] - 2026-09-29
 
 ### Fixed

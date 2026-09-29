@@ -330,7 +330,7 @@ class Settings(BaseModel):
     """Validated runtime settings; integration secrets remain server-side only."""
 
     app_name: str = "StagePilot"
-    version: str = "1.1.104-beta.17"
+    version: str = "1.1.104-beta.18"
     bind_host: str = "127.0.0.1"
     bind_port: int = Field(default=8765, ge=1, le=65535)
     log_level: str = "INFO"
