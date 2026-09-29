@@ -57,6 +57,25 @@ interface RateWindow {
   count: number;
 }
 
+// Fleet alert forwarded from an installation's already-deduplicated local
+// critical-alert store (see services/critical_alerts.py in the beta app).
+// The Worker only stores/surfaces these for admin visibility; it does not
+// reimplement the 15-minute local cooldown/dedup decision.
+interface AlertRecord {
+  id: string;
+  installationId: string;
+  category: string;
+  subject: string;
+  message: string;
+  severity: 'warning' | 'critical';
+  firstSeen: string;
+  lastSeen: string;
+  count: number;
+  status: 'open' | 'acknowledged';
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface RegistryStats {
   activeInstallations: number;
   enrollments: number;
@@ -286,6 +305,23 @@ function publicInstallation(installation: Installation): Record<string, unknown>
   };
 }
 
+function publicAlert(alert: AlertRecord): Record<string, unknown> {
+  return {
+    alertId: alert.id,
+    installationId: alert.installationId,
+    category: alert.category,
+    subject: alert.subject,
+    message: alert.message,
+    severity: alert.severity,
+    firstSeen: alert.firstSeen,
+    lastSeen: alert.lastSeen,
+    count: alert.count,
+    status: alert.status,
+    createdAt: alert.createdAt,
+    updatedAt: alert.updatedAt,
+  };
+}
+
 export class Registry {
   private serial: Promise<void> = Promise.resolve();
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -340,6 +376,24 @@ export class Registry {
       if (request.method === 'POST' && adminRevoke) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.withProviderLane('recovery', () => this.adminRevoke(adminRevoke[1]));
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/admin/alerts') {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminListAlerts(url);
+      }
+      const adminAcknowledge = url.pathname.match(/^\/v1\/admin\/alerts\/([^/]{1,200})\/acknowledge$/);
+      if (request.method === 'POST' && adminAcknowledge) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminAcknowledgeAlert(adminAcknowledge[1]);
+      }
+      const installationAlert = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/alerts$/);
+      if (request.method === 'POST' && installationAlert) {
+        const installation = await this.state.storage.get<Installation>(`installation:${installationAlert[1]}`);
+        if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
+          return reply({ error: 'unauthorized' }, 401);
+        }
+        await this.takeInstallationRate(installation, 'mutation');
+        return await this.ingestAlert(request, installation);
       }
       const reenrollRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/reenroll$/);
       if (request.method === 'POST' && reenrollRoute) {
@@ -1125,6 +1179,87 @@ export class Registry {
       return reply(publicInstallation(installation));
     }
     return this.disable(installation, true);
+  }
+
+  // Deterministic dedup key derived from the same (category, subject) pair
+  // the installation's own local cooldown/dedup engine already keys on
+  // (see services/critical_alerts.py). Re-forwarding the same open alert
+  // updates the existing record instead of creating a duplicate.
+  private async alertKey(category: string, subject: string): Promise<string> {
+    return await keyedHash(this.env.INSTALLATION_SIGNING_KEY, `${category}\u0000${subject}`);
+  }
+
+  private async ingestAlert(request: Request, installation: Installation): Promise<Response> {
+    const input = await body(request);
+    const { category, subject, message, severity, first_seen: firstSeen, last_seen: lastSeen, count } = input;
+    if (
+      typeof category !== 'string' || category.length < 1 || category.length > 200
+      || typeof subject !== 'string' || subject.length < 1 || subject.length > 500
+      || typeof message !== 'string' || message.length < 1 || message.length > 4000
+      || (severity !== 'warning' && severity !== 'critical')
+      || typeof firstSeen !== 'string'
+      || typeof lastSeen !== 'string'
+      || typeof count !== 'number' || !Number.isInteger(count) || count < 1
+    ) {
+      return reply({ error: 'invalid request' }, 400);
+    }
+    const hash = await this.alertKey(category, subject);
+    const key = `alert:${installation.id}:${category}:${hash}`;
+    const now = new Date().toISOString();
+    const existing = await this.state.storage.get<AlertRecord>(key);
+    const record: AlertRecord = existing
+      ? {
+        ...existing,
+        message,
+        severity,
+        firstSeen,
+        lastSeen,
+        count,
+        // A fresh forwarded occurrence reopens a previously acknowledged alert,
+        // matching the local store's own "acknowledged then new occurrence ->
+        // notify fresh" semantics.
+        status: 'open',
+        updatedAt: now,
+      }
+      : {
+        id: `${installation.id}:${category}:${hash}`,
+        installationId: installation.id,
+        category,
+        subject,
+        message,
+        severity,
+        firstSeen,
+        lastSeen,
+        count,
+        status: 'open',
+        createdAt: now,
+        updatedAt: now,
+      };
+    await this.state.storage.put(key, record);
+    return reply(publicAlert(record), existing ? 200 : 201);
+  }
+
+  private async adminListAlerts(url: URL): Promise<Response> {
+    const statusFilter = url.searchParams.get('status');
+    if (statusFilter !== null && statusFilter !== 'open' && statusFilter !== 'acknowledged') {
+      return reply({ error: 'invalid status filter' }, 400);
+    }
+    const rows = await this.state.storage.list<AlertRecord>({ prefix: 'alert:' });
+    const alerts = [...rows.values()]
+      .filter((alert) => !statusFilter || alert.status === statusFilter)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(publicAlert);
+    return reply({ alerts });
+  }
+
+  private async adminAcknowledgeAlert(alertId: string): Promise<Response> {
+    const rows = await this.state.storage.list<AlertRecord>({ prefix: 'alert:' });
+    const entry = [...rows.entries()].find(([, alert]) => alert.id === alertId);
+    if (!entry) return reply({ error: 'not found' }, 404);
+    const [key, alert] = entry;
+    const updated: AlertRecord = { ...alert, status: 'acknowledged', updatedAt: new Date().toISOString() };
+    await this.state.storage.put(key, updated);
+    return reply(publicAlert(updated));
   }
 
   // Authenticated re-enrollment for "Regenerate Remote link": the caller
