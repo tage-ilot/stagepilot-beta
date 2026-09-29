@@ -349,3 +349,66 @@ def test_existing_manual_installations_report_the_manual_method(
     assert status.json()["connection_method"] == "manual"
     assert status.json()["oauth_connected"] is False
     assert status.json()["oauth_needs_reconnect"] is False
+
+
+def test_first_ever_oauth_connect_auto_activates_all_service_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A brand-new OAuth sign-in should not require the manual load-types ->
+
+    choose-a-type -> save -> load-plan sequence: the dashboard should reflect
+    a working connection as soon as the redirect completes.
+    """
+
+    monkeypatch.setenv("STAGEPILOT_PCO_CLIENT_ID", "client-id-1")
+    settings_store = MemorySettingsStore(
+        PersistentSettings(
+            integration_modes=IntegrationModes(service_source=ServiceSource.PLANNING_CENTER),
+        )
+    )
+    settings_service = SettingsService(settings_store, MemoryCredentialStore(), environ={})
+    planning_clients: list[RecordingPlanningCenterClient] = []
+
+    def planning_center_client_factory(
+        settings: PlanningCenterSettings,
+    ) -> RecordingPlanningCenterClient:
+        client = RecordingPlanningCenterClient(settings.bearer_token())
+        planning_clients.append(client)
+        return client
+
+    application = create_app(
+        settings_service=settings_service,
+        dashboard_auth_enforced=False,
+        oauth_credential_store=MemoryCredentialStore(),
+        oauth_control_plane=ControlPlaneOAuthClient(
+            transport=httpx.MockTransport(control_plane_handler)
+        ),
+        planning_center_client_factory=planning_center_client_factory,
+    )
+    with TestClient(application) as client:
+        state = client.post("/api/v1/planning-center/oauth/start").json()["state"]
+        completed = client.post(
+            "/api/v1/planning-center/oauth/callback",
+            json={
+                "state": state,
+                "code": "the-code",
+                "redirect_uri": "http://127.0.0.1:52847/callback",
+            },
+        )
+        assert completed.status_code == 200
+        assert completed.json()["connected"] is True
+
+        status = client.get("/api/v1/planning-center/status")
+        assert status.status_code == 200
+        # A service type must have been auto-selected so the plugin can load a
+        # plan without the operator picking one, and the running plugin must
+        # already have attempted a refresh against it (i.e. it was not left
+        # sitting in whatever pre-OAuth error state it started in).
+        assert status.json()["service_type_id"] == "stagepilot:all-service-types"
+        assert status.json()["connection_status"] in ("connected", "connecting")
+
+    saved_service_type_id = (
+        application.state.runtime.settings_service.snapshot().planning_center.service_type_id
+    )
+    assert saved_service_type_id == "stagepilot:all-service-types"
+    assert len(planning_clients) >= 1
