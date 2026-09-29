@@ -52,7 +52,8 @@ export function WebDashboardPinGate({ children }: { children: ReactNode }) {
         className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-950/75 p-7 shadow-2xl shadow-black/40 backdrop-blur-xl"
         onSubmit={(event) => void submit(event)}
       >
-        <h1 className="select-none font-brand text-7xl leading-none text-white">StagePilot</h1>
+        <h1 className="select-none font-brand text-4xl leading-none text-white sm:text-6xl lg:text-7xl">StagePilot</h1>
+        {checking && <span className="loading-spinner-circular loading-spinner-circular--mobile-only" aria-hidden="true" />}
         <p className="mt-5 text-sm text-slate-300">
           {checking ? "Checking dashboard access…" : "Enter the dashboard PIN to continue."}
         </p>

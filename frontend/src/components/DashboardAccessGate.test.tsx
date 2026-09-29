@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invalidateAccess, LOCAL_CAPABILITIES, NO_CAPABILITIES, setApiAccess } from "../access/accessState";
 import { useDashboardAccess } from "../access/AccessContext";
@@ -139,4 +139,33 @@ it("returns to the gate at the backend session expiry without reconnecting", asy
   act(() => vi.advanceTimersByTime(5_001));
   expect(screen.getByLabelText("Email")).toBeInTheDocument();
   expect(mocks.getAccess).toHaveBeenCalledOnce();
+});
+
+describe("fits narrow (mobile/tablet) viewports, matching the App startup screen fix", () => {
+  const originalWidth = window.innerWidth;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", { value: 375, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", { value: originalWidth, configurable: true, writable: true });
+  });
+
+  it("renders the wordmark with a responsive size class instead of a fixed size", async () => {
+    renderGate();
+    const heading = await screen.findByRole("heading", { name: "StagePilot" });
+    expect(heading.className.split(/\s+/)).not.toContain("text-7xl");
+    expect(heading.className).toMatch(/\bsm:text-\S+\b/);
+    expect(heading.className).toMatch(/\blg:text-\S+\b/);
+  });
+
+  it("shows the mobile-only circular spinner while the access check is in flight", async () => {
+    renderGate();
+    const spinner = document.querySelector(".loading-spinner-circular");
+    expect(spinner).not.toBeNull();
+    expect(spinner?.className).toContain("loading-spinner-circular--mobile-only");
+    await screen.findByLabelText("Dashboard PIN");
+    expect(document.querySelector(".loading-spinner-circular")).toBeNull();
+  });
 });
