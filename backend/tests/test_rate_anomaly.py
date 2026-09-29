@@ -8,6 +8,7 @@ is ever made during the test run.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -86,7 +87,7 @@ def _no_real_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
 
     original_client = httpx.Client
 
-    def mock_client(*args: object, **kwargs: object) -> httpx.Client:
+    def mock_client(*args: object, **kwargs: Any) -> httpx.Client:
         kwargs["transport"] = httpx.MockTransport(handler)
         return original_client(*args, **kwargs)
 
