@@ -1403,3 +1403,180 @@ describe('planning center OAuth routes', () => {
     expect(JSON.stringify(payload)).not.toContain('pco-client-secret-never-returned');
   });
 });
+
+describe('fleet admin actions: rate-limit reset and approval requests', () => {
+  let storage: MemoryStorage;
+  let provider: FakeCloudflare;
+  let registry: Registry;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    provider = new FakeCloudflare();
+    vi.stubGlobal('fetch', provider.fetch);
+    registry = new Registry({ storage } as unknown as DurableObjectState, env as never);
+  });
+
+  it('requires the admin bearer token to queue a rate-limit reset', async () => {
+    const installation = await enroll(registry, 'reset-auth-0001');
+    const path = installationPath(installation, 'rate-limit/reset');
+    expect((await registry.fetch(request(path, 'POST'))).status).toBe(401);
+    expect((await registry.fetch(request(path, 'POST', 'wrong-token-not-admin-at-all-x'))).status).toBe(401);
+    // The installation's own credential is NOT sufficient for an admin route.
+    expect((await registry.fetch(request(
+      path, 'POST', String(installation.installationCredential),
+    ))).status).toBe(401);
+    expect((await registry.fetch(request(path, 'POST', adminToken))).status).toBe(201);
+  });
+
+  it('404s a rate-limit reset for an unknown installation', async () => {
+    const response = await registry.fetch(request('/v1/installations/deadbeef/rate-limit/reset', 'POST', adminToken));
+    expect(response.status).toBe(404);
+  });
+
+  it('delivers the queued reset only to the targeted installation and is idempotent', async () => {
+    const target = await enroll(registry, 'reset-target-0001');
+    const other = await enroll(registry, 'reset-other-0001');
+
+    const queued = await registry.fetch(request(
+      installationPath(target, 'rate-limit/reset'), 'POST', adminToken,
+    ));
+    expect(queued.status).toBe(201);
+    const action = await json(queued);
+    expect(action.kind).toBe('rate_limit_reset');
+    expect(action.installationId).toBe(target.installationId);
+
+    // Re-queueing before it is applied returns the same action, not a duplicate.
+    const again = await registry.fetch(request(
+      installationPath(target, 'rate-limit/reset'), 'POST', adminToken,
+    ));
+    expect(again.status).toBe(200);
+    expect((await json(again)).actionId).toBe(action.actionId);
+
+    const targetStatus = await json(await registry.fetch(request(
+      installationPath(target, 'status'), 'GET', String(target.installationCredential),
+    )));
+    expect(targetStatus.pendingActions).toHaveLength(1);
+
+    const otherStatus = await json(await registry.fetch(request(
+      installationPath(other, 'status'), 'GET', String(other.installationCredential),
+    )));
+    expect(otherStatus.pendingActions).toHaveLength(0);
+
+    // Another installation cannot acknowledge (and thus suppress) it.
+    const foreignAck = await registry.fetch(request(
+      `${installationPath(other, 'pending-actions')}/${String(action.actionId)}/ack`,
+      'POST', String(other.installationCredential),
+    ));
+    expect(foreignAck.status).toBe(404);
+
+    const ack = await registry.fetch(request(
+      `${installationPath(target, 'pending-actions')}/${String(action.actionId)}/ack`,
+      'POST', String(target.installationCredential),
+    ));
+    expect(ack.status).toBe(200);
+
+    const afterAck = await json(await registry.fetch(request(
+      installationPath(target, 'status'), 'GET', String(target.installationCredential),
+    )));
+    expect(afterAck.pendingActions).toHaveLength(0);
+  });
+
+  it('rejects an approval request without the matching installation credential', async () => {
+    const installation = await enroll(registry, 'approval-auth-0001');
+    const other = await enroll(registry, 'approval-auth-0002');
+    const path = installationPath(installation, 'approval-requests');
+    expect((await registry.fetch(request(path, 'POST', undefined, { reason: 'x' }))).status).toBe(401);
+    expect((await registry.fetch(request(
+      path, 'POST', String(other.installationCredential), { reason: 'x' },
+    ))).status).toBe(401);
+    // Admin token is not an installation principal for this route either.
+    expect((await registry.fetch(request(path, 'POST', adminToken, { reason: 'x' }))).status).toBe(401);
+  });
+
+  it('rejects an approval request with a missing or invalid reason', async () => {
+    const installation = await enroll(registry, 'approval-invalid-0001');
+    const path = installationPath(installation, 'approval-requests');
+    const credential = String(installation.installationCredential);
+    expect((await registry.fetch(request(path, 'POST', credential, { reason: '' }))).status).toBe(400);
+    expect((await registry.fetch(request(path, 'POST', credential, { reason: 42 }))).status).toBe(400);
+  });
+
+  it('requires the admin bearer token for the approval admin routes', async () => {
+    expect((await registry.fetch(request('/v1/admin/approval-requests', 'GET'))).status).toBe(401);
+    expect((await registry.fetch(request(
+      '/v1/admin/approval-requests', 'GET', 'wrong-token-not-admin-at-all-x',
+    ))).status).toBe(401);
+    expect((await registry.fetch(request(
+      '/v1/admin/approval-requests/anything/decide', 'POST', undefined, { approved: true },
+    ))).status).toBe(401);
+    expect((await registry.fetch(request(
+      '/v1/admin/approval-requests/anything/decide', 'POST', 'wrong-token-not-admin-at-all-x',
+      { approved: true },
+    ))).status).toBe(401);
+  });
+
+  it('runs the approval lifecycle: create -> pending -> decide -> resolved', async () => {
+    const installationA = await enroll(registry, 'approval-life-a-0001');
+    const installationB = await enroll(registry, 'approval-life-b-0001');
+
+    const created = await registry.fetch(request(
+      installationPath(installationA, 'approval-requests'), 'POST',
+      String(installationA.installationCredential), { reason: 'quota increase for a real user' },
+    ));
+    expect(created.status).toBe(201);
+    const approval = await json(created);
+    expect(approval.status).toBe('pending');
+    expect(approval.installationId).toBe(installationA.installationId);
+
+    const denied = await registry.fetch(request(
+      installationPath(installationB, 'approval-requests'), 'POST',
+      String(installationB.installationCredential), { reason: 'risky setting change' },
+    ));
+    const bApproval = await json(denied);
+
+    const pending = await json(await registry.fetch(request('/v1/admin/approval-requests', 'GET', adminToken)));
+    expect((pending.requests as unknown[])).toHaveLength(2);
+
+    const decide = await registry.fetch(request(
+      `/v1/admin/approval-requests/${String(approval.requestId)}/decide`, 'POST', adminToken,
+      { approved: true },
+    ));
+    expect(decide.status).toBe(200);
+    expect((await json(decide)).status).toBe('approved');
+
+    const decideB = await registry.fetch(request(
+      `/v1/admin/approval-requests/${String(bApproval.requestId)}/decide`, 'POST', adminToken,
+      { approved: false },
+    ));
+    expect((await json(decideB)).status).toBe('denied');
+
+    // Decisions are final.
+    const redecide = await registry.fetch(request(
+      `/v1/admin/approval-requests/${String(approval.requestId)}/decide`, 'POST', adminToken,
+      { approved: false },
+    ));
+    expect(redecide.status).toBe(409);
+
+    const stillPending = await json(await registry.fetch(request('/v1/admin/approval-requests', 'GET', adminToken)));
+    expect((stillPending.requests as unknown[])).toHaveLength(0);
+
+    // The requesting installation sees its own outcome, and only its own.
+    const aList = await json(await registry.fetch(request(
+      installationPath(installationA, 'approval-requests'), 'GET',
+      String(installationA.installationCredential),
+    )));
+    const aRequests = aList.requests as Record<string, unknown>[];
+    expect(aRequests).toHaveLength(1);
+    expect(aRequests[0]?.status).toBe('approved');
+    expect(aRequests[0]?.installationId).toBe(installationA.installationId);
+  });
+
+  it('rejects a decision body without a boolean approved field, and 404s unknown ids', async () => {
+    expect((await registry.fetch(request(
+      '/v1/admin/approval-requests/does-not-exist/decide', 'POST', adminToken, { approved: 'yes' },
+    ))).status).toBe(400);
+    expect((await registry.fetch(request(
+      '/v1/admin/approval-requests/does-not-exist/decide', 'POST', adminToken, { approved: true },
+    ))).status).toBe(404);
+  });
+});

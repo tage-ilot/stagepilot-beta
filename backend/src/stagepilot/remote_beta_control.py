@@ -53,12 +53,15 @@ class BetaRemoteControl:
         credential_provider: Callable[[], str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         random_value: Callable[[], float] = random.random,
+        action_handlers: dict[str, Callable[[], None]] | None = None,
     ) -> None:
         self.config = config
         self.client = client
         self.credential_provider = credential_provider
         self.sleep = sleep
         self.random_value = random_value
+        # Handlers for operator-queued pending actions (see apply_pending_actions).
+        self.action_handlers = action_handlers or {}
         self.connector_token: str | None = None
         self.state_path = config.state_dir / "state.json"
         self.desired_path = config.installation_dir / "remote.json"
@@ -181,6 +184,69 @@ class BetaRemoteControl:
         state.generation = ""
         atomic_write(self.state_path, state.model_dump_json())
         return self._status(state)
+
+    def apply_pending_actions(self) -> list[str]:
+        """Apply operator-queued actions surfaced by the control plane's status route.
+
+        The control plane can never dial this installation, so an admin action
+        (e.g. resetting this installation's local login rate limit) is queued
+        Worker-side and delivered on the installation's own authenticated
+        status check -- the same poll/desired-state shape already used for
+        enable/disable. Each action is applied locally and only then
+        acknowledged, so an action survives a crash mid-apply and is retried;
+        handlers must therefore be idempotent.
+        """
+
+        response = self._request(
+            "GET", f"/v1/installations/{self.config.installation_id}/status", {}
+        )
+        actions = response.get("pendingActions")
+        if not isinstance(actions, list):
+            return []
+        applied: list[str] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            kind = action.get("kind")
+            action_id = action.get("actionId")
+            if (
+                not isinstance(kind, str)
+                or not isinstance(action_id, str)
+                # Never act on an action attributed to a different installation.
+                or action.get("installationId") != self.config.installation_id
+            ):
+                continue
+            handler = self.action_handlers.get(kind)
+            if handler is None:
+                continue
+            handler()
+            self._request(
+                "POST",
+                f"/v1/installations/{self.config.installation_id}/pending-actions/{action_id}/ack",
+                {},
+            )
+            applied.append(kind)
+        return applied
+
+    def request_approval(self, reason: str) -> dict[str, object]:
+        """Ask the operator to sign off on something; returns the pending request."""
+
+        return self._request(
+            "POST",
+            f"/v1/installations/{self.config.installation_id}/approval-requests",
+            {"reason": reason},
+        )
+
+    def approval_requests(self) -> list[dict[str, object]]:
+        """Poll this installation's own approval requests for operator decisions."""
+
+        response = self._request(
+            "GET", f"/v1/installations/{self.config.installation_id}/approval-requests", {}
+        )
+        requests = response.get("requests")
+        if not isinstance(requests, list):
+            return []
+        return [item for item in requests if isinstance(item, dict)]
 
     def _write_disabled_marker(self) -> None:
         atomic_write(

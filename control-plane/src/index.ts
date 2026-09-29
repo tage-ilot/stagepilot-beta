@@ -76,6 +76,34 @@ interface AlertRecord {
   updatedAt: string;
 }
 
+// Fleet admin action queued for one installation. The Worker cannot reach
+// into an installation's own machine, so an admin action is stored here as
+// a pending desired action and is picked up by that installation the next
+// time it performs its existing authenticated status check (the same
+// poll/reconcile shape the control plane already uses for desired state).
+// The installation acknowledges it once applied, which removes it.
+type PendingActionKind = 'rate_limit_reset';
+
+interface PendingAction {
+  id: string;
+  installationId: string;
+  kind: PendingActionKind;
+  requestedAt: string;
+}
+
+// Generic operator sign-off request raised BY one installation. Deliberately
+// minimal: a reason string plus an approved/denied outcome the requesting
+// installation can observe on its own status check. This is not a gate on
+// installations existing -- enrollment stays ungated (docs/remote-control-plane.md).
+interface ApprovalRequest {
+  id: string;
+  installationId: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'denied';
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface RegistryStats {
   activeInstallations: number;
   enrollments: number;
@@ -322,6 +350,26 @@ function publicAlert(alert: AlertRecord): Record<string, unknown> {
   };
 }
 
+function publicPendingAction(action: PendingAction): Record<string, unknown> {
+  return {
+    actionId: action.id,
+    installationId: action.installationId,
+    kind: action.kind,
+    requestedAt: action.requestedAt,
+  };
+}
+
+function publicApprovalRequest(approval: ApprovalRequest): Record<string, unknown> {
+  return {
+    requestId: approval.id,
+    installationId: approval.installationId,
+    reason: approval.reason,
+    status: approval.status,
+    createdAt: approval.createdAt,
+    updatedAt: approval.updatedAt,
+  };
+}
+
 export class Registry {
   private serial: Promise<void> = Promise.resolve();
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -386,6 +434,44 @@ export class Registry {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.adminAcknowledgeAlert(adminAcknowledge[1]);
       }
+      const adminRateLimitReset = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/rate-limit\/reset$/);
+      if (request.method === 'POST' && adminRateLimitReset) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminQueueRateLimitReset(adminRateLimitReset[1]);
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/admin/approval-requests') {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminListApprovalRequests(url);
+      }
+      const adminDecide = url.pathname.match(/^\/v1\/admin\/approval-requests\/([^/]{1,200})\/decide$/);
+      if (request.method === 'POST' && adminDecide) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminDecideApprovalRequest(request, adminDecide[1]);
+      }
+      const installationApproval = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/approval-requests$/);
+      if (installationApproval && (request.method === 'POST' || request.method === 'GET')) {
+        const installation = await this.state.storage.get<Installation>(`installation:${installationApproval[1]}`);
+        if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
+          return reply({ error: 'unauthorized' }, 401);
+        }
+        if (request.method === 'GET') {
+          await this.takeInstallationRate(installation, 'status');
+          return await this.installationApprovalRequests(installation);
+        }
+        await this.takeInstallationRate(installation, 'mutation');
+        return await this.createApprovalRequest(request, installation);
+      }
+      const actionAck = url.pathname.match(
+        /^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/pending-actions\/([^/]{1,200})\/ack$/,
+      );
+      if (request.method === 'POST' && actionAck) {
+        const installation = await this.state.storage.get<Installation>(`installation:${actionAck[1]}`);
+        if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
+          return reply({ error: 'unauthorized' }, 401);
+        }
+        await this.takeInstallationRate(installation, 'mutation');
+        return await this.acknowledgePendingAction(installation, actionAck[2]);
+      }
       const installationAlert = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/alerts$/);
       if (request.method === 'POST' && installationAlert) {
         const installation = await this.state.storage.get<Installation>(`installation:${installationAlert[1]}`);
@@ -426,7 +512,10 @@ export class Registry {
       const action = route[2];
       if (action === 'status' && request.method === 'GET') {
         await this.takeInstallationRate(installation, 'status');
-        return reply(publicInstallation(installation));
+        return reply({
+          ...publicInstallation(installation),
+          pendingActions: await this.pendingActions(installation.id),
+        });
       }
       if (request.method !== 'POST') return reply({ error: 'method not allowed' }, 405);
       await this.takeInstallationRate(installation, 'mutation');
@@ -1260,6 +1349,126 @@ export class Registry {
     const updated: AlertRecord = { ...alert, status: 'acknowledged', updatedAt: new Date().toISOString() };
     await this.state.storage.put(key, updated);
     return reply(publicAlert(updated));
+  }
+
+  // --- Fleet admin actions ------------------------------------------------
+  //
+  // Design note (documented in the PR): an installation's login rate-limit
+  // state (the `attempts` table in services/remote_auth.py) lives on that
+  // installation's own machine and is unreachable from the Worker -- the
+  // control plane never dials an installation, installations always dial it.
+  // The Worker therefore records a pending desired action, exactly mirroring
+  // the existing desired-state pattern (`desiredEnabled` + the installation's
+  // own reconcile/status poll), and the installation applies it and acks it.
+  // Queuing is idempotent per (installation, kind): re-requesting a reset that
+  // has not been applied yet returns the same pending action rather than
+  // stacking duplicates.
+
+  private pendingActionKey(installationId: string, kind: PendingActionKind): string {
+    return `pending-action:${installationId}:${kind}`;
+  }
+
+  private async pendingActions(installationId: string): Promise<Record<string, unknown>[]> {
+    const rows = await this.state.storage.list<PendingAction>({ prefix: `pending-action:${installationId}:` });
+    return [...rows.values()]
+      .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+      .map(publicPendingAction);
+  }
+
+  private async adminQueueRateLimitReset(id: string): Promise<Response> {
+    const installation = await this.state.storage.get<Installation>(`installation:${id}`);
+    if (!installation || installation.revoked) return reply({ error: 'not found' }, 404);
+    const key = this.pendingActionKey(installation.id, 'rate_limit_reset');
+    const existing = await this.state.storage.get<PendingAction>(key);
+    if (existing) return reply(publicPendingAction(existing));
+    const action: PendingAction = {
+      id: `${installation.id}:rate_limit_reset:${randomHex(8)}`,
+      installationId: installation.id,
+      kind: 'rate_limit_reset',
+      requestedAt: new Date().toISOString(),
+    };
+    await this.state.storage.put(key, action);
+    return reply(publicPendingAction(action), 201);
+  }
+
+  // Only the installation the action was queued for can clear it: the key is
+  // derived from the authenticated installation's own id, so an action can
+  // never be acknowledged (and thereby suppressed) on another's behalf.
+  private async acknowledgePendingAction(installation: Installation, actionId: string): Promise<Response> {
+    const rows = await this.state.storage.list<PendingAction>({ prefix: `pending-action:${installation.id}:` });
+    const entry = [...rows.entries()].find(([, action]) => action.id === actionId);
+    if (!entry) return reply({ error: 'not found' }, 404);
+    await this.state.storage.delete(entry[0]);
+    return reply({ acknowledged: actionId });
+  }
+
+  // --- Operator approval requests ----------------------------------------
+  //
+  // Request/response plumbing only: an installation asks for operator
+  // sign-off with a free-text reason, the operator approves or denies, and
+  // the requesting installation observes the outcome by polling its own
+  // approval-requests list. Deliberately carries NO business logic about what
+  // an approval grants -- that belongs to whatever feature raises the request.
+
+  private async createApprovalRequest(request: Request, installation: Installation): Promise<Response> {
+    const input = await body(request);
+    const reason = input.reason;
+    if (typeof reason !== 'string' || reason.length < 1 || reason.length > 1000) {
+      return reply({ error: 'invalid request' }, 400);
+    }
+    const now = new Date().toISOString();
+    const approval: ApprovalRequest = {
+      id: `${installation.id}:${randomHex(8)}`,
+      installationId: installation.id,
+      reason,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.state.storage.put(`approval:${installation.id}:${approval.id}`, approval);
+    return reply(publicApprovalRequest(approval), 201);
+  }
+
+  private async installationApprovalRequests(installation: Installation): Promise<Response> {
+    const rows = await this.state.storage.list<ApprovalRequest>({ prefix: `approval:${installation.id}:` });
+    const requests = [...rows.values()]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(publicApprovalRequest);
+    return reply({ requests });
+  }
+
+  private async adminListApprovalRequests(url: URL): Promise<Response> {
+    const statusFilter = url.searchParams.get('status') ?? 'pending';
+    if (!['pending', 'approved', 'denied', 'all'].includes(statusFilter)) {
+      return reply({ error: 'invalid status filter' }, 400);
+    }
+    const rows = await this.state.storage.list<ApprovalRequest>({ prefix: 'approval:' });
+    const requests = [...rows.values()]
+      .filter((approval) => statusFilter === 'all' || approval.status === statusFilter)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(publicApprovalRequest);
+    return reply({ requests });
+  }
+
+  private async adminDecideApprovalRequest(request: Request, requestId: string): Promise<Response> {
+    const input = await body(request);
+    const approved = input.approved;
+    if (typeof approved !== 'boolean') return reply({ error: 'invalid request' }, 400);
+    const rows = await this.state.storage.list<ApprovalRequest>({ prefix: 'approval:' });
+    const entry = [...rows.entries()].find(([, approval]) => approval.id === requestId);
+    if (!entry) return reply({ error: 'not found' }, 404);
+    const [key, approval] = entry;
+    // A decision is final: re-deciding an already-resolved request is
+    // rejected rather than silently flipping an outcome the installation
+    // may already have acted on.
+    if (approval.status !== 'pending') return reply({ error: 'already decided' }, 409);
+    const updated: ApprovalRequest = {
+      ...approval,
+      status: approved ? 'approved' : 'denied',
+      updatedAt: new Date().toISOString(),
+    };
+    await this.state.storage.put(key, updated);
+    return reply(publicApprovalRequest(updated));
   }
 
   // Authenticated re-enrollment for "Regenerate Remote link": the caller
