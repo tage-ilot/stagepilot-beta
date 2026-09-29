@@ -280,7 +280,12 @@ def test_send_webhook_alert_posts_expected_payload_via_mock_transport() -> None:
         return httpx.Response(200, json={"ok": True})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    payload = {"category": "cat", "message": "m", "subject": "s", "severity": "warning"}
+    payload: dict[str, object] = {
+        "category": "cat",
+        "message": "m",
+        "subject": "s",
+        "severity": "warning",
+    }
 
     send_webhook_alert("http://127.0.0.1:9/hook", payload, client=client)
 
@@ -295,7 +300,7 @@ def test_send_webhook_alert_raises_on_http_error() -> None:
     client = httpx.Client(transport=httpx.MockTransport(handler))
 
     with pytest.raises(httpx.HTTPStatusError):
-        send_webhook_alert("http://127.0.0.1:9/hook", {"category": "x"}, client=client)  # type: ignore[dict-item]
+        send_webhook_alert("http://127.0.0.1:9/hook", {"category": "x"}, client=client)
 
 
 def test_no_real_network_calls_when_webhook_url_empty(tmp_path: Path) -> None:
