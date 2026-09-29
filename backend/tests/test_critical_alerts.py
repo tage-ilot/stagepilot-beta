@@ -79,8 +79,8 @@ def test_fresh_alert_notifies_immediately(tmp_path: Path) -> None:
         "subject": "203.0.113.5",
         "message": "Rate limit exhausted for 203.0.113.5",
         "severity": "critical",
-        "first_seen": clock.now,
-        "last_seen": clock.now,
+        "first_seen": "1970-01-12T13:46:40Z",
+        "last_seen": "1970-01-12T13:46:40Z",
         "count": 1,
     }
 
@@ -261,8 +261,8 @@ def test_control_plane_payload_shape_is_exact(tmp_path: Path) -> None:
         "subject": "1.2.3.4",
         "message": "msg",
         "severity": "critical",
-        "first_seen": clock.now,
-        "last_seen": clock.now,
+        "first_seen": "1970-01-12T13:46:40Z",
+        "last_seen": "1970-01-12T13:46:40Z",
         "count": 1,
     }
 
@@ -307,6 +307,9 @@ def test_send_control_plane_alert_posts_with_installation_auth() -> None:
         "message": "m",
         "subject": "s",
         "severity": "warning",
+        "first_seen": "2026-09-29T15:00:00Z",
+        "last_seen": "2026-09-29T15:00:01Z",
+        "count": 2,
     }
     bootstrap = cast(DesktopBootstrapStore, _Bootstrap())
 

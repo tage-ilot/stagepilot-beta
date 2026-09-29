@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -116,13 +117,16 @@ def send_control_plane_alert(
 def build_control_plane_payload(alert: CriticalAlert) -> dict[str, object]:
     """Payload accepted by the control-plane installation alert endpoint."""
 
+    def utc_isoformat(timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace("+00:00", "Z")
+
     return {
         "category": alert.category,
         "subject": alert.subject,
         "message": alert.message,
         "severity": alert.severity,
-        "first_seen": alert.first_seen,
-        "last_seen": alert.last_seen,
+        "first_seen": utc_isoformat(alert.first_seen),
+        "last_seen": utc_isoformat(alert.last_seen),
         "count": alert.count,
     }
 
