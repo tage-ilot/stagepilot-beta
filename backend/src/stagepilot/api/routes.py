@@ -80,6 +80,7 @@ from stagepilot.plugins.planning_center.errors import (
     PlanningCenterPermissionError,
     PlanningCenterRateLimitError,
 )
+from stagepilot.plugins.planning_center.plugin import ALL_SERVICE_TYPES_ID
 from stagepilot.plugins.propresenter.errors import ProPresenterError
 
 router = APIRouter(prefix="/api/v1", route_class=RemoteRetryRoute)
@@ -395,6 +396,34 @@ async def complete_planning_center_oauth(
         await asyncio.to_thread(runtime.settings_service.update_connection_method, "oauth")
     except (CredentialStoreError, SettingsFileError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # A brand-new OAuth connect has no service type saved yet. Without this,
+    # the dashboard is left showing a stale "connection: error" and no plan
+    # loads until the operator manually walks through Load service types ->
+    # choose one -> Save settings -> Load plan -- even though the OAuth sign-in
+    # itself already succeeded. Default an unset service type to "All service
+    # types" (the same option available in the manual flow) and, when the
+    # Planning Center service source is already active, immediately apply it
+    # to the running plugin so the connection status and plan load without
+    # any further clicks. This mirrors what `update_planning_center_settings`
+    # already does for a manual save; it is just now also triggered here.
+    current_planning_center = runtime.settings_service.snapshot().planning_center
+    if current_planning_center.service_type_id is None:
+        updated_planning_center = current_planning_center.model_copy(
+            update={"service_type_id": ALL_SERVICE_TYPES_ID}
+        )
+        try:
+            await asyncio.to_thread(
+                runtime.settings_service.update_planning_center,
+                updated_planning_center,
+            )
+        except (CredentialStoreError, SettingsFileError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        plugin = runtime.planning_center
+        if plugin is not None:
+            updated_settings = runtime.settings_service.effective_runtime_settings().planning_center
+            await plugin.reconfigure(updated_settings)
+
     return PlanningCenterOAuthStatusResponse.model_validate(
         service.status(connection_method="oauth").model_dump()
     )
