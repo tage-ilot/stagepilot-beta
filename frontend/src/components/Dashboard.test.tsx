@@ -329,6 +329,29 @@ describe("Recent event stream 5-minute expiry", () => {
     expect(document.querySelectorAll(".event-row")).toHaveLength(1);
     expect(document.querySelectorAll(".border-rose-400\\/15")).toHaveLength(1);
   });
+
+  it("keeps the pinned error inspectable once its raw event is evicted from recent_events", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-13T16:00:00Z"));
+    const state = applicationState(loadedServiceState, {
+      propresenter_status: "error",
+      recent_errors: [
+        { component: "propresenter", event_id: "evicted-error", message: "Could not connect.", timestamp: "2026-07-13T10:00:00Z" },
+      ],
+      // The matching raw event ("evicted-error") is no longer present because
+      // 100 newer events pushed it out of the capped recent_events list.
+      recent_events: [
+        { id: "still-present", type: "song_started", timestamp: "2026-07-13T15:59:45Z", source: "propresenter" },
+      ],
+    });
+    renderDashboard(loadedServiceState, { state });
+
+    expect(screen.getByText(/Could not connect\./)).toBeInTheDocument();
+    // A synthesized row keeps the pinned error's original failure inspectable
+    // in the event stream even though its raw event was evicted.
+    expect(screen.getByText("propresenter error")).toBeInTheDocument();
+    expect(screen.getByText("song_started")).toBeInTheDocument();
+  });
 });
 
 describe("Dashboard Planning Center plan states", () => {
@@ -677,6 +700,193 @@ describe("Dashboard Planning Center plan states", () => {
     expect(rows[2]).not.toHaveTextContent("Reference");
     expect(screen.getByText("Welcome")).toHaveClass("text-slate-400");
     expect(screen.getByText("Pastor John")).toHaveClass("text-slate-600");
+  });
+});
+
+describe("Service plan item hover preview", () => {
+  it("shows a cursor popover with the item description on hover, and hides it on mouse-leave", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(row);
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("does not show a popover for an item without a description", () => {
+    renderDashboard(loadedServiceState);
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+  });
+
+  it("shows a cursor popover for a reference item with a description", () => {
+    renderDashboard({
+      ...loadedServiceState,
+      skipped_items: [
+        {
+          item_id: "item-2",
+          title: "Announcements",
+          description: "Pastor John",
+          item_type: "item",
+          sequence: 30,
+          duration_seconds: 120,
+          reason: "not_song",
+        },
+      ],
+    });
+
+    const row = screen.getAllByText("Pastor John")[0]!.closest("li")!;
+    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+
+    expect(screen.getAllByText("Pastor John").length).toBeGreaterThan(1);
+  });
+
+  it("clamps the popover so a long note near the bottom of the viewport stays fully visible", () => {
+    const originalInnerHeight = window.innerHeight;
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 480 });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+      }, {
+        state: applicationState(loadedServiceState, {
+          plan: {
+            ...loadedPlan,
+            songs: [{
+              id: "item-1",
+              title: "Holy Forever",
+              duration_seconds: 336,
+              order: 1,
+              service_sequence: 20,
+              is_generic: false,
+              source_song_id: "song-1",
+              description: Array.from({ length: 13 }, (_, i) => `Line ${i + 1} of a very long note`).join("\n"),
+            }],
+          },
+        }),
+      });
+
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const row = within(list).getByText("Holy Forever").closest("li")!;
+      // Stub layout globally: jsdom returns 0-sized rects for every element,
+      // so pin the popover's measured size to what a 13-line note renders as.
+      const height = 220;
+      const getBoundingClientRectSpy = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockReturnValue({
+          width: 288,
+          height,
+          top: 0,
+          left: 0,
+          right: 288,
+          bottom: height,
+          x: 0,
+          y: 0,
+          toJSON: () => {},
+        } as DOMRect);
+
+      try {
+        // Hover near the bottom of a short (480px) viewport, as in the reported repro.
+        fireEvent.mouseEnter(row, { clientX: 100, clientY: 470 });
+
+        const tooltip = screen.getByText(/Line 1 of a very long note/, { exact: false }).closest('[role="tooltip"]') as HTMLElement;
+        const top = parseFloat(tooltip.style.top);
+        expect(top).toBeGreaterThanOrEqual(8);
+        expect(top + height).toBeLessThanOrEqual(480);
+      } finally {
+        getBoundingClientRectSpy.mockRestore();
+      }
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    }
+  });
+
+  it("opens the popover on tap and dismisses it on a second tap (touch equivalent of hover)", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 100 }] });
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 101, clientY: 101 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 101, clientY: 101 }] });
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("treats a touch drag (scroll) as not a tap, so the popover does not open", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 200 }] });
+
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+  });
+
+  it("dismisses a tap-opened popover when tapping elsewhere on the page", () => {
+    renderDashboard({
+      ...loadedServiceState,
+    }, {
+      state: applicationState(loadedServiceState, {
+        plan: {
+          ...loadedPlan,
+          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+        },
+      }),
+    });
+
+    const list = screen.getByRole("list", { name: "Service plan order" });
+    const row = within(list).getByText("Holy Forever").closest("li")!;
+
+    fireEvent.touchStart(row, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(row, { changedTouches: [{ clientX: 100, clientY: 100 }] });
+    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
   });
 });
 

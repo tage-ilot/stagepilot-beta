@@ -143,6 +143,21 @@ class FakePlanningCenterClient:
             lookahead_days=lookahead_days,
         )
 
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanAmbiguousResult | PlanLoadedResult:
+        return await self.load_plan_for_date(
+            service_types[0],
+            target_date,
+            "America/Los_Angeles",
+            selected_plan_id=selected_plan_id,
+        )
+
     async def close(self) -> None:
         self.closed = True
 

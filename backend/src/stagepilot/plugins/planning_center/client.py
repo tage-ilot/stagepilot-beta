@@ -178,6 +178,27 @@ class PlanningCenterClient:
             selected_plan_id=selected_plan_id,
         )
 
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanDiscoveryResult:
+        """Resolve a specific candidate from an already-discovered candidate list.
+
+        Used to apply a saved preference against an ambiguous discovery result
+        without re-querying every active service type.
+        """
+
+        return await self._resolve_plan_candidates(
+            candidates,
+            {service_type.id: service_type for service_type in service_types},
+            target_date,
+            selected_plan_id=selected_plan_id,
+        )
+
     async def _plan_candidates_for_date(
         self,
         service_type: PlanningCenterServiceType,
@@ -503,6 +524,7 @@ class PlanningCenterClient:
                     service_sequence=attributes.sequence,
                     is_generic=source_song is None,
                     source_song_id=source_song.id if source_song else None,
+                    description=(attributes.description or "").strip() or None,
                 )
             )
         return songs, skipped

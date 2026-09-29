@@ -84,6 +84,14 @@ class FakePlanningCenterClient:
         self.close_error = close_error
         self.list_calls = 0
         self.load_calls: list[LoadCall] = []
+        self.resolve_calls: list[
+            tuple[
+                list[PlanningCenterPlanCandidate],
+                list[PlanningCenterServiceType],
+                date,
+                str,
+            ]
+        ] = []
         self.all_load_calls: list[
             tuple[list[PlanningCenterServiceType], date, str, str | None, int]
         ] = []
@@ -150,6 +158,22 @@ class FakePlanningCenterClient:
         self.all_load_calls.append(
             (service_types, target_date, timezone_name, selected_plan_id, lookahead_days)
         )
+        if not self.outcomes:
+            raise AssertionError("The fake Planning Center client has no queued outcome.")
+        outcome = self.outcomes.popleft()
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    async def resolve_selected_plan(
+        self,
+        candidates: list[PlanningCenterPlanCandidate],
+        service_types: list[PlanningCenterServiceType],
+        target_date: date,
+        *,
+        selected_plan_id: str,
+    ) -> PlanDiscoveryResult:
+        self.resolve_calls.append((candidates, service_types, target_date, selected_plan_id))
         if not self.outcomes:
             raise AssertionError("The fake Planning Center client has no queued outcome.")
         outcome = self.outcomes.popleft()
@@ -523,10 +547,9 @@ async def test_preferred_service_time_resolves_one_ambiguous_plan() -> None:
         await harness.plugin.start()
 
         state = await harness.state_store.snapshot()
-        assert [call.selected_plan_id for call in client.load_calls] == [
-            None,
-            "plan-evening",
-        ]
+        assert [call.selected_plan_id for call in client.load_calls] == [None]
+        assert len(client.resolve_calls) == 1
+        assert client.resolve_calls[0][3] == "plan-evening"
         assert state.service_load.status is ServiceLoadStatus.LOADED
         assert state.plan and state.plan.id == "plan-evening"
     finally:
@@ -553,6 +576,35 @@ async def test_equally_scored_preferences_remain_ambiguous() -> None:
             "plan-morning",
             "plan-evening",
         ]
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_archived_cached_plan_type_with_no_replacement_is_not_actionable() -> None:
+    cache = MemoryPlanCacheStore(
+        CachedServicePlan(
+            plan=plan("cached-plan", SERVICE_DATE).model_copy(update={"service_type_id": "7"}),
+            last_successful_refresh=datetime(2026, 7, 11, 18, tzinfo=UTC),
+        )
+    )
+    client = FakePlanningCenterClient(
+        [not_found_result()],
+        service_types=[
+            service_type("7", "Archived", archived=True),
+            service_type("42", "Weekend Services"),
+        ],
+    )
+    settings = configured_settings().model_copy(update={"service_type_id": ALL_SERVICE_TYPES_ID})
+    harness = await plugin_harness(client, settings=settings, plan_cache_store=cache)
+    try:
+        await harness.plugin.start()
+
+        state = await harness.state_store.snapshot()
+        assert state.plan is None
+        assert state.service_load.status is ServiceLoadStatus.NOT_FOUND
+        assert state.service_load.is_stale is False
+        assert (await harness.state_service.dispatch(ActionName.START_NEXT)).accepted is False
     finally:
         await harness.close()
 

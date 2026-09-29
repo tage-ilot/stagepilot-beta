@@ -293,7 +293,7 @@ describe("PlanningCenterSetupPanel", () => {
       "Saved securely — leave blank to keep",
     );
     expect(screen.getByLabelText("Service type")).toHaveValue("sunday");
-    expect(screen.getByLabelText("Timezone")).toHaveValue("-480");
+    expect(screen.getByLabelText("Timezone")).toHaveValue("America/Los_Angeles");
     expect(screen.getByRole("option", { name: "Los Angeles (UTC-8)" })).toHaveProperty("selected", true);
   });
 
@@ -311,6 +311,22 @@ describe("PlanningCenterSetupPanel", () => {
     expect(screen.getByRole("option", { name: "Delhi (UTC+5:30)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Kathmandu (UTC+5:45)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Adelaide (UTC+9:30)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Baker Island (UTC-12)" })).toBeInTheDocument();
+  });
+
+  it("labels a saved Etc/GMT+12 preference as UTC-12, not Pago Pago's UTC-11", () => {
+    renderPanel({
+      panelSettings: {
+        ...settings,
+        settings: {
+          ...settings.settings,
+          timezone: "Etc/GMT+12",
+        },
+      },
+    });
+
+    expect(screen.getByLabelText("Timezone")).toHaveValue("Etc/GMT+12");
+    expect(screen.getByRole("option", { name: "Baker Island (UTC-12)" })).toHaveProperty("selected", true);
   });
 
   it("defaults an unsaved timezone to the exact detected system IANA zone", async () => {
@@ -331,8 +347,8 @@ describe("PlanningCenterSetupPanel", () => {
         },
       });
 
-      expect(screen.getByLabelText("Timezone")).toHaveValue("-420");
-      expect(screen.getByRole("option", { name: "Phoenix (UTC-7)" })).toHaveProperty("selected", true);
+      expect(screen.getByLabelText("Timezone")).toHaveValue("America/Denver");
+      expect(screen.getByRole("option", { name: "Denver (UTC-7)" })).toHaveProperty("selected", true);
       await user.click(screen.getByRole("button", { name: "Save settings" }));
       expect(onSave).toHaveBeenCalledWith(expect.any(Object), "America/Denver");
     } finally {
@@ -340,7 +356,7 @@ describe("PlanningCenterSetupPanel", () => {
     }
   });
 
-  it("preserves a saved IANA zone while displaying its offset bucket", async () => {
+  it("preserves a saved IANA zone with its DST-aware rules intact", async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     renderPanel({
@@ -351,18 +367,18 @@ describe("PlanningCenterSetupPanel", () => {
       },
     });
 
-    expect(screen.getByLabelText("Timezone")).toHaveValue("-420");
-    expect(screen.getByRole("option", { name: "Phoenix (UTC-7)" })).toHaveProperty("selected", true);
+    expect(screen.getByLabelText("Timezone")).toHaveValue("America/Denver");
+    expect(screen.getByRole("option", { name: "Denver (UTC-7)" })).toHaveProperty("selected", true);
     await user.click(screen.getByRole("button", { name: "Save settings" }));
     expect(onSave).toHaveBeenCalledWith(expect.any(Object), "America/Denver");
   });
 
-  it("saves the representative city’s real IANA zone after an explicit selection", async () => {
+  it("saves the selected representative city's exact IANA zone", async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     renderPanel({ onSave });
 
-    await user.selectOptions(screen.getByLabelText("Timezone"), "330");
+    await user.selectOptions(screen.getByLabelText("Timezone"), "Asia/Kolkata");
     await user.click(screen.getByRole("button", { name: "Save settings" }));
 
     expect(onSave).toHaveBeenCalledWith(expect.any(Object), "Asia/Kolkata");

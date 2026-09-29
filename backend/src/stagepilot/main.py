@@ -65,6 +65,8 @@ from stagepilot.services.remote_auth import RemoteStore
 from stagepilot.services.startup_activation import StartupActivationService
 from stagepilot.services.state_service import StateService
 
+OAUTH_STARTUP_REFRESH_TIMEOUT_SECONDS = 5.0
+
 
 def default_web_root() -> Path | None:
     """Locate the compiled dashboard in development and packaged sidecars."""
@@ -228,6 +230,7 @@ def create_app(
         planning_center_setup=PlanningCenterSetupService(
             resolved_settings_service,
             client_factory=planning_center_client_factory,
+            oauth_service=planning_center_oauth,
         ),
         midi_controller=midi_plugin,
         propresenter_controller=propresenter_plugin,
@@ -256,7 +259,15 @@ def create_app(
         persistent_planning = resolved_settings_service.effective_snapshot().planning_center
         if persistent_planning.connection_method == "oauth":
             try:
-                await planning_center_oauth.valid_access_token()
+                await asyncio.wait_for(
+                    planning_center_oauth.valid_access_token(),
+                    timeout=OAUTH_STARTUP_REFRESH_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "planning_center_oauth_startup_refresh_timed_out",
+                    timeout_seconds=OAUTH_STARTUP_REFRESH_TIMEOUT_SECONDS,
+                )
             except PlanningCenterOAuthError as exc:
                 logger.warning(
                     "planning_center_oauth_startup_refresh_failed",

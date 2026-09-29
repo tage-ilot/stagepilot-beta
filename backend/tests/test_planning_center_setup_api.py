@@ -9,6 +9,7 @@ from stagepilot.main import create_app
 from stagepilot.plugins.planning_center.errors import PlanningCenterAuthenticationError
 from stagepilot.plugins.planning_center.models import (
     PlanDiscoveryResult,
+    PlanningCenterPlanCandidate,
     PlanningCenterServiceType,
 )
 
@@ -58,6 +59,16 @@ class SetupClient:
         *,
         selected_plan_id: str | None = None,
         lookahead_days: int = 0,
+    ) -> PlanDiscoveryResult:
+        raise AssertionError("Plan loading is not used during onboarding.")
+
+    async def resolve_selected_plan(
+        self,
+        _candidates: list[PlanningCenterPlanCandidate],
+        _service_types: list[PlanningCenterServiceType],
+        _target_date: date,
+        *,
+        selected_plan_id: str,
     ) -> PlanDiscoveryResult:
         raise AssertionError("Plan loading is not used during onboarding.")
 

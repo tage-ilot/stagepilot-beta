@@ -122,9 +122,49 @@ body {
   box-shadow:
     inset 0 3px 0 rgb(255 255 255 / 38%),
     inset 0 -3px 0 rgb(3 105 161 / 75%),
-    4px 0 0 #f8fafc,
     8px 0 0 #0ea5e9;
   transition: width 140ms linear;
+}
+
+/* Small circular loading spinner matching the rectangular loading-progress
+   bar's pixel-art/retro blue visual language (not the orange brand accent). */
+.loading-spinner-circular {
+  display: none;
+  width: 40px;
+  height: 40px;
+  margin: 1.5rem auto 0;
+  border-radius: 9999px;
+  border: 4px solid #07101f;
+  outline: 2px solid #dbeafe;
+  outline-offset: 0;
+  border-top-color: #38bdf8;
+  border-right-color: #38bdf8;
+  box-shadow:
+    5px 5px 0 #020617,
+    0 0 0 1px #38bdf8,
+    0 0 20px rgb(14 165 233 / 25%);
+  image-rendering: pixelated;
+  animation: loading-spinner-spin 800ms steps(8, end) infinite;
+}
+
+@keyframes loading-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner-circular {
+    animation: none;
+  }
+}
+
+/* Only shown on phone/tablet-sized viewports, mirroring the 1024px
+   desktop/mobile breakpoint used elsewhere in this codebase. */
+@media (max-width: 1023px) {
+  .loading-spinner-circular--mobile-only {
+    display: block;
+  }
 }
 
 .loading-progress-scan {
@@ -200,7 +240,6 @@ body {
   box-shadow:
     inset 0 3px 0 rgb(255 255 255 / 25%),
     inset 0 -3px 0 rgb(76 5 25 / 80%),
-    4px 0 0 #fff1f2,
     8px 0 0 #e11d48;
 }
 
