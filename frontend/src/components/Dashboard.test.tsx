@@ -704,62 +704,164 @@ describe("Dashboard Planning Center plan states", () => {
 });
 
 describe("Service plan item hover preview", () => {
-  it("shows a cursor popover with the item description on hover, and hides it on mouse-leave", () => {
-    renderDashboard({
-      ...loadedServiceState,
-    }, {
-      state: applicationState(loadedServiceState, {
-        plan: {
-          ...loadedPlan,
-          songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
-        },
-      }),
-    });
+  it("shows a cursor popover with the item title and description after the hover-intent delay, and hides it on mouse-leave", () => {
+    vi.useFakeTimers();
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+      }, {
+        state: applicationState(loadedServiceState, {
+          plan: {
+            ...loadedPlan,
+            songs: [{ id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" }],
+          },
+        }),
+      });
 
-    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
-    const list = screen.getByRole("list", { name: "Service plan order" });
-    const row = within(list).getByText("Holy Forever").closest("li")!;
-    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+      expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const row = within(list).getByText("Holy Forever").closest("li")!;
+      fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
 
-    expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+      // Not warmed up yet: no popover before the 500ms hover-intent delay elapses.
+      act(() => vi.advanceTimersByTime(499));
+      expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
 
-    fireEvent.mouseLeave(row);
-    expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+      const tooltip = document.querySelector('[role="tooltip"].fixed') as HTMLElement;
+      expect(tooltip).toHaveTextContent("Holy Forever");
+
+      fireEvent.mouseLeave(row);
+      expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-apply the hover-intent delay when moving between adjacent items in the same widget hover session", () => {
+    vi.useFakeTimers();
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+      }, {
+        state: applicationState(loadedServiceState, {
+          plan: {
+            ...loadedPlan,
+            songs: [
+              { id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" },
+              { id: "item-2", title: "Way Maker", duration_seconds: 300, order: 2, service_sequence: 30, is_generic: false, source_song_id: "song-2", description: "Key of E" },
+            ],
+          },
+        }),
+      });
+
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const rowA = within(list).getByText("Holy Forever").closest("li")!;
+      const rowB = within(list).getByText("Way Maker").closest("li")!;
+
+      fireEvent.mouseEnter(rowA, { clientX: 100, clientY: 100 });
+      act(() => vi.advanceTimersByTime(500));
+      expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+      // Move to the adjacent item without leaving the widget: no re-delay.
+      fireEvent.mouseLeave(rowA);
+      fireEvent.mouseEnter(rowB, { clientX: 100, clientY: 130 });
+      expect(screen.getByText("Key of E")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-applies the hover-intent delay after leaving the widget entirely and coming back", () => {
+    vi.useFakeTimers();
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+      }, {
+        state: applicationState(loadedServiceState, {
+          plan: {
+            ...loadedPlan,
+            songs: [
+              { id: "item-1", title: "Holy Forever", duration_seconds: 336, order: 1, service_sequence: 20, is_generic: false, source_song_id: "song-1", description: "Key of G, start soft" },
+              { id: "item-3", title: "Great Are You Lord", duration_seconds: 250, order: 3, service_sequence: 40, is_generic: false, source_song_id: "song-3", description: "Key of C" },
+            ],
+          },
+        }),
+      });
+
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const rowA = within(list).getByText("Holy Forever").closest("li")!;
+      const rowC = within(list).getByText("Great Are You Lord").closest("li")!;
+
+      fireEvent.mouseEnter(rowA, { clientX: 100, clientY: 100 });
+      act(() => vi.advanceTimersByTime(500));
+      expect(screen.getByText("Key of G, start soft")).toBeInTheDocument();
+
+      // Leave the widget entirely (no other item hovered).
+      fireEvent.mouseLeave(rowA);
+      act(() => vi.advanceTimersByTime(0));
+      expect(screen.queryByText("Key of G, start soft")).not.toBeInTheDocument();
+
+      // Hovering a different item later requires the delay again.
+      fireEvent.mouseEnter(rowC, { clientX: 100, clientY: 200 });
+      act(() => vi.advanceTimersByTime(499));
+      expect(screen.queryByText("Key of C")).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByText("Key of C")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not show a popover for an item without a description", () => {
-    renderDashboard(loadedServiceState);
+    vi.useFakeTimers();
+    try {
+      renderDashboard(loadedServiceState);
 
-    const list = screen.getByRole("list", { name: "Service plan order" });
-    const row = within(list).getByText("Holy Forever").closest("li")!;
-    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+      const list = screen.getByRole("list", { name: "Service plan order" });
+      const row = within(list).getByText("Holy Forever").closest("li")!;
+      fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+      act(() => vi.advanceTimersByTime(500));
 
-    expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+      expect(document.querySelector('[role="tooltip"].fixed')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("shows a cursor popover for a reference item with a description", () => {
-    renderDashboard({
-      ...loadedServiceState,
-      skipped_items: [
-        {
-          item_id: "item-2",
-          title: "Announcements",
-          description: "Pastor John",
-          item_type: "item",
-          sequence: 30,
-          duration_seconds: 120,
-          reason: "not_song",
-        },
-      ],
-    });
+  it("shows a cursor popover for a reference item with a title heading and description", () => {
+    vi.useFakeTimers();
+    try {
+      renderDashboard({
+        ...loadedServiceState,
+        skipped_items: [
+          {
+            item_id: "item-2",
+            title: "Announcements",
+            description: "Pastor John",
+            item_type: "item",
+            sequence: 30,
+            duration_seconds: 120,
+            reason: "not_song",
+          },
+        ],
+      });
 
-    const row = screen.getAllByText("Pastor John")[0]!.closest("li")!;
-    fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+      const row = screen.getAllByText("Pastor John")[0]!.closest("li")!;
+      fireEvent.mouseEnter(row, { clientX: 100, clientY: 100 });
+      act(() => vi.advanceTimersByTime(500));
 
-    expect(screen.getAllByText("Pastor John").length).toBeGreaterThan(1);
+      expect(screen.getAllByText("Pastor John").length).toBeGreaterThan(1);
+      const tooltip = document.querySelector('[role="tooltip"].fixed') as HTMLElement;
+      expect(tooltip).toHaveTextContent("Announcements");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clamps the popover so a long note near the bottom of the viewport stays fully visible", () => {
+    vi.useFakeTimers();
     const originalInnerHeight = window.innerHeight;
     const originalInnerWidth = window.innerWidth;
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 480 });
@@ -807,6 +909,7 @@ describe("Service plan item hover preview", () => {
       try {
         // Hover near the bottom of a short (480px) viewport, as in the reported repro.
         fireEvent.mouseEnter(row, { clientX: 100, clientY: 470 });
+        act(() => vi.advanceTimersByTime(500));
 
         const tooltip = screen.getByText(/Line 1 of a very long note/, { exact: false }).closest('[role="tooltip"]') as HTMLElement;
         const top = parseFloat(tooltip.style.top);
@@ -816,6 +919,7 @@ describe("Service plan item hover preview", () => {
         getBoundingClientRectSpy.mockRestore();
       }
     } finally {
+      vi.useRealTimers();
       Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
       Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
     }
