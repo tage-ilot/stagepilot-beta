@@ -138,6 +138,20 @@ function request(path: string, method = 'GET', token?: string, value?: unknown, 
   });
 }
 
+// Cloudflare Workers attach edge geolocation as `request.cf` at the runtime
+// level; the standard Request constructor (used by the test harness above)
+// has no way to set it, so tests that exercise geolocation capture build a
+// plain request and then stamp `cf` onto it directly, matching how the
+// real Workers runtime exposes it to `index.ts`.
+function requestWithCf(
+  path: string, method: string, token: string | undefined, value: unknown | undefined,
+  cf: Record<string, unknown> | undefined,
+): Request {
+  const req = request(path, method, token, value);
+  Object.defineProperty(req, 'cf', { value: cf, configurable: true });
+  return req;
+}
+
 async function json(response: Response): Promise<Record<string, unknown>> {
   return await response.json() as Record<string, unknown>;
 }
@@ -1221,6 +1235,114 @@ describe('fleet alert ingestion and admin endpoints', () => {
   it('404s acknowledging an unknown alert id', async () => {
     const response = await registry.fetch(request('/v1/admin/alerts/does-not-exist/acknowledge', 'POST', adminToken));
     expect(response.status).toBe(404);
+  });
+});
+
+describe('fleet city list (edge geolocation, never raw IP)', () => {
+  let storage: MemoryStorage;
+  let provider: FakeCloudflare;
+  let registry: Registry;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    provider = new FakeCloudflare();
+    vi.stubGlobal('fetch', provider.fetch);
+    registry = new Registry({ storage } as unknown as DurableObjectState, env as never);
+  });
+
+  it('captures city/region on status, provision, and reconcile, and updates it on a later check-in', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0001');
+    const credential = String(installation.installationCredential);
+
+    const statusResponse = await registry.fetch(requestWithCf(
+      installationPath(installation, 'status'), 'GET', credential, undefined,
+      { city: 'Austin', region: 'Texas', country: 'US' },
+    ));
+    expect(statusResponse.status).toBe(200);
+    let stored = await storage.get<Record<string, unknown>>(`installation:${String(installation.installationId)}`);
+    expect(stored?.lastCity).toBe('Austin');
+    expect(stored?.lastRegion).toBe('Texas');
+    expect(stored?.lastCountry).toBe('US');
+
+    await registry.fetch(requestWithCf(
+      installationPath(installation, 'provision'), 'POST', credential, { generation: '1' },
+      { city: 'Austin', region: 'Texas', country: 'US' },
+    ));
+
+    // Simulate the installation moving to a different network: the next
+    // routine reconcile check-in should overwrite the stale city, not add
+    // a second record or keep the old value.
+    const reconcileResponse = await registry.fetch(requestWithCf(
+      installationPath(installation, 'reconcile'), 'POST', credential, undefined,
+      { city: 'Denver', region: 'Colorado', country: 'US' },
+    ));
+    expect(reconcileResponse.status).toBe(200);
+    stored = await storage.get<Record<string, unknown>>(`installation:${String(installation.installationId)}`);
+    expect(stored?.lastCity).toBe('Denver');
+    expect(stored?.lastRegion).toBe('Colorado');
+
+    const citiesResponse = await registry.fetch(request('/v1/admin/cities', 'GET', adminToken));
+    const citiesBody = await json(citiesResponse) as { cities: Record<string, unknown>[] };
+    const denver = citiesBody.cities.find((row) => row.location === 'Denver');
+    expect(denver?.count).toBe(1);
+    expect(citiesBody.cities.find((row) => row.location === 'Austin')).toBeUndefined();
+  });
+
+  it('falls back to region, then country, then "Unknown" when finer geolocation is unavailable', async () => {
+    const noCity = await enroll(registry, 'geo-fleet-0002');
+    await registry.fetch(requestWithCf(
+      installationPath(noCity, 'status'), 'GET', String(noCity.installationCredential), undefined,
+      { region: 'Ontario', country: 'CA' },
+    ));
+
+    const noRegion = await enroll(registry, 'geo-fleet-0003');
+    await registry.fetch(requestWithCf(
+      installationPath(noRegion, 'status'), 'GET', String(noRegion.installationCredential), undefined,
+      { country: 'DE' },
+    ));
+
+    const noGeo = await enroll(registry, 'geo-fleet-0004');
+    await registry.fetch(requestWithCf(
+      installationPath(noGeo, 'status'), 'GET', String(noGeo.installationCredential), undefined, undefined,
+    ));
+
+    const response = await registry.fetch(request('/v1/admin/cities', 'GET', adminToken));
+    const body = await json(response) as { cities: Record<string, unknown>[] };
+    const byLocation = new Map(body.cities.map((row) => [row.location, row.count]));
+    expect(byLocation.get('Ontario')).toBe(1);
+    expect(byLocation.get('DE')).toBe(1);
+    expect(byLocation.get('Unknown')).toBe(1);
+  });
+
+  it('aggregates across multiple installations sharing a city and sorts by count descending', async () => {
+    const first = await enroll(registry, 'geo-fleet-0005');
+    const second = await enroll(registry, 'geo-fleet-0006');
+    const third = await enroll(registry, 'geo-fleet-0007');
+    for (const installation of [first, second]) {
+      await registry.fetch(requestWithCf(
+        installationPath(installation, 'status'), 'GET', String(installation.installationCredential), undefined,
+        { city: 'Austin', region: 'Texas', country: 'US' },
+      ));
+    }
+    await registry.fetch(requestWithCf(
+      installationPath(third, 'status'), 'GET', String(third.installationCredential), undefined,
+      { city: 'Denver', region: 'Colorado', country: 'US' },
+    ));
+
+    const response = await registry.fetch(request('/v1/admin/cities', 'GET', adminToken));
+    const body = await json(response) as { cities: Record<string, unknown>[] };
+    expect(body.cities[0]).toEqual({ location: 'Austin', count: 2 });
+    expect(body.cities[1]).toEqual({ location: 'Denver', count: 1 });
+  });
+
+  it('rejects GET /v1/admin/cities without a valid admin bearer token', async () => {
+    const missing = await registry.fetch(request('/v1/admin/cities', 'GET'));
+    expect(missing.status).toBe(401);
+    const wrong = await registry.fetch(request('/v1/admin/cities', 'GET', 'wrong-token-not-admin-at-all-x'));
+    expect(wrong.status).toBe(401);
+    const authorized = await registry.fetch(request('/v1/admin/cities', 'GET', adminToken));
+    expect(authorized.status).toBe(200);
+    expect(await json(authorized)).toEqual({ cities: [] });
   });
 });
 

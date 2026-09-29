@@ -222,6 +222,17 @@
   .status-line.ok { color: var(--success); }
 
   .badge-info { color: var(--info); }
+
+  .city-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid #151b23;
+    font-size: 13px;
+  }
+  .city-row:last-child { border-bottom: none; }
+  .city-row .count { color: var(--muted); }
+
 </style>
 </head>
 <body>
@@ -264,6 +275,11 @@
     <h2>Requests</h2>
     <div id="requests-list"></div>
   </section>
+
+  <section class="panel">
+    <h2>Cities</h2>
+    <div id="cities-list"></div>
+  </section>
 </div>
 
 <script>
@@ -281,6 +297,7 @@
     statRequests: document.getElementById('stat-requests'),
     alertsList: document.getElementById('alerts-list'),
     requestsList: document.getElementById('requests-list'),
+    citiesList: document.getElementById('cities-list'),
   };
 
   var CATEGORY_LABELS = {
@@ -436,6 +453,17 @@
     });
   }
 
+  function renderCities(cities) {
+    els.citiesList.innerHTML = '';
+    if (!cities.length) return renderEmpty(els.citiesList, 'No installations have checked in yet.');
+    cities.forEach(function (row) {
+      var line = el('div', 'city-row');
+      line.appendChild(el('span', null, row.location));
+      line.appendChild(el('span', 'count', String(row.count)));
+      els.citiesList.appendChild(line);
+    });
+  }
+
   function handleDecision(reqItem, row, approved, btns) {
     btns.forEach(function (b) { b.disabled = true; });
     api('/v1/admin/approval-requests/' + encodeURIComponent(reqItem.requestId) + '/decide', {
@@ -468,13 +496,16 @@
       api('/v1/admin/metrics'),
       api('/v1/admin/alerts?status=open'),
       api('/v1/admin/approval-requests?status=pending'),
+      api('/v1/admin/cities'),
     ]).then(function (results) {
       var metrics = results[0];
       var alertsData = results[1];
       var requestsData = results[2];
+      var citiesData = results[3];
       els.statInstallations.textContent = String(metrics.activeInstallations != null ? metrics.activeInstallations : '–');
       renderAlerts(alertsData.alerts || []);
       renderRequests(requestsData.requests || []);
+      renderCities(citiesData.cities || []);
       refreshCounts();
       setStatus('Up to date.', 'ok');
     }).catch(function (err) {
