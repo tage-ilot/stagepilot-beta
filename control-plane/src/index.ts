@@ -53,6 +53,15 @@ interface Installation {
   // installation credential rotates to a fresh value even though the
   // durable id/hostname stay the same.
   credentialGeneration?: number;
+  // Coarse, non-identifying location derived from Cloudflare's edge
+  // geolocation (`request.cf`) on the installation's own authenticated
+  // status/provision/reconcile requests -- never from a raw IP address
+  // (see docs/remote-control-plane.md). Refreshed on every such request,
+  // so a relocated installation's recorded location updates on its next
+  // check-in rather than staying stuck on stale data.
+  lastCity?: string;
+  lastRegion?: string;
+  lastCountry?: string;
 }
 
 interface RateWindow {
@@ -423,6 +432,10 @@ export class Registry {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return reply(await this.stats());
       }
+      if (request.method === 'GET' && url.pathname === '/v1/admin/cities') {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminListCities();
+      }
       const adminRevoke = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/revoke$/);
       if (request.method === 'POST' && adminRevoke) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
@@ -513,6 +526,9 @@ export class Registry {
         return reply({ error: 'unauthorized' }, 401);
       }
       const action = route[2];
+      if (action === 'status' || action === 'provision' || action === 'reconcile') {
+        await this.recordRequestGeo(request, installation);
+      }
       if (action === 'status' && request.method === 'GET') {
         await this.takeInstallationRate(installation, 'status');
         return reply({
@@ -1331,6 +1347,29 @@ export class Registry {
     return reply(publicAlert(record), existing ? 200 : 201);
   }
 
+  // Simple passive "which cities are running an installation" list for the
+  // fleet admin panel. Location comes only from `lastCity`/`lastRegion`/
+  // `lastCountry`, themselves populated from Cloudflare edge geolocation
+  // (never a raw IP) on routine status/provision/reconcile requests. This
+  // is intentionally computed on read rather than cached, matching the
+  // expected scale of a private beta fleet.
+  private async adminListCities(): Promise<Response> {
+    const rows = await this.state.storage.list<Installation>({ prefix: 'installation:' });
+    const counts = new Map<string, number>();
+    for (const installation of rows.values()) {
+      if (installation.revoked) continue;
+      const location = installation.lastCity
+        ?? installation.lastRegion
+        ?? installation.lastCountry
+        ?? 'Unknown';
+      counts.set(location, (counts.get(location) ?? 0) + 1);
+    }
+    const cities = [...counts.entries()]
+      .map(([location, count]) => ({ location, count }))
+      .sort((left, right) => right.count - left.count || left.location.localeCompare(right.location));
+    return reply({ cities });
+  }
+
   private async adminListAlerts(url: URL): Promise<Response> {
     const statusFilter = url.searchParams.get('status');
     if (statusFilter !== null && statusFilter !== 'open' && statusFilter !== 'acknowledged') {
@@ -1520,6 +1559,25 @@ export class Registry {
 
   private async save(installation: Installation): Promise<void> {
     await this.state.storage.put(`installation:${installation.id}`, installation);
+  }
+
+  // Records coarse, non-identifying location from Cloudflare's edge
+  // geolocation on `request.cf` -- never the raw source IP -- so the fleet
+  // admin panel can show a passive "which cities are running" list. Called
+  // on every authenticated status/provision/reconcile request so a moved
+  // installation's location updates after its next check-in.
+  private async recordRequestGeo(request: Request, installation: Installation): Promise<void> {
+    const cf = (request as Request & { cf?: IncomingRequestCfProperties }).cf;
+    const city = typeof cf?.city === 'string' && cf.city.length > 0 ? cf.city : undefined;
+    const region = typeof cf?.region === 'string' && cf.region.length > 0 ? cf.region : undefined;
+    const country = typeof cf?.country === 'string' && cf.country.length > 0 ? cf.country : undefined;
+    if (installation.lastCity === city && installation.lastRegion === region && installation.lastCountry === country) {
+      return;
+    }
+    installation.lastCity = city;
+    installation.lastRegion = region;
+    installation.lastCountry = country;
+    await this.save(installation);
   }
 
   private tunnelName(installation: Installation, generation: string): string {
