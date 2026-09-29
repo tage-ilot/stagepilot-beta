@@ -1,27 +1,25 @@
 """Tests for the critical-alert store and 15 minute cooldown/dedup engine.
 
-These tests never make a real network call: webhook delivery is mocked via
-``httpx.MockTransport`` (matching the pattern used by
-``test_remote_health_alert.py``), so no WhatsApp message is ever sent during
-the test run.
+These tests never make a real network call: control-plane forwarding uses
+``httpx.MockTransport``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import httpx
-import pytest
 
+from stagepilot.remote_bootstrap import DesktopBootstrapStore
 from stagepilot.services.critical_alerts import (
     COOLDOWN_SECONDS,
     STATUS_ACKNOWLEDGED,
     AlertSender,
     CriticalAlertStore,
     alert_critical,
-    build_webhook_payload,
-    default_webhook_url,
-    send_webhook_alert,
+    build_control_plane_payload,
+    send_control_plane_alert,
 )
 
 
@@ -40,11 +38,16 @@ def _store(tmp_path: Path, clock: _Clock) -> CriticalAlertStore:
     return CriticalAlertStore(tmp_path / "alerts.sqlite3", clock=clock)
 
 
-def _recording_sender() -> tuple[list[tuple[str, dict[str, object]]], AlertSender]:
-    calls: list[tuple[str, dict[str, object]]] = []
+def _dummy_bootstrap() -> DesktopBootstrapStore:
+    return cast(DesktopBootstrapStore, object())
 
-    def sender(webhook_url: str, payload: dict[str, object]) -> None:
-        calls.append((webhook_url, payload))
+
+def _recording_sender() -> tuple[list[dict[str, object]], AlertSender]:
+    calls: list[dict[str, object]] = []
+
+    def sender(bootstrap: DesktopBootstrapStore, payload: dict[str, object]) -> bool:
+        calls.append(payload)
+        return True
 
     return calls, sender
 
@@ -60,7 +63,7 @@ def test_fresh_alert_notifies_immediately(tmp_path: Path) -> None:
         "203.0.113.5",
         "Rate limit exhausted for 203.0.113.5",
         "critical",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
 
@@ -68,13 +71,15 @@ def test_fresh_alert_notifies_immediately(tmp_path: Path) -> None:
     assert result.alert.count == 1
     assert result.alert.status == "open"
     assert len(calls) == 1
-    webhook_url, payload = calls[0]
-    assert webhook_url == "http://127.0.0.1:9/hook"
+    payload = calls[0]
     assert payload == {
         "category": "rate_limit_exhausted",
-        "message": "Rate limit exhausted for 203.0.113.5",
         "subject": "203.0.113.5",
+        "message": "Rate limit exhausted for 203.0.113.5",
         "severity": "critical",
+        "first_seen": "1970-01-12T13:46:40Z",
+        "last_seen": "1970-01-12T13:46:40Z",
+        "count": 1,
     }
 
 
@@ -89,7 +94,7 @@ def test_repeat_within_cooldown_does_not_renotify_but_increments_count(tmp_path:
         "loc:module.py:42",
         "boom",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
     clock.advance(60.0)
@@ -99,7 +104,7 @@ def test_repeat_within_cooldown_does_not_renotify_but_increments_count(tmp_path:
         "loc:module.py:42",
         "boom again",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
 
@@ -121,7 +126,7 @@ def test_repeat_after_cooldown_renotifies(tmp_path: Path) -> None:
         "user@example.com",
         "odd pattern",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
     clock.advance(COOLDOWN_SECONDS + 1)
@@ -131,7 +136,7 @@ def test_repeat_after_cooldown_renotifies(tmp_path: Path) -> None:
         "user@example.com",
         "still odd",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
 
@@ -153,7 +158,7 @@ def test_repeat_exactly_at_cooldown_boundary_renotifies(tmp_path: Path) -> None:
         "subj",
         "m",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
     clock.advance(COOLDOWN_SECONDS)
@@ -163,7 +168,7 @@ def test_repeat_exactly_at_cooldown_boundary_renotifies(tmp_path: Path) -> None:
         "subj",
         "m2",
         "warning",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
 
@@ -182,7 +187,7 @@ def test_acknowledge_then_new_occurrence_notifies_fresh(tmp_path: Path) -> None:
         "loc:x.py:1",
         "boom",
         "critical",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
     store.acknowledge(first.alert.id)
@@ -193,7 +198,7 @@ def test_acknowledge_then_new_occurrence_notifies_fresh(tmp_path: Path) -> None:
         "loc:x.py:1",
         "boom again",
         "critical",
-        webhook_url="http://127.0.0.1:9/hook",
+        bootstrap=_dummy_bootstrap(),
         sender=sender,
     )
 
@@ -210,7 +215,7 @@ def test_acknowledge_marks_status_and_stops_further_renotify_until_new_occurrenc
     clock = _Clock()
     store = _store(tmp_path, clock)
 
-    first = alert_critical(store, "cat", "subj", "m", "warning", webhook_url="")
+    first = alert_critical(store, "cat", "subj", "m", "warning")
     acked = store.acknowledge(first.alert.id)
     assert acked is not None
     assert acked.status == STATUS_ACKNOWLEDGED
@@ -228,8 +233,8 @@ def test_list_open_and_get(tmp_path: Path) -> None:
     clock = _Clock()
     store = _store(tmp_path, clock)
 
-    a = alert_critical(store, "cat1", "subj1", "m1", "warning", webhook_url="")
-    b = alert_critical(store, "cat2", "subj2", "m2", "critical", webhook_url="")
+    a = alert_critical(store, "cat1", "subj1", "m1", "warning")
+    b = alert_critical(store, "cat2", "subj2", "m2", "critical")
 
     open_alerts = store.list_open()
     assert {alert.id for alert in open_alerts} == {a.alert.id, b.alert.id}
@@ -242,42 +247,57 @@ def test_list_open_and_get(tmp_path: Path) -> None:
     assert store.get(999999) is None
 
 
-def test_webhook_payload_shape_is_exact(tmp_path: Path) -> None:
+def test_control_plane_payload_shape_is_exact(tmp_path: Path) -> None:
     clock = _Clock()
     store = _store(tmp_path, clock)
 
-    result = alert_critical(
-        store, "rate_limit_exhausted", "1.2.3.4", "msg", "critical", webhook_url=""
-    )
-    payload = build_webhook_payload(result.alert)
+    result = alert_critical(store, "rate_limit_exhausted", "1.2.3.4", "msg", "critical")
+    payload = build_control_plane_payload(result.alert)
 
-    assert set(payload.keys()) == {"category", "message", "subject", "severity"}
-    assert payload["category"] == "rate_limit_exhausted"
-    assert payload["subject"] == "1.2.3.4"
-    assert payload["message"] == "msg"
-    assert payload["severity"] == "critical"
-
-
-def test_default_webhook_url_falls_back_to_known_local_hook() -> None:
-    assert default_webhook_url({}) == "http://localhost:8644/webhooks/stagepilot-critical-alert"
+    assert payload == {
+        "category": "rate_limit_exhausted",
+        "subject": "1.2.3.4",
+        "message": "msg",
+        "severity": "critical",
+        "first_seen": "1970-01-12T13:46:40Z",
+        "last_seen": "1970-01-12T13:46:40Z",
+        "count": 1,
+    }
 
 
-def test_default_webhook_url_honors_env_override() -> None:
-    overridden = default_webhook_url(
-        {"STAGEPILOT_CRITICAL_ALERT_WEBHOOK_URL": "http://example.invalid/hook"}
-    )
-    assert overridden == "http://example.invalid/hook"
+class _Bootstrap:
+    def __init__(self, *, enrolled: bool = True) -> None:
+        from types import SimpleNamespace
+
+        self.trusted_origins = frozenset({"https://control.example"})
+        self._active = (
+            SimpleNamespace(
+                control_plane_origin="https://control.example",
+                installation_id="abcd1234",
+            )
+            if enrolled
+            else None
+        )
+
+    def state(self) -> object:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(active=self._active)
+
+    def credential(self, metadata: object) -> str:
+        return "spi_abcd1234." + "s" * 43
 
 
-def test_send_webhook_alert_posts_expected_payload_via_mock_transport() -> None:
+def test_send_control_plane_alert_posts_with_installation_auth() -> None:
+    import json
+
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
         seen["json"] = json.loads(request.content)
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(201, json={"ok": True})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     payload: dict[str, object] = {
@@ -285,29 +305,43 @@ def test_send_webhook_alert_posts_expected_payload_via_mock_transport() -> None:
         "message": "m",
         "subject": "s",
         "severity": "warning",
+        "first_seen": "2026-09-29T15:00:00Z",
+        "last_seen": "2026-09-29T15:00:01Z",
+        "count": 2,
     }
+    bootstrap = cast(DesktopBootstrapStore, _Bootstrap())
 
-    send_webhook_alert("http://127.0.0.1:9/hook", payload, client=client)
-
-    assert seen["url"] == "http://127.0.0.1:9/hook"
+    assert send_control_plane_alert(bootstrap, payload, client=client) is True
+    assert seen["url"] == "https://control.example/v1/installations/abcd1234/alerts"
+    assert seen["authorization"] == "Bearer spi_abcd1234." + "s" * 43
     assert seen["json"] == payload
 
 
-def test_send_webhook_alert_raises_on_http_error() -> None:
+def test_send_control_plane_alert_http_error_degrades_gracefully() -> None:
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500)))
+    bootstrap = cast(DesktopBootstrapStore, _Bootstrap())
+
+    assert send_control_plane_alert(bootstrap, {"category": "x"}, client=client) is False
+
+
+def test_unenrolled_installation_is_noop_without_network() -> None:
+    called = False
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
         return httpx.Response(500)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
+    bootstrap = cast(DesktopBootstrapStore, _Bootstrap(enrolled=False))
 
-    with pytest.raises(httpx.HTTPStatusError):
-        send_webhook_alert("http://127.0.0.1:9/hook", {"category": "x"}, client=client)
+    assert send_control_plane_alert(bootstrap, {"category": "x"}, client=client) is False
+    assert called is False
 
 
-def test_no_real_network_calls_when_webhook_url_empty(tmp_path: Path) -> None:
-    """Passing an empty webhook_url disables delivery entirely (no sender invoked)."""
-
+def test_alert_without_bootstrap_still_records_locally(tmp_path: Path) -> None:
     clock = _Clock()
     store = _store(tmp_path, clock)
-    result = alert_critical(store, "cat", "subj", "m", "warning", webhook_url="")
-    assert result.should_notify is True  # engine still says notify...
-    # ...but no delivery attempt is made (default sender was never called with a URL).
+    result = alert_critical(store, "cat", "subj", "m", "warning")
+    assert result.should_notify is True
+    assert result.alert.count == 1
