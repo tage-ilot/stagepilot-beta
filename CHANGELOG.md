@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.104-beta.17] - 2026-09-29
+
+### Fixed
+
+- Merged all 9 pending PRs (#44-#52) into a single integration branch and
+  resolved two cross-PR contract breaks that no individual PR's CI could see:
+  the Planning Center client Protocol widened by #49 to include
+  `resolve_selected_plan` is now satisfied by every test double (#45, #50);
+  the Timezone select re-keyed from offset-minutes to IANA zones by #47 now
+  has its Baker Island (`Etc/GMT+12`, UTC-12) coverage from #49 asserting the
+  correct IANA-keyed value instead of the superseded offset value.
+
 ## [1.1.104-beta.16] - 2026-09-27
 
 ### Fixed
