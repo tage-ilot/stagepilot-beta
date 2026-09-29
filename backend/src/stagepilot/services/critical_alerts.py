@@ -1,17 +1,15 @@
 """Critical-error alert store with a 15 minute per-alert-key cooldown/dedup engine.
 
-Foundation for selective, deliberately-chosen-call-site alerting to the
-operator's WhatsApp via an existing Hermes webhook. This module is
-intentionally NOT a blanket "forward every error" pipe: callers decide when
-``alert_critical`` is worth invoking. It owns only:
+Foundation for selective, deliberately-chosen-call-site alerting. This module
+is intentionally NOT a blanket "forward every error" pipe: callers decide
+when ``alert_critical`` is worth invoking. It owns only:
 
 - Persisting alert occurrences (SQLite, one row per distinct ``(category,
   subject)`` key while the alert stays "open").
 - Deciding whether a given occurrence should trigger a fresh notification,
   given the 15 minute cooldown and any prior acknowledgement.
-- Delivering the notification over the same ``httpx``-based webhook POST
-  pattern used by ``remote_health_alert.send_alert`` (mockable transport, no
-  real network calls in tests).
+- Forwarding fresh notifications to the shared control plane using the
+  installation's existing enrolled identity.
 - Read/query helpers for a future admin API and web UI (list open alerts,
   fetch by id, acknowledge).
 
@@ -21,7 +19,7 @@ as ``services.remote_auth.RemoteStore``.
 
 from __future__ import annotations
 
-import os
+import logging
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
@@ -32,25 +30,14 @@ from typing import Protocol
 
 import httpx
 
+from stagepilot.remote_bootstrap import DesktopBootstrapStore
+
 COOLDOWN_SECONDS = 15 * 60
-DEFAULT_WEBHOOK_URL = "http://localhost:8644/webhooks/stagepilot-critical-alert"
-WEBHOOK_URL_ENV_VAR = "STAGEPILOT_CRITICAL_ALERT_WEBHOOK_URL"
 
 STATUS_OPEN = "open"
 STATUS_ACKNOWLEDGED = "acknowledged"
 
-
-def default_webhook_url(environ: dict[str, str] | None = None) -> str:
-    """The operator-configured webhook URL, defaulting to the known local hook.
-
-    Follows the same env-var-overrides-default pattern as
-    ``remote_health_alert``'s ``STAGEPILOT_HEARTBEAT_ALERT_WEBHOOK_URL``, so
-    the URL can change without a code edit and is never hard-coded as the
-    only option.
-    """
-
-    values = os.environ if environ is None else environ
-    return values.get(WEBHOOK_URL_ENV_VAR) or DEFAULT_WEBHOOK_URL
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,40 +61,69 @@ class AlertResult:
 
 
 class AlertSender(Protocol):
-    def __call__(self, webhook_url: str, payload: dict[str, object]) -> None: ...
+    def __call__(
+        self, bootstrap: DesktopBootstrapStore, payload: dict[str, object]
+    ) -> bool: ...
 
 
-def send_webhook_alert(
-    webhook_url: str,
+def send_control_plane_alert(
+    bootstrap: DesktopBootstrapStore,
     payload: dict[str, object],
     *,
     client: httpx.Client | None = None,
     timeout: float = 10.0,
-) -> None:
-    """POST the alert payload to the operator-configured webhook.
+) -> bool:
+    """Forward an alert using this installation's existing enrolled identity.
 
-    Mirrors ``remote_health_alert.send_alert``: an injectable ``httpx.Client``
-    keeps tests free of real network calls (see ``httpx.MockTransport``).
+    A machine without an active enrollment is a normal no-op. Network,
+    credential, or configuration failures are logged locally and never escape
+    into the alerting call path.
     """
 
-    owns_client = client is None
-    active = client or httpx.Client(timeout=timeout, trust_env=False)
     try:
-        response = active.post(webhook_url, json=payload)
-        response.raise_for_status()
-    finally:
-        if owns_client:
-            active.close()
+        active = bootstrap.state().active
+        if active is None:
+            logger.info("critical alert not forwarded: installation is not enrolled")
+            return False
+        if active.control_plane_origin not in bootstrap.trusted_origins:
+            logger.warning("critical alert not forwarded: control-plane origin is not trusted")
+            return False
+        credential = bootstrap.credential(active)
+        owns_client = client is None
+        http = client or httpx.Client(
+            base_url=active.control_plane_origin,
+            timeout=timeout,
+            trust_env=False,
+            follow_redirects=False,
+        )
+        try:
+            response = http.post(
+                f"{active.control_plane_origin}/v1/installations/"
+                f"{active.installation_id}/alerts",
+                headers={"authorization": f"Bearer {credential}"},
+                json=payload,
+            )
+            response.raise_for_status()
+        finally:
+            if owns_client:
+                http.close()
+    except Exception:
+        logger.warning("critical alert could not be forwarded to the control plane", exc_info=True)
+        return False
+    return True
 
 
-def build_webhook_payload(alert: CriticalAlert) -> dict[str, object]:
-    """Payload shape required by the webhook's prompt template."""
+def build_control_plane_payload(alert: CriticalAlert) -> dict[str, object]:
+    """Payload accepted by the control-plane installation alert endpoint."""
 
     return {
         "category": alert.category,
-        "message": alert.message,
         "subject": alert.subject,
+        "message": alert.message,
         "severity": alert.severity,
+        "first_seen": alert.first_seen,
+        "last_seen": alert.last_seen,
+        "count": alert.count,
     }
 
 
@@ -247,40 +263,31 @@ def alert_critical(
     message: str,
     severity: str,
     *,
-    webhook_url: str | None = None,
-    sender: AlertSender = send_webhook_alert,
+    bootstrap: DesktopBootstrapStore | None = None,
+    sender: AlertSender = send_control_plane_alert,
 ) -> AlertResult:
-    """Single entry point other code calls to raise a critical alert.
+    """Record an alert and forward fresh notifications to the control plane.
 
-    Records the occurrence in ``store`` and, when the cooldown/dedup engine
-    says a fresh notification is warranted, delivers it to the configured
-    webhook. ``webhook_url=None`` (the default) resolves the operator's
-    configured URL via ``default_webhook_url()``, following the same
-    "unset means no-op" safety default as ``remote_health_alert``... except
-    here delivery always has a sane built-in default, so pass an empty
-    string explicitly to disable delivery in a given call.
+    Cooldown/dedup always runs locally. A missing bootstrap store means the
+    installation has no enrolled control-plane identity yet, so forwarding is
+    deliberately skipped without affecting the caller.
     """
 
     result = store.record(category, subject, message, severity)
-    if result.should_notify:
-        url = default_webhook_url() if webhook_url is None else webhook_url
-        if url:
-            sender(url, build_webhook_payload(result.alert))
+    if result.should_notify and bootstrap is not None:
+        sender(bootstrap, build_control_plane_payload(result.alert))
     return result
 
 
 __all__ = [
     "COOLDOWN_SECONDS",
-    "DEFAULT_WEBHOOK_URL",
     "STATUS_ACKNOWLEDGED",
     "STATUS_OPEN",
-    "WEBHOOK_URL_ENV_VAR",
     "AlertResult",
     "AlertSender",
     "CriticalAlert",
     "CriticalAlertStore",
     "alert_critical",
-    "build_webhook_payload",
-    "default_webhook_url",
-    "send_webhook_alert",
+    "build_control_plane_payload",
+    "send_control_plane_alert",
 ]
