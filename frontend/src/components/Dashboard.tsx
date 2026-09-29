@@ -132,8 +132,26 @@ function ActionButton({
 const CURSOR_POPOVER_OFFSET = 14;
 const CURSOR_POPOVER_WIDTH = 288;
 const TOUCH_TAP_MAX_DRIFT = 10;
+const HOVER_PREVIEW_WARMUP_DELAY_MS = 500;
 
-function useCursorPopover(text: string | null | undefined) {
+// Shared, widget-level "hover-intent" state: the popover only appears after
+// the pointer has sat still over an item for HOVER_PREVIEW_WARMUP_DELAY_MS.
+// Once warmed up during a continuous hover session over the widget, moving
+// between adjacent items shows their popovers immediately (no re-delay).
+// Leaving the widget entirely (hoverCount drops to 0 and stays there) resets
+// the warmup so the delay applies again next time.
+type HoverPreviewWarmupState = {
+  hoverCount: number;
+  warm: boolean;
+  leaveTimer: ReturnType<typeof setTimeout> | null;
+  delayMs: number;
+};
+
+function createHoverPreviewWarmupState(delayMs = HOVER_PREVIEW_WARMUP_DELAY_MS): HoverPreviewWarmupState {
+  return { hoverCount: 0, warm: false, leaveTimer: null, delayMs };
+}
+
+function useCursorPopover(text: string | null | undefined, warmup?: HoverPreviewWarmupState) {
   const [visible, setVisible] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -143,6 +161,15 @@ function useCursorPopover(text: string | null | undefined) {
   const sizeRef = useRef({ width: CURSOR_POPOVER_WIDTH, height: 0 });
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const lastPointerRef = useRef({ x: 0, y: 0 });
+  const warmupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearWarmupTimer = () => {
+    if (warmupTimerRef.current === null) return;
+    clearTimeout(warmupTimerRef.current);
+    warmupTimerRef.current = null;
+  };
+
+  useEffect(() => clearWarmupTimer, []);
 
   const clampPosition = (clientX: number, clientY: number) => {
     if (typeof window === "undefined") return { x: clientX, y: clientY };
@@ -177,9 +204,33 @@ function useCursorPopover(text: string | null | undefined) {
     setVisible(true);
   };
 
+  // Enters the widget's shared hover-intent session: if the widget hasn't
+  // "warmed up" yet in this continuous session, wait for the warmup delay
+  // before opening; if it's already warm (e.g. moving between adjacent
+  // items), open immediately with no re-delay.
   const onMouseEnter: MouseEventHandler<HTMLElement> = (event) => {
     if (!hasText) return;
-    openAt(event.clientX, event.clientY);
+    const { clientX, clientY } = event;
+    if (!warmup) {
+      openAt(clientX, clientY);
+      return;
+    }
+    if (warmup.leaveTimer !== null) {
+      clearTimeout(warmup.leaveTimer);
+      warmup.leaveTimer = null;
+    }
+    warmup.hoverCount += 1;
+    if (warmup.warm) {
+      openAt(clientX, clientY);
+      return;
+    }
+    lastPointerRef.current = { x: clientX, y: clientY };
+    clearWarmupTimer();
+    warmupTimerRef.current = setTimeout(() => {
+      warmupTimerRef.current = null;
+      warmup.warm = true;
+      openAt(lastPointerRef.current.x, lastPointerRef.current.y);
+    }, warmup.delayMs);
   };
 
   const onMouseMove: MouseEventHandler<HTMLElement> = (event) => {
@@ -188,7 +239,23 @@ function useCursorPopover(text: string | null | undefined) {
     setPosition(clampPosition(event.clientX, event.clientY));
   };
 
-  const onMouseLeave = () => setVisible(false);
+  // Leaving this item (but possibly still within the widget, e.g. moving to
+  // an adjacent item) closes this item's popover. The widget-level warmup
+  // only resets once ALL items have been left (hoverCount reaches 0), after
+  // a short grace period so moving directly between adjacent items doesn't
+  // momentarily drop to zero and reset warmth.
+  const onMouseLeave = () => {
+    clearWarmupTimer();
+    setVisible(false);
+    if (!warmup) return;
+    warmup.hoverCount = Math.max(0, warmup.hoverCount - 1);
+    if (warmup.hoverCount > 0) return;
+    if (warmup.leaveTimer !== null) clearTimeout(warmup.leaveTimer);
+    warmup.leaveTimer = setTimeout(() => {
+      warmup.leaveTimer = null;
+      if (warmup.hoverCount === 0) warmup.warm = false;
+    }, 0);
+  };
 
   // Touch has no hover state: track tap start, and on release treat it as a
   // tap (not a scroll/drag) if the finger barely moved, toggling the popover.
@@ -249,11 +316,13 @@ function useCursorPopover(text: string | null | undefined) {
 function CursorPopover({
   open,
   position,
+  title,
   text,
   popoverRef,
 }: {
   open: boolean;
   position: { x: number; y: number };
+  title?: string | null;
   text: string | null | undefined;
   popoverRef?: Ref<HTMLDivElement>;
 }) {
@@ -265,13 +334,16 @@ function CursorPopover({
       role="tooltip"
       style={{ left: position.x, top: position.y }}
     >
+      {title && title.trim() && (
+        <p className="mb-1 truncate text-xs font-bold uppercase tracking-wider text-slate-100">{title}</p>
+      )}
       {text}
     </div>
   );
 }
 
-function SongRow({ song, current, next }: { song: Song; current: boolean; next: boolean }) {
-  const popover = useCursorPopover(song.description);
+function SongRow({ song, current, next, hoverWarmup }: { song: Song; current: boolean; next: boolean; hoverWarmup?: HoverPreviewWarmupState }) {
+  const popover = useCursorPopover(song.description, hoverWarmup);
   const { ref: popoverHoverRef, ...popoverHoverProps } = popover.hoverProps;
   return (
     <li
@@ -294,13 +366,13 @@ function SongRow({ song, current, next }: { song: Song; current: boolean; next: 
       <span className={`font-mono text-sm font-semibold tabular-nums ${song.duration_seconds ? "text-slate-300" : "text-rose-300"}`}>
         {formatDuration(song.duration_seconds)}
       </span>
-      <CursorPopover open={popover.open} position={popover.position} text={song.description} popoverRef={popover.popoverRef} />
+      <CursorPopover open={popover.open} position={popover.position} title={song.title} text={song.description} popoverRef={popover.popoverRef} />
     </li>
   );
 }
 
-function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
-  const popover = useCursorPopover(item.description);
+function ReferenceItemRow({ item, hoverWarmup }: { item: SkippedServiceItem; hoverWarmup?: HoverPreviewWarmupState }) {
+  const popover = useCursorPopover(item.description, hoverWarmup);
   const { ref: refHoverRef, ...refHoverProps } = popover.hoverProps;
   if (item.reason === "header") {
     return (
@@ -328,7 +400,7 @@ function ReferenceItemRow({ item }: { item: SkippedServiceItem }) {
       <span className="font-mono text-sm font-semibold tabular-nums text-slate-600">
         {formatDuration(item.duration_seconds)}
       </span>
-      <CursorPopover open={popover.open} position={popover.position} text={item.description} popoverRef={popover.popoverRef} />
+      <CursorPopover open={popover.open} position={popover.position} title={item.title} text={item.description} popoverRef={popover.popoverRef} />
     </li>
   );
 }
@@ -450,6 +522,7 @@ export function Dashboard({
   const [statusCompact, setStatusCompact] = useState(() => window.innerWidth <= 1_000);
   const [statusMotionPhase, setStatusMotionPhase] = useState<"idle" | "preparing" | "moving">("idle");
   const readinessHover = useDelayedHover();
+  const hoverPreviewWarmupRef = useRef<HoverPreviewWarmupState>(createHoverPreviewWarmupState());
   const notificationId = useRef(0);
   const updateButton = useRef<HTMLButtonElement>(null);
   const connectionsRow = useRef<HTMLElement>(null);
@@ -1007,8 +1080,8 @@ export function Dashboard({
           </div>
           <ol aria-label="Service plan order" className="min-h-0 flex-1 overflow-hidden" data-autosize-content>
             {servicePlanEntries.map((entry) => entry.kind === "song"
-              ? <SongRow key={`song-${entry.song.id}`} song={entry.song} current={entry.song.id === state.current_song?.id} next={entry.song.id === state.next_song?.id} />
-              : <ReferenceItemRow key={`reference-${entry.item.item_id}`} item={entry.item} />)}
+              ? <SongRow key={`song-${entry.song.id}`} song={entry.song} current={entry.song.id === state.current_song?.id} next={entry.song.id === state.next_song?.id} hoverWarmup={hoverPreviewWarmupRef.current} />
+              : <ReferenceItemRow key={`reference-${entry.item.item_id}`} item={entry.item} hoverWarmup={hoverPreviewWarmupRef.current} />)}
           </ol>
         </section>
           ),
