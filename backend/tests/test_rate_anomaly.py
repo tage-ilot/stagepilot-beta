@@ -8,11 +8,12 @@ is ever made during the test run.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
+from stagepilot.remote_bootstrap import DesktopBootstrapStore
 from stagepilot.services.critical_alerts import AlertSender, CriticalAlertStore
 from stagepilot.services.rate_anomaly import (
     DEFAULT_THRESHOLDS,
@@ -33,11 +34,16 @@ class _Clock:
         self.now += seconds
 
 
-def _recording_sender() -> tuple[list[tuple[str, dict[str, object]]], AlertSender]:
-    calls: list[tuple[str, dict[str, object]]] = []
+def _dummy_bootstrap() -> DesktopBootstrapStore:
+    return cast(DesktopBootstrapStore, object())
 
-    def sender(webhook_url: str, payload: dict[str, object]) -> None:
-        calls.append((webhook_url, payload))
+
+def _recording_sender() -> tuple[list[dict[str, object]], AlertSender]:
+    calls: list[dict[str, object]] = []
+
+    def sender(bootstrap: DesktopBootstrapStore, payload: dict[str, object]) -> bool:
+        calls.append(payload)
+        return True
 
     return calls, sender
 
