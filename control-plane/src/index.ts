@@ -30,6 +30,12 @@ interface Env {
   // Static asset binding for the fleet admin panel (control-plane/public),
   // configured via the [assets] block in wrangler.toml.
   ASSETS?: Fetcher;
+  // R2 bucket for installation-uploaded diagnostic bundles (frontend/backend
+  // logs + app/version info). Optional/deferred the same way GITHUB_RELEASE_TOKEN
+  // is: if the deploying CLOUDFLARE_API_TOKEN lacks R2 permissions this binding
+  // can be left unprovisioned and the diagnostics routes respond 503 instead of
+  // ever throwing on a missing binding.
+  DIAGNOSTICS?: R2Bucket;
 }
 
 type Phase = 'disabled' | 'enabling' | 'provisioned' | 'revoking';
@@ -69,6 +75,21 @@ interface Installation {
   // or access-control state. Use `revoked` (via the existing revoke
   // endpoint) to actually cut off an installation's access.
   archived?: boolean;
+  // Rate-limit window for diagnostic bundle uploads, tracked separately from
+  // statusRate/mutationRate so a crash loop hammering /diagnostics cannot
+  // also exhaust the installation's normal status/mutation quota.
+  diagnosticsRate?: RateWindow;
+}
+
+// Metadata for one uploaded diagnostic bundle (frontend log + backend log +
+// app/version info, built client-side by the Tauri "send logs" command). The
+// bundle bytes themselves live in R2, keyed by installation id + timestamp;
+// this is only the small per-upload record the admin list/listing reads.
+interface DiagnosticsBundleMeta {
+  installationId: string;
+  key: string;
+  uploadedAt: string;
+  size: number;
 }
 
 interface RateWindow {
@@ -192,6 +213,11 @@ const OAUTH_FLOW_ID = /^[a-f0-9]{32}$/;
 const OAUTH_FLOWS_PER_MINUTE = 10;
 const OAUTH_TOKEN_REQUESTS_PER_MINUTE = 20;
 const MAX_OAUTH_RATE_SOURCES = 2_000;
+const MAX_DIAGNOSTICS_BUNDLE_BYTES = 2 * 1024 * 1024;
+const DIAGNOSTICS_UPLOADS_PER_HOUR = 6;
+// Retention is enforced by an R2 bucket lifecycle rule (see wrangler.toml),
+// not in Worker code; documented here for discoverability.
+const DIAGNOSTICS_RETENTION_DAYS = 30;
 
 function exactLengthStream(
   body: ReadableStream<Uint8Array>,
@@ -346,6 +372,19 @@ async function body(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
+// Dedicated, much larger size cap for diagnostic bundle uploads only -- the
+// 4096-byte cap enforced by body() above is unchanged for every other route.
+// Returns the raw bytes (the bundle is an opaque JSON/text blob built by the
+// Tauri "send logs" command; the Worker never needs to parse its contents,
+// only size-check and store it), so this intentionally does not JSON.parse.
+async function sizedBody(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const length = Number(request.headers.get('content-length') ?? '0');
+  if (!Number.isFinite(length) || length <= 0 || length > maxBytes) throw new Error('invalid request');
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new Error('invalid request');
+  return bytes;
+}
+
 function publicInstallation(installation: Installation): Record<string, unknown> {
   return {
     installationId: installation.id,
@@ -485,6 +524,18 @@ export class Registry {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.adminAcknowledgeAlert(adminAcknowledge[1]);
       }
+      const adminDiagnosticsList = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/diagnostics$/);
+      if (request.method === 'GET' && adminDiagnosticsList) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminListDiagnostics(adminDiagnosticsList[1]);
+      }
+      const adminDiagnosticsGet = url.pathname.match(
+        /^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/diagnostics\/([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$/,
+      );
+      if (request.method === 'GET' && adminDiagnosticsGet) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminGetDiagnostic(adminDiagnosticsGet[1], adminDiagnosticsGet[2]);
+      }
       const adminRateLimitReset = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/rate-limit\/reset$/);
       if (request.method === 'POST' && adminRateLimitReset) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
@@ -531,6 +582,21 @@ export class Registry {
         }
         await this.takeInstallationRate(installation, 'mutation');
         return await this.ingestAlert(request, installation);
+      }
+      // Diagnostic bundle upload (opaque JSON blob: frontend log + backend
+      // log + app/version info, built client-side by the Tauri "send logs"
+      // command). Authenticated exactly like /alerts above, but deliberately
+      // rate-limited on its OWN dedicated window (not takeInstallationRate's
+      // mutation bucket) so a crash loop retrying this one route repeatedly
+      // cannot also exhaust the installation's normal status/mutation quota.
+      const installationDiagnostics = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/diagnostics$/);
+      if (request.method === 'POST' && installationDiagnostics) {
+        const installation = await this.state.storage.get<Installation>(`installation:${installationDiagnostics[1]}`);
+        if (!installation || installation.revoked || !(await this.isInstallation(request, installation))) {
+          return reply({ error: 'unauthorized' }, 401);
+        }
+        await this.takeDiagnosticsRate(installation);
+        return await this.uploadDiagnostics(request, installation);
       }
       const reenrollRoute = url.pathname.match(/^\/v1\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/reenroll$/);
       if (request.method === 'POST' && reenrollRoute) {
@@ -1484,6 +1550,107 @@ export class Registry {
     const updated: AlertRecord = { ...alert, status: 'acknowledged', updatedAt: new Date().toISOString() };
     await this.state.storage.put(key, updated);
     return reply(publicAlert(updated));
+  }
+
+  // --- Diagnostic bundle uploads -------------------------------------------
+  //
+  // Bundles are opaque JSON/text blobs (frontend log + backend log + app and
+  // version info) built client-side by the Tauri "send logs" command. The
+  // Worker never parses the contents -- it only size-checks, rate-limits,
+  // and stores the bytes in R2 -- so a change to the bundle's internal shape
+  // never requires a control-plane deploy. R2Object metadata (key, size,
+  // uploadedAt) is mirrored into DO storage so the admin list route doesn't
+  // need an R2 list call (and so it survives even if R2 lifecycle rules have
+  // not yet expired a bundle that storage has already forgotten -- not
+  // expected to diverge, but DO storage stays the single source of truth for
+  // what the admin panel shows).
+
+  private async takeDiagnosticsRate(installation: Installation): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const current = installation.diagnosticsRate;
+    const window = !current || now - current.startedAt >= 3600
+      ? { startedAt: now, count: 0 }
+      : current;
+    if (window.count >= DIAGNOSTICS_UPLOADS_PER_HOUR) {
+      throw new Limited(429, Math.max(1, 3600 - (now - window.startedAt)), 'diagnostics upload rate limited');
+    }
+    installation.diagnosticsRate = { ...window, count: window.count + 1 };
+    await this.save(installation);
+  }
+
+  private diagnosticsKey(installationId: string, uploadedAt: string, suffix: string): string {
+    // e.g. diagnostics/<installationId>/20260401T120000Z-a1b2c3d4 -- sortable
+    // by time and collision-resistant without leaking any bundle contents in
+    // the key itself.
+    const stamp = uploadedAt.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    return `diagnostics/${installationId}/${stamp}-${suffix}`;
+  }
+
+  private async uploadDiagnostics(request: Request, installation: Installation): Promise<Response> {
+    if (!this.env.DIAGNOSTICS) return reply({ error: 'diagnostics storage unavailable' }, 503);
+    let bytes: Uint8Array;
+    try {
+      bytes = await sizedBody(request, MAX_DIAGNOSTICS_BUNDLE_BYTES);
+    } catch {
+      return reply({ error: 'invalid request' }, 400);
+    }
+    const uploadedAt = new Date().toISOString();
+    const suffix = randomHex(4);
+    const objectKey = this.diagnosticsKey(installation.id, uploadedAt, suffix);
+    await this.env.DIAGNOSTICS.put(objectKey, bytes, {
+      httpMetadata: { contentType: 'application/json' },
+    });
+    const meta: DiagnosticsBundleMeta = {
+      installationId: installation.id,
+      key: objectKey,
+      uploadedAt,
+      size: bytes.byteLength,
+    };
+    await this.state.storage.put(`diagnostics-meta:${installation.id}:${uploadedAt}:${suffix}`, meta);
+    return reply({ uploadedAt, size: meta.size }, 201);
+  }
+
+  // The "id" segment in the admin GET route is the `<stamp>-<suffix>` tail of
+  // the stored object key (not the full R2 key, which also embeds the
+  // installation id already present in the URL path).
+  private async findDiagnosticsMeta(installationId: string, idSegment: string): Promise<DiagnosticsBundleMeta | undefined> {
+    const rows = await this.state.storage.list<DiagnosticsBundleMeta>({ prefix: `diagnostics-meta:${installationId}:` });
+    return [...rows.values()].find((meta) => meta.key.endsWith(`/${idSegment}`));
+  }
+
+  private async adminListDiagnostics(installationId: string): Promise<Response> {
+    const installation = await this.state.storage.get<Installation>(`installation:${installationId}`);
+    if (!installation) return reply({ error: 'not found' }, 404);
+    const rows = await this.state.storage.list<DiagnosticsBundleMeta>({ prefix: `diagnostics-meta:${installationId}:` });
+    const bundles = [...rows.values()]
+      .sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt))
+      .map((meta) => ({
+        id: meta.key.split('/').at(-1),
+        uploadedAt: meta.uploadedAt,
+        size: meta.size,
+      }));
+    return reply({ bundles });
+  }
+
+  private async adminGetDiagnostic(installationId: string, idSegment: string): Promise<Response> {
+    if (!this.env.DIAGNOSTICS) return reply({ error: 'diagnostics storage unavailable' }, 503);
+    const meta = await this.findDiagnosticsMeta(installationId, idSegment);
+    if (!meta) return reply({ error: 'not found' }, 404);
+    const object = await this.env.DIAGNOSTICS.get(meta.key);
+    if (!object) return reply({ error: 'not found' }, 404);
+    // Stream the object straight through the Worker under the same admin
+    // bearer-token auth already enforced above -- simpler and just as safe
+    // as a presigned URL for this codebase (no separate R2 S3-compatible
+    // credential/signing setup needed), and the object is capped at 2MB so
+    // buffering it through the Worker is cheap.
+    return new Response(object.body, {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-disposition': `attachment; filename="${meta.uploadedAt}-${installationId}.json"`,
+      },
+    });
   }
 
   // --- Fleet admin actions ------------------------------------------------
