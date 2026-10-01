@@ -86,6 +86,18 @@ export const copyBackendLog = async (): Promise<string> => {
   return invoke<string>("copy_backend_log");
 };
 
+/// Gathers backend logs + app/version info (and, when supplied, the
+/// frontend error that triggered the request) into a single JSON/text
+/// blob suitable for `sendDiagnosticsBundle` in `./diagnostics`.
+///
+/// INTEGRATION ASSUMPTION: the Tauri command `collect_diagnostic_bundle`
+/// is being built in a parallel task (t_40dd46f5). Assumed signature:
+/// `invoke("collect_diagnostic_bundle", { frontendError?: string }) => Promise<string>`.
+export const collectDiagnosticBundle = async (frontendError?: string): Promise<string> => {
+  if (!isTauri()) throw new Error("Diagnostic collection is only available in the desktop app.");
+  return invoke<string>("collect_diagnostic_bundle", { frontendError });
+};
+
 
 export const isDesktopShell = () => isTauri();
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { copyBackendLog, type BackendCrashLoopDetected } from "../desktop";
+import { type BackendCrashLoopDetected } from "../desktop";
+import { copyDiagnosticsLog, sendDiagnosticsBundle } from "../diagnostics";
 
 const failureKindLabel = (kind: BackendCrashLoopDetected["failure_kind"]): string | null => {
   switch (kind) {
@@ -35,6 +36,7 @@ export function CrashLoopAlertDialog({
 }) {
   const dialog = useRef<HTMLDivElement>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!crashLoop) return;
@@ -56,12 +58,20 @@ export function CrashLoopAlertDialog({
 
   const copyLog = async () => {
     try {
-      const content = await copyBackendLog();
+      const content = await copyDiagnosticsLog();
       await navigator.clipboard.writeText(content);
       setCopyMessage("Backend log copied.");
     } catch (error) {
       setCopyMessage(error instanceof Error ? error.message : "Unable to copy the backend log.");
     }
+  };
+
+  const sendLogs = async () => {
+    setSending(true);
+    setCopyMessage(null);
+    const result = await sendDiagnosticsBundle(detail ?? crashLoop.message);
+    setSending(false);
+    setCopyMessage(result.message);
   };
 
   return (
@@ -94,6 +104,14 @@ export function CrashLoopAlertDialog({
             type="button"
           >
             Dismiss
+          </button>
+          <button
+            className="rounded-lg border border-white/15 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-white/10"
+            disabled={sending}
+            onClick={() => void sendLogs()}
+            type="button"
+          >
+            {sending ? "Sending…" : "Send to developer"}
           </button>
           <button
             className="rounded-lg bg-rose-300 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-rose-200"
