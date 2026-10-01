@@ -1486,6 +1486,72 @@ describe('fleet city list (edge geolocation, never raw IP)', () => {
     }));
     expect(response.status).toBe(404);
   });
+
+  it('archives and unarchives an installation as a pure view flag, not an access change', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0012');
+    const id = String(installation.installationId);
+
+    const archiveResponse = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/archive`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: true }),
+    }));
+    expect(archiveResponse.status).toBe(200);
+    const archivedBody = await json(archiveResponse) as Record<string, unknown>;
+    expect(archivedBody.archived).toBe(true);
+    expect(archivedBody.revoked).toBe(false);
+
+    // Still fully functional: status check-in succeeds while archived.
+    const statusResponse = await registry.fetch(new Request(
+      `https://control-plane.test${installationPath(installation, 'status')}`,
+      { headers: { authorization: `Bearer ${String(installation.installationCredential)}` } },
+    ));
+    expect(statusResponse.status).toBe(200);
+
+    const listed = await registry.fetch(request('/v1/admin/installations', 'GET', adminToken));
+    const listedBody = await json(listed) as { installations: Record<string, unknown>[] };
+    const row = listedBody.installations.find((r) => r.installationId === id);
+    expect(row?.archived).toBe(true);
+
+    const unarchiveResponse = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/archive`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: false }),
+    }));
+    expect(unarchiveResponse.status).toBe(200);
+    expect((await json(unarchiveResponse) as Record<string, unknown>).archived).toBe(false);
+  });
+
+  it('rejects a non-boolean archive value', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0013');
+    const id = String(installation.installationId);
+    const response = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/archive`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: 'yes' }),
+    }));
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects an archive change without a valid admin bearer token', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0014');
+    const id = String(installation.installationId);
+    const response = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/archive`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: true }),
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  it('404s an archive change for an unknown installation id', async () => {
+    const response = await registry.fetch(new Request('https://control-plane.test/v1/admin/installations/deadbeef/archive', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: true }),
+    }));
+    expect(response.status).toBe(404);
+  });
 });
 
 describe('planning center OAuth routes', () => {
