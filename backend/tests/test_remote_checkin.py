@@ -78,7 +78,7 @@ class CheckinOnlyControlPlane:
             )
         if request.url.path.endswith("/status") and request.method == "GET":
             self.status_calls += 1
-            self.last_status_device_name = payload.get("deviceName")
+            self.last_status_device_name = request.url.params.get("deviceName")
             return httpx.Response(
                 200,
                 json={
