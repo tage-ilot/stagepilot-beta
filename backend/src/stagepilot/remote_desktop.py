@@ -363,18 +363,15 @@ class DesktopRemoteManager:
     def lightweight_checkin(self) -> None:
         """Always-on "I exist" signal, independent of the Remote Access toggle.
 
-        TODO(privacy-posture): this call is UNCONDITIONAL -- it runs for
-        every installation from first launch regardless of whether Remote
-        Access has ever been enabled, per the explicit operator decision
-        ("Always phone home for every install by default, no opt-in
-        required"). It sends only this installation's existence and its
-        self-reported deviceName (display-only, untrusted -- see
-        remote_bootstrap.sanitize_device_name). It deliberately reuses the
-        existing anonymous enroll flow and the existing authenticated
-        GET status route; it must never trigger tunnel/DNS provisioning
-        (that stays strictly gated behind self.feature.intent().enabled).
-        This behavior change should be reflected in user-facing privacy
-        policy/release notes documentation -- not handled by this change.
+        This call is UNCONDITIONAL -- it runs for every installation from
+        first launch regardless of whether Remote Access has ever been
+        enabled. It is purely operational: it lets the control plane
+        approve/track installations and self-reports deviceName (display-
+        only, untrusted -- see remote_bootstrap.sanitize_device_name). It
+        deliberately reuses the existing anonymous enroll flow and the
+        existing authenticated GET status route; it must never trigger
+        tunnel/DNS provisioning (that stays strictly gated behind
+        self.feature.intent().enabled).
         """
 
         try:
