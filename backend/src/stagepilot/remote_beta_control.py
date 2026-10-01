@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from stagepilot.file_lock import exclusive_lock
+from stagepilot.remote_bootstrap import sanitize_device_name
 from stagepilot.remote_files import (
     BetaControlConfig,
     DesiredRemote,
@@ -54,6 +55,7 @@ class BetaRemoteControl:
         sleep: Callable[[float], None] = time.sleep,
         random_value: Callable[[], float] = random.random,
         action_handlers: dict[str, Callable[[], None]] | None = None,
+        device_name: str | None = None,
     ) -> None:
         self.config = config
         self.client = client
@@ -67,6 +69,10 @@ class BetaRemoteControl:
         self.desired_path = config.installation_dir / "remote.json"
         # Cleanup-only compatibility path for tokens written by older beta builds.
         self.token_path = config.installation_dir / "connector.token"
+        # Self-reported, untrusted, display-only device hostname (see
+        # remote_bootstrap.sanitize_device_name); included on status/
+        # provision/reconcile request bodies below.
+        self.device_name = sanitize_device_name(device_name)
 
     def apply(self, action: str) -> dict[str, object]:
         self.config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -228,6 +234,16 @@ class BetaRemoteControl:
             applied.append(kind)
         return applied
 
+    def lightweight_status(self) -> dict[str, object]:
+        """Minimal existence/deviceName check-in, no provisioning side effects.
+
+        Deliberately calls only the existing authenticated GET status route
+        (never provision/reconcile) so it can safely run unconditionally for
+        every installation regardless of the Remote Access toggle.
+        """
+
+        return self._request("GET", f"/v1/installations/{self.config.installation_id}/status", {})
+
     def request_approval(self, reason: str) -> dict[str, object]:
         """Ask the operator to sign off on something; returns the pending request."""
 
@@ -282,6 +298,17 @@ class BetaRemoteControl:
         return token
 
     def _request(self, method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+        params: dict[str, str] = {}
+        if self.device_name is not None and path.endswith(("/status", "/provision", "/reconcile")):
+            if method == "GET":
+                # GET requests on the control plane carry deviceName as a
+                # query parameter, not a JSON body: the Worker side treats
+                # GET /status as a normal body-less status poll for the
+                # common case, matching the standard Fetch API's
+                # restriction that GET requests cannot have a body.
+                params["deviceName"] = self.device_name
+            else:
+                payload = {**payload, "deviceName": self.device_name}
         try:
             response: httpx.Response | None = None
             for attempt in range(3):
@@ -289,6 +316,7 @@ class BetaRemoteControl:
                     method,
                     path,
                     headers={"Authorization": f"Bearer {self._credential()}"},
+                    params=params or None,
                     json=payload,
                 )
                 if response.status_code not in {429, 503} or attempt == 2:

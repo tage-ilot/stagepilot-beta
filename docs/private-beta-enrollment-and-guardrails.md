@@ -11,6 +11,32 @@ immutable updater assets with a server-only GitHub credential. Those public GET
 routes are independently rate limited, accept no arbitrary URL, and never relay
 Remote application traffic. Details are in `private-beta-release-and-acceptance.md`.
 
+## Always-on lightweight check-in (no Remote Access opt-in)
+
+Every installation now performs the existing anonymous `enroll()` flow and an
+authenticated `GET /v1/installations/:id/status` call once at process start and
+periodically thereafter, regardless of whether Remote Access has ever been
+enabled. This reuses the existing enrollment and status routes unchanged; it
+adds no new endpoint and never triggers tunnel/DNS provisioning (that stays
+gated behind Remote Access being turned on). The only data this sends is this
+installation's existence and its self-reported `deviceName` (see below) -- no
+other personal data, no browsing/usage telemetry. This exists solely to give
+the fleet admin panel visibility into installations that have never enabled
+Remote Access.
+
+## Self-reported deviceName
+
+Every enroll/status/provision/reconcile request may optionally include
+`deviceName` (the machine's own reported hostname, captured client-side via
+Python's `platform.node()`). This value is self-reported and UNTRUSTED: the
+control plane never uses it for authentication, installation matching, or any
+security decision. It exists purely so the fleet admin panel can show a
+human-meaningful hint about which physical machine an installation is -- the
+panel also still shows the operator-set label and the generated hostname. An
+installation's label auto-fills from `deviceName` the first time one is ever
+received for that installation and only while no label has been set; once an
+operator sets any label, this never silently overwrites it again.
+
 ## Implemented controls and thresholds
 
 - Enrollment: 3 new installations per canonical source IPv4 or IPv6 /64 per 24 hours. The source is HMAC-hashed with server-only key material; raw addresses are not stored. Source records expire after 24 hours and the retained index is capped at 2,000 entries.

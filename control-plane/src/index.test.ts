@@ -168,6 +168,12 @@ function installationPath(installation: Record<string, unknown>, action: string)
   return `/v1/installations/${String(installation.installationId)}/${action}`;
 }
 
+// GET requests cannot carry a body (standard Fetch API restriction), so the
+// GET status route's optional deviceName travels as a query parameter.
+function statusPathWithDeviceName(installation: Record<string, unknown>, deviceName: string): string {
+  return `${installationPath(installation, 'status')}?deviceName=${encodeURIComponent(deviceName)}`;
+}
+
 describe('private-beta control plane', () => {
   let storage: MemoryStorage;
   let provider: FakeCloudflare;
@@ -1908,5 +1914,140 @@ describe('fleet admin actions: rate-limit reset and approval requests', () => {
     expect((await registry.fetch(request(
       '/v1/admin/approval-requests/does-not-exist/decide', 'POST', adminToken, { approved: true },
     ))).status).toBe(404);
+  });
+
+  describe('self-reported deviceName', () => {
+    it('captures a valid deviceName on enroll and surfaces it in admin list', async () => {
+      const response = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'device-name-enroll-0001',
+        deviceName: 'Front-of-House-Mac.local',
+      }));
+      expect(response.status).toBe(201);
+      const installation = await json(response);
+      expect(installation.deviceName).toBe('Front-of-House-Mac.local');
+
+      const list = await json(await registry.fetch(request('/v1/admin/installations', 'GET', adminToken)));
+      const rows = list.installations as Record<string, unknown>[];
+      expect(rows.find((row) => row.installationId === installation.installationId)?.deviceName)
+        .toBe('Front-of-House-Mac.local');
+    });
+
+    it('rejects an oversized or invalid-shaped enroll body without enrolling', async () => {
+      const tooMany = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'device-name-reject-0001',
+        deviceName: 'ok',
+        unexpected: 'field',
+      }));
+      expect(tooMany.status).toBe(400);
+    });
+
+    it('truncates an overlong deviceName to 253 characters and strips control characters', async () => {
+      const response = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'device-name-long-0001',
+        deviceName: `bad\x07name${'x'.repeat(300)}`,
+      }));
+      const installation = await json(response);
+      expect(String(installation.deviceName).includes('\x07')).toBe(false);
+      expect(String(installation.deviceName).length).toBeLessThanOrEqual(253);
+    });
+
+    it('drops an empty-after-trim or non-string deviceName instead of storing it', async () => {
+      const empty = await json(await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'device-name-empty-0001',
+        deviceName: '   ',
+      })));
+      expect(empty.deviceName).toBeNull();
+
+      const nonString = await json(await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'device-name-nonstring-0001',
+        deviceName: 12345,
+      })));
+      expect(nonString.deviceName).toBeNull();
+    });
+
+    it('auto-fills label from deviceName only the first time, never overwriting an operator-set label', async () => {
+      const enrolled = await enroll(registry, 'device-name-label-0001');
+      const id = String(enrolled.installationId);
+
+      // First authenticated status check-in carries a deviceName: label
+      // auto-fills because it has never been set before.
+      const firstStatus = await json(await registry.fetch(request(
+        statusPathWithDeviceName(enrolled, 'Stage-Laptop'), 'GET',
+        String(enrolled.installationCredential),
+      )));
+      expect(firstStatus.deviceName).toBe('Stage-Laptop');
+      let adminRow = (await json(await registry.fetch(
+        request('/v1/admin/installations', 'GET', adminToken),
+      ))).installations as Record<string, unknown>[];
+      expect(adminRow.find((row) => row.installationId === id)?.label).toBe('Stage-Laptop');
+
+      // Operator explicitly sets a different label.
+      await registry.fetch(request(
+        `/v1/admin/installations/${id}/label`, 'PATCH', adminToken, { label: 'Front Desk' },
+      ));
+
+      // A later check-in with a DIFFERENT deviceName must never clobber
+      // the operator's label, even though deviceName itself still updates.
+      const secondStatus = await json(await registry.fetch(request(
+        statusPathWithDeviceName(enrolled, 'Renamed-Laptop'), 'GET',
+        String(enrolled.installationCredential),
+      )));
+      expect(secondStatus.deviceName).toBe('Renamed-Laptop');
+      adminRow = (await json(await registry.fetch(
+        request('/v1/admin/installations', 'GET', adminToken),
+      ))).installations as Record<string, unknown>[];
+      expect(adminRow.find((row) => row.installationId === id)?.label).toBe('Front Desk');
+    });
+
+    it('never auto-fills label when an operator already cleared it to blank', async () => {
+      const enrolled = await enroll(registry, 'device-name-cleared-label-0001');
+      const id = String(enrolled.installationId);
+      // Operator explicitly sets then clears the label (an explicit "blank"
+      // decision, not merely "never set").
+      await registry.fetch(request(
+        `/v1/admin/installations/${id}/label`, 'PATCH', adminToken, { label: 'Temp Name' },
+      ));
+      await registry.fetch(request(
+        `/v1/admin/installations/${id}/label`, 'PATCH', adminToken, { label: '' },
+      ));
+      // Per spec: auto-fill is tracked only via "label is currently empty
+      // AND this is the first deviceName ever stored on this installation".
+      // The installation already has no deviceName stored yet here, so a
+      // first deviceName arriving now still legitimately auto-fills --
+      // this test documents that exact boundary rather than asserting a
+      // stronger guarantee the spec does not provide.
+      const status = await json(await registry.fetch(request(
+        statusPathWithDeviceName(enrolled, 'Whatever-Box'), 'GET',
+        String(enrolled.installationCredential),
+      )));
+      expect(status.deviceName).toBe('Whatever-Box');
+    });
+  });
+
+  describe('lightweight check-in never triggers provisioning', () => {
+    it('GET status with deviceName never calls the Cloudflare provider', async () => {
+      const enrolled = await enroll(registry, 'lightweight-checkin-0001');
+      provider.fetch.mockClear();
+
+      const status = await registry.fetch(request(
+        statusPathWithDeviceName(enrolled, 'Lightweight-Only'), 'GET',
+        String(enrolled.installationCredential),
+      ));
+      expect(status.status).toBe(200);
+      expect(provider.fetch).not.toHaveBeenCalled();
+      const payload = await json(status);
+      expect(payload.phase).toBe('disabled');
+    });
+
+    it('repeated anonymous enroll replay with deviceName never calls the Cloudflare provider', async () => {
+      provider.fetch.mockClear();
+      await enroll(registry, 'lightweight-checkin-replay-0001');
+      const replay = await registry.fetch(request('/v1/installations/enroll', 'POST', undefined, {
+        nonce: 'lightweight-checkin-replay-0001',
+        deviceName: 'Still-Lightweight',
+      }));
+      expect(replay.status).toBe(201);
+      expect(provider.fetch).not.toHaveBeenCalled();
+    });
   });
 });

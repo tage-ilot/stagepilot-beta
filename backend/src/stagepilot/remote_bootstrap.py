@@ -18,6 +18,28 @@ from pydantic import BaseModel, ConfigDict, Field
 from stagepilot.remote_files import atomic_write
 from stagepilot.remote_provider import InstallationPermanentlyRevokedError, ProviderError
 
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def sanitize_device_name(value: str | None) -> str | None:
+    """Validate/truncate a self-reported device hostname before it is sent.
+
+    `deviceName` is entirely self-reported by the installation (see
+    `platform.node()` callers) and is treated as untrusted, display-only
+    data everywhere downstream (control plane, admin panel) -- never used
+    for auth/matching/any security decision. This local sanitation only
+    avoids sending obviously-invalid payloads (non-string, empty, control
+    characters, overlong); the control plane re-validates independently.
+    """
+
+    if not isinstance(value, str):
+        return None
+    cleaned = _CONTROL_CHARS.sub("", value).strip()
+    if not cleaned:
+        return None
+    return cleaned[:253]
+
+
 INSTALLATION_SCHEMA = "org.stagepilot.private-beta-installation"
 DEFAULT_CONTROL_PLANE_ORIGIN = (
     "https://stagepilot-beta-control-plane.stagepilot-illuminary-beta.workers.dev"
@@ -166,6 +188,7 @@ class DesktopBootstrapStore:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         random_value: Callable[[], float] = random.random,
+        device_name: str | None = None,
     ) -> BootstrapMetadata:
         """Transparently create and securely retain this installation identity."""
 
@@ -195,11 +218,13 @@ class DesktopBootstrapStore:
             follow_redirects=False,
             transport=transport,
         ) as client:
+            enroll_payload: dict[str, object] = {"nonce": current.enrollment_nonce}
+            sanitized_device_name = sanitize_device_name(device_name)
+            if sanitized_device_name is not None:
+                enroll_payload["deviceName"] = sanitized_device_name
             for attempt in range(3):
                 try:
-                    response = client.post(
-                        "/v1/installations/enroll", json={"nonce": current.enrollment_nonce}
-                    )
+                    response = client.post("/v1/installations/enroll", json=enroll_payload)
                 except httpx.HTTPError as exc:
                     if attempt == 2:
                         raise ProviderError(
