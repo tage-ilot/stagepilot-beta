@@ -62,6 +62,13 @@ interface Installation {
   lastCity?: string;
   lastRegion?: string;
   lastCountry?: string;
+  // Admin-panel-only "hide from the default list" flag. Deliberately
+  // independent of `revoked`/`phase`/credentials: an archived installation
+  // keeps checking in, reconciling, and renewing exactly as before --
+  // archiving only declutters the operator's view, it is not a lifecycle
+  // or access-control state. Use `revoked` (via the existing revoke
+  // endpoint) to actually cut off an installation's access.
+  archived?: boolean;
 }
 
 interface RateWindow {
@@ -458,6 +465,11 @@ export class Registry {
       if (request.method === 'PATCH' && adminSetLabel) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.adminSetLabel(request, adminSetLabel[1]);
+      }
+      const adminSetArchived = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/archive$/);
+      if (request.method === 'PATCH' && adminSetArchived) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminSetArchived(request, adminSetArchived[1]);
       }
       const adminRevoke = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/revoke$/);
       if (request.method === 'POST' && adminRevoke) {
@@ -1388,6 +1400,7 @@ export class Registry {
       .map((installation) => ({
         ...publicInstallation(installation),
         label: installation.label || '',
+        archived: installation.archived ?? false,
         location: formatInstallationLocation(installation),
       }));
     return reply({ installations });
@@ -1409,6 +1422,25 @@ export class Registry {
     const updated: Installation = { ...installation, label, updatedAt: new Date().toISOString() };
     await this.state.storage.put(`installation:${id}`, updated);
     return reply({ ...publicInstallation(updated), label: updated.label, location: formatInstallationLocation(updated) });
+  }
+
+  // Hide/unhide from the default admin-panel list WITHOUT touching access.
+  // Unlike revoke, this never changes `revoked`/`phase`/credentials and
+  // never calls out to Cloudflare -- it is a pure metadata flag, safe to
+  // flip on an installation that is still actively in use. This is the
+  // explicit alternative to revoke for "I don't need to look at this one
+  // regularly but it should keep working."
+  private async adminSetArchived(request: Request, id: string): Promise<Response> {
+    const installation = await this.state.storage.get<Installation>(`installation:${id}`);
+    if (!installation) return reply({ error: 'not found' }, 404);
+    const input = await body(request);
+    const { archived } = input;
+    if (typeof archived !== 'boolean') {
+      return reply({ error: 'invalid request' }, 400);
+    }
+    const updated: Installation = { ...installation, archived, updatedAt: new Date().toISOString() };
+    await this.state.storage.put(`installation:${id}`, updated);
+    return reply({ ...publicInstallation(updated), label: updated.label || '', archived: updated.archived ?? false, location: formatInstallationLocation(updated) });
   }
 
   // Simple passive "which cities are running an installation" list for the
