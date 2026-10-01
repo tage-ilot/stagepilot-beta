@@ -254,7 +254,7 @@
   <div class="summary-row">
     <div class="stat-card">
       <div class="num" id="stat-installations">–</div>
-      <div class="label">Installations</div>
+      <div class="label">Active today / Total</div>
     </div>
     <div class="stat-card">
       <div class="num" id="stat-alerts">–</div>
@@ -274,6 +274,12 @@
   <section class="panel">
     <h2>Requests</h2>
     <div id="requests-list"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Installations</h2>
+    <div class="sub" style="margin-bottom:8px;">Each row is one app enrollment. A reinstall or a separate test run creates a new one — give it a name below, or remove it if it's stale.</div>
+    <div id="installations-list"></div>
   </section>
 
   <section class="panel">
@@ -298,6 +304,7 @@
     alertsList: document.getElementById('alerts-list'),
     requestsList: document.getElementById('requests-list'),
     citiesList: document.getElementById('cities-list'),
+    installationsList: document.getElementById('installations-list'),
   };
 
   var CATEGORY_LABELS = {
@@ -474,6 +481,71 @@
     });
   }
 
+  function phaseLabel(installation) {
+    if (installation.revoked) return 'Removed';
+    if (installation.phase === 'provisioned') return 'Online';
+    return 'Off';
+  }
+
+  function renderInstallations(installations) {
+    els.installationsList.innerHTML = '';
+    if (!installations.length) return renderEmpty(els.installationsList, 'No installations yet.');
+    installations.forEach(function (inst) {
+      var row = el('div', 'row');
+      row.dataset.installationId = inst.installationId;
+
+      var main = el('div', 'row-main');
+      var titleText = inst.label || inst.hostname || inst.installationId;
+      main.appendChild(el('div', 'row-title', titleText));
+      var subBits = [phaseLabel(inst), inst.location, 'last seen ' + timeAgo(inst.updatedAt)];
+      main.appendChild(el('div', 'row-sub', subBits.join(' · ')));
+      row.appendChild(main);
+
+      var actions = el('div', 'row-actions');
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.placeholder = 'Name this installation';
+      nameInput.value = inst.label || '';
+      nameInput.style.cssText = 'background:#10161d;border:1px solid #1e2733;border-radius:8px;color:var(--text);padding:6px 8px;font-size:12px;width:140px;';
+      var saveBtn = el('button', null, 'Save name');
+      saveBtn.addEventListener('click', function () {
+        saveBtn.disabled = true;
+        api('/v1/admin/installations/' + encodeURIComponent(inst.installationId) + '/label', {
+          method: 'PATCH',
+          body: { label: nameInput.value.trim() },
+        }).then(function () {
+          setStatus('Saved.', 'ok');
+          saveBtn.disabled = false;
+        }).catch(function (err) {
+          saveBtn.disabled = false;
+          setStatus('Could not save: ' + err.message, 'error');
+        });
+      });
+      actions.appendChild(nameInput);
+      actions.appendChild(saveBtn);
+
+      if (!inst.revoked) {
+        var removeBtn = el('button', 'danger-btn', 'Remove');
+        removeBtn.addEventListener('click', function () {
+          if (!window.confirm('Remove "' + titleText + '"? This disconnects it for good.')) return;
+          removeBtn.disabled = true;
+          api('/v1/admin/installations/' + encodeURIComponent(inst.installationId) + '/revoke', { method: 'POST' })
+            .then(function () {
+              setStatus('Removed.', 'ok');
+              loadAll();
+            }).catch(function (err) {
+              removeBtn.disabled = false;
+              setStatus('Could not remove: ' + err.message, 'error');
+            });
+        });
+        actions.appendChild(removeBtn);
+      }
+      row.appendChild(actions);
+
+      els.installationsList.appendChild(row);
+    });
+  }
+
   function handleDecision(reqItem, row, approved, btns) {
     btns.forEach(function (b) { b.disabled = true; });
     api('/v1/admin/approval-requests/' + encodeURIComponent(reqItem.requestId) + '/decide', {
@@ -507,15 +579,25 @@
       api('/v1/admin/alerts?status=open'),
       api('/v1/admin/approval-requests?status=pending'),
       api('/v1/admin/cities'),
+      api('/v1/admin/installations'),
     ]).then(function (results) {
       var metrics = results[0];
       var alertsData = results[1];
       var requestsData = results[2];
       var citiesData = results[3];
-      els.statInstallations.textContent = String(metrics.activeInstallations != null ? metrics.activeInstallations : '–');
+      var installationsData = results[4];
+      var installations = installationsData.installations || [];
+      var activeCutoff = Date.now() - 24 * 60 * 60 * 1000;
+      var activeToday = installations.filter(function (inst) {
+        return !inst.revoked && new Date(inst.updatedAt).getTime() >= activeCutoff;
+      }).length;
+      var total = installations.filter(function (inst) { return !inst.revoked; }).length;
+      var totalCount = metrics.activeInstallations != null ? metrics.activeInstallations : total;
+      els.statInstallations.textContent = activeToday + ' / ' + totalCount;
       renderAlerts(alertsData.alerts || []);
       renderRequests(requestsData.requests || []);
       renderCities(citiesData.cities || []);
+      renderInstallations(installations);
       refreshCounts();
       setStatus('Up to date.', 'ok');
     }).catch(function (err) {

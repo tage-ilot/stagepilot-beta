@@ -450,6 +450,15 @@ export class Registry {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
         return await this.adminListCities();
       }
+      if (request.method === 'GET' && url.pathname === '/v1/admin/installations') {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminListInstallations();
+      }
+      const adminSetLabel = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/label$/);
+      if (request.method === 'PATCH' && adminSetLabel) {
+        if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
+        return await this.adminSetLabel(request, adminSetLabel[1]);
+      }
       const adminRevoke = url.pathname.match(/^\/v1\/admin\/installations\/([a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{32})\/revoke$/);
       if (request.method === 'POST' && adminRevoke) {
         if (!(await this.isAdmin(request))) return reply({ error: 'unauthorized' }, 401);
@@ -1362,6 +1371,44 @@ export class Registry {
       };
     await this.state.storage.put(key, record);
     return reply(publicAlert(record), existing ? 200 : 201);
+  }
+
+  // Per-installation detail list for the fleet admin panel. Distinct from
+  // publicInstallation()'s status-check shape: this also includes the
+  // operator-settable `label` and the location fields already captured for
+  // the cities summary, so the operator can tell installations apart (which
+  // is "online today", which is a stale/duplicate dev enrollment, etc.)
+  // instead of only ever seeing a raw aggregate count. Revoked installations
+  // are included (filterable by the caller) rather than silently hidden, so
+  // a past revoke's effect stays visible/auditable.
+  private async adminListInstallations(): Promise<Response> {
+    const rows = await this.state.storage.list<Installation>({ prefix: 'installation:' });
+    const installations = [...rows.values()]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((installation) => ({
+        ...publicInstallation(installation),
+        label: installation.label || '',
+        location: formatInstallationLocation(installation),
+      }));
+    return reply({ installations });
+  }
+
+  // Operator-settable human-readable name only -- never touches identity,
+  // credentials, or lifecycle state. A blank label is valid (clears it back
+  // to unlabeled) and the only other accepted shape; this is intentionally
+  // the single narrow mutation surface for installation metadata, not a
+  // general-purpose installation-editing endpoint.
+  private async adminSetLabel(request: Request, id: string): Promise<Response> {
+    const installation = await this.state.storage.get<Installation>(`installation:${id}`);
+    if (!installation) return reply({ error: 'not found' }, 404);
+    const input = await body(request);
+    const { label } = input;
+    if (typeof label !== 'string' || label.length > 200) {
+      return reply({ error: 'invalid request' }, 400);
+    }
+    const updated: Installation = { ...installation, label, updatedAt: new Date().toISOString() };
+    await this.state.storage.put(`installation:${id}`, updated);
+    return reply({ ...publicInstallation(updated), label: updated.label, location: formatInstallationLocation(updated) });
   }
 
   // Simple passive "which cities are running an installation" list for the

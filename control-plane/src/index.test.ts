@@ -1398,6 +1398,94 @@ describe('fleet city list (edge geolocation, never raw IP)', () => {
     expect(authorized.status).toBe(200);
     expect(await json(authorized)).toEqual({ cities: [] });
   });
+
+  it('lists installations with label, location, and phase for the admin panel', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0008');
+    await registry.fetch(requestWithCf(
+      installationPath(installation, 'status'), 'GET', String(installation.installationCredential), undefined,
+      { city: 'Austin', region: 'Texas', country: 'US' },
+    ));
+
+    const response = await registry.fetch(request('/v1/admin/installations', 'GET', adminToken));
+    expect(response.status).toBe(200);
+    const body = await json(response) as { installations: Record<string, unknown>[] };
+    expect(body.installations).toHaveLength(1);
+    const row = body.installations[0];
+    expect(row.installationId).toBe(installation.installationId);
+    expect(row.label).toBe('');
+    expect(row.location).toBe('Austin');
+    expect(row.revoked).toBe(false);
+  });
+
+  it('rejects GET /v1/admin/installations without a valid admin bearer token', async () => {
+    const missing = await registry.fetch(request('/v1/admin/installations', 'GET'));
+    expect(missing.status).toBe(401);
+    const authorized = await registry.fetch(request('/v1/admin/installations', 'GET', adminToken));
+    expect(authorized.status).toBe(200);
+  });
+
+  it('lets the administrator set and clear an installation label without touching identity/credentials', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0009');
+    const id = String(installation.installationId);
+
+    const setResponse = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/label`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'jpl-graphics Mac' }),
+    }));
+    expect(setResponse.status).toBe(200);
+    expect((await json(setResponse) as Record<string, unknown>).label).toBe('jpl-graphics Mac');
+
+    const listed = await registry.fetch(request('/v1/admin/installations', 'GET', adminToken));
+    const listedBody = await json(listed) as { installations: Record<string, unknown>[] };
+    expect(listedBody.installations[0].label).toBe('jpl-graphics Mac');
+    // Credential/identity untouched by a label change.
+    const statusAfter = await registry.fetch(new Request(
+      `https://control-plane.test${installationPath(installation, 'status')}`,
+      { headers: { authorization: `Bearer ${String(installation.installationCredential)}` } },
+    ));
+    expect(statusAfter.status).toBe(200);
+
+    const clearResponse = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/label`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ label: '' }),
+    }));
+    expect(clearResponse.status).toBe(200);
+    expect((await json(clearResponse) as Record<string, unknown>).label).toBe('');
+  });
+
+  it('rejects an oversized or non-string label', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0010');
+    const id = String(installation.installationId);
+    const tooLong = 'x'.repeat(201);
+    const response = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/label`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ label: tooLong }),
+    }));
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a label change without a valid admin bearer token', async () => {
+    const installation = await enroll(registry, 'geo-fleet-0011');
+    const id = String(installation.installationId);
+    const response = await registry.fetch(new Request(`https://control-plane.test/v1/admin/installations/${id}/label`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'nope' }),
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  it('404s a label change for an unknown installation id', async () => {
+    const response = await registry.fetch(new Request('https://control-plane.test/v1/admin/installations/deadbeef/label', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'x' }),
+    }));
+    expect(response.status).toBe(404);
+  });
 });
 
 describe('planning center OAuth routes', () => {
