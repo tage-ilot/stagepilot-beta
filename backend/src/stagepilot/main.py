@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from stagepilot.api.access import router as access_router
 from stagepilot.api.dashboard_auth import router as dashboard_auth_router
 from stagepilot.api.dashboard_auth_middleware import DashboardAuthMiddleware
+from stagepilot.api.diagnostics import router as diagnostics_router
 from stagepilot.api.remote_auth import router as remote_auth_router
 from stagepilot.api.remote_feature import router as remote_feature_router
 from stagepilot.api.remote_ingress import RemoteAccess
@@ -340,6 +341,7 @@ def create_app(
     application.include_router(access_router)
     application.include_router(api_router)
     application.include_router(dashboard_auth_router)
+    application.include_router(diagnostics_router)
     application.include_router(remote_auth_router)
     application.include_router(remote_feature_router)
     application.include_router(websocket_router)
