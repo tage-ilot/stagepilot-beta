@@ -24,6 +24,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from stagepilot.remote_bootstrap import DesktopBootstrapStore
+
 router = APIRouter(prefix="/api/v1/diagnostics")
 
 logger = logging.getLogger(__name__)
@@ -44,7 +46,7 @@ class DiagnosticsSendResponse(BaseModel):
     message: str
 
 
-def _bootstrap(request: Request):
+def _bootstrap(request: Request) -> DesktopBootstrapStore | None:
     manager = getattr(request.app.state, "remote_manager", None)
     return getattr(manager, "bootstrap", None) if manager is not None else None
 
@@ -83,13 +85,13 @@ async def send_diagnostics(
 
     try:
         credential = bootstrap.credential(active)
-        with httpx.Client(
+        async with httpx.AsyncClient(
             base_url=active.control_plane_origin,
             timeout=30.0,
             trust_env=False,
             follow_redirects=False,
         ) as client:
-            response = client.post(
+            response = await client.post(
                 f"/v1/installations/{active.installation_id}/diagnostics",
                 headers={
                     "authorization": f"Bearer {credential}",
@@ -106,7 +108,9 @@ async def send_diagnostics(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.warning("diagnostics upload could not be forwarded to the control plane", exc_info=True)
+        logger.warning(
+            "diagnostics upload could not be forwarded to the control plane", exc_info=True
+        )
         raise HTTPException(
             status_code=502, detail="Logs could not be sent to the developer. Try again shortly."
         ) from exc
