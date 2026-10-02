@@ -1023,6 +1023,29 @@ struct DiagnosticBundle {
     logs: Vec<DiagnosticLogFile>,
 }
 
+/// Picks the backend log path a diagnostic bundle should read from.
+///
+/// `computed_path` is the SAME deterministic path `start_backend()` derives
+/// for every launch (`app_log_dir()/stagepilot-backend.log`) and is present
+/// whenever the app's log directory is resolvable — i.e. essentially always,
+/// regardless of whether the backend is currently healthy or has ever
+/// failed. `snapshot_path` is `BackendSupervisor`'s own tracked path, which
+/// is ONLY ever set on a failure transition (`fail()` / `fail_if_starting()`)
+/// — the normal running-state transition (`update()`) never touches it.
+///
+/// Preferring `computed_path` fixes a real bug confirmed live in production
+/// (2026-10-02): a healthy, successfully-running backend — the overwhelming
+/// common case when a user clicks "send logs to developer" — always hit the
+/// `None` snapshot path and produced a bundle with `logs: []`, useless for
+/// debugging. `snapshot_path` is kept only as a fallback for the rare case
+/// `app_log_dir()` itself is unresolvable.
+fn resolve_diagnostic_log_path(
+    computed_path: Option<String>,
+    snapshot_path: Option<String>,
+) -> Option<String> {
+    computed_path.or(snapshot_path)
+}
+
 /// Collects the active backend log plus any rotated `.log.1`/`.log.2`
 /// generations (see `rotate_backend_log` / `BACKEND_LOG_MAX_BACKUPS` above),
 /// basic non-identifying app/platform info, and an optional frontend crash
@@ -1042,7 +1065,20 @@ fn collect_diagnostic_bundle(
     supervisor: tauri::State<'_, BackendSupervisor>,
     frontend_crash: Option<String>,
 ) -> Result<String, String> {
-    let log_path = supervisor.snapshot().log_path;
+    // BUG FIX: `supervisor.snapshot().log_path` is ONLY ever populated by
+    // `fail()`/`fail_if_starting()` -- the normal running-state transition
+    // (`update()`) never sets it. That meant a healthy, successfully-running
+    // backend (the overwhelmingly common case a user clicks "send logs"
+    // from) always produced an empty `logs: []` bundle, confirmed live in
+    // production on 2026-10-02 (a 107-byte bundle with app_info populated
+    // but zero log content). See `resolve_diagnostic_log_path` below.
+    let computed_log_path = app.path().app_log_dir().ok().map(|directory| {
+        directory
+            .join("stagepilot-backend.log")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let log_path = resolve_diagnostic_log_path(computed_log_path, supervisor.snapshot().log_path);
 
     let mut generations: Vec<(String, PathBuf)> = Vec::new();
     if let Some(path_text) = log_path.as_ref() {
@@ -1694,6 +1730,29 @@ mod tests {
             original_bytes: content.len() as u64,
             truncated: false,
         }
+    }
+
+    #[test]
+    fn resolve_diagnostic_log_path_prefers_computed_path_when_healthy() {
+        // Regression test for the production bug (2026-10-02): a healthy
+        // backend has `snapshot_path == None` (only ever set on failure),
+        // but `computed_path` is always available. The bundle must use it,
+        // not silently fall back to an empty log list.
+        let resolved =
+            resolve_diagnostic_log_path(Some("/data/stagepilot-backend.log".to_string()), None);
+        assert_eq!(resolved, Some("/data/stagepilot-backend.log".to_string()));
+    }
+
+    #[test]
+    fn resolve_diagnostic_log_path_falls_back_to_snapshot_when_uncomputable() {
+        let resolved =
+            resolve_diagnostic_log_path(None, Some("/tmp/stagepilot-backend.log".to_string()));
+        assert_eq!(resolved, Some("/tmp/stagepilot-backend.log".to_string()));
+    }
+
+    #[test]
+    fn resolve_diagnostic_log_path_none_when_both_unavailable() {
+        assert_eq!(resolve_diagnostic_log_path(None, None), None);
     }
 
     #[test]
