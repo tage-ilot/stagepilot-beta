@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiOrigin, websocketUrl } from "../api";
+import { sendDiagnosticsBundle } from "../diagnostics";
 import { useRemoteAccess } from "../hooks/useRemoteAccess";
 import type {
   ApplicationState,
@@ -10,6 +11,87 @@ import type {
 } from "../types";
 import { ButtonSpinner, RemoteAccessPanel } from "./RemoteAccessPanel";
 import { SetupPanelHeader } from "./SetupPanelHeader";
+
+/** Client-side cooldown (seconds) between manual "send all logs" clicks. */
+const SEND_LOGS_COOLDOWN_SECONDS = 60;
+
+/**
+ * Manually-triggered "send everything right now" button, distinct from the
+ * crash-triggered flows in `ErrorBoundary`/`CrashLoopAlertDialog`. Shares
+ * the same `sendDiagnosticsBundle()` helper (same endpoint/auth/storage as
+ * those flows) and layers a client-side 1/min cooldown on top purely as a
+ * UX nicety -- the server-side `diagnosticsRate` limit on the control
+ * plane (6/hour) is the real abuse backstop.
+ */
+export function SendAllLogsButton() {
+  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+  const [cooldown, setCooldown] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
+
+  const startCooldown = () => {
+    setCooldown(SEND_LOGS_COOLDOWN_SECONDS);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      setCooldown((previous) => {
+        if (previous <= 1) {
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          intervalRef.current = null;
+          return 0;
+        }
+        return previous - 1;
+      });
+    }, 1000);
+  };
+
+  const onClick = async () => {
+    if (cooldown > 0 || status === "sending") return;
+    setStatus("sending");
+    setMessage(null);
+    const result = await sendDiagnosticsBundle();
+    setStatus(result.ok ? "sent" : "error");
+    setMessage(result.message);
+    startCooldown();
+  };
+
+  const disabled = status === "sending" || cooldown > 0;
+  const label = status === "sending"
+    ? "Sending…"
+    : cooldown > 0
+      ? `Send all logs to developer (${cooldown}s)`
+      : "Send all logs to developer";
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/7 pt-4">
+      <button
+        aria-disabled={disabled}
+        className="rounded-lg border border-white/15 px-3.5 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+        disabled={disabled}
+        onClick={() => void onClick()}
+        type="button"
+      >
+        {label}
+      </button>
+      <p className="text-xs text-slate-500">
+        Sends recent backend/frontend logs and app info straight to the developer, for support purposes. Limited to once per minute.
+      </p>
+      {message && (
+        <p
+          aria-live="polite"
+          className={`w-full text-xs ${status === "error" ? "text-rose-300" : "text-emerald-300"}`}
+        >
+          {message}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function BackendSetupPanel({
   state,
@@ -294,6 +376,8 @@ export function BackendSetupPanel({
       <p className="mt-4 text-xs text-slate-500">
         The dashboard remembers the saved server port for its next launch. Environment variables may still override these values for development.
       </p>
+
+      <SendAllLogsButton />
     </section>
   );
 }
