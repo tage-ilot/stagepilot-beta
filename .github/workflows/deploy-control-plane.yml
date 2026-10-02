@@ -8,6 +8,12 @@ permissions:
 
 jobs:
   verify:
+    # Note: this workflow deploys the control plane including the DIAGNOSTICS
+    # R2 bucket binding declared in wrangler.toml. If CLOUDFLARE_API_TOKEN
+    # lacks R2 permissions (Workers R2 Storage: Edit), `wrangler deploy` will
+    # fail to resolve that binding. Either grant the token R2 permissions, or
+    # remove the [[r2_buckets]] block from wrangler.toml before merging if R2
+    # is not yet provisioned for this account.
     runs-on: [self-hosted, stagepilot-linux]
     defaults:
       run:
