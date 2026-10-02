@@ -164,6 +164,53 @@ SAME hostname under a fresh generation/credential instead of minting a new
 installation. Later lifecycle requests read the credential through the
 authenticated native Tauri broker; the frontend never receives it.
 
+This exact identity-preservation mechanism (the nonce kept as durable identity,
+never cleared on disable/revoke) is also what lets an in-place app update and a
+regenerated tunnel link ("Regenerate Remote link", see `reenroll()`) keep the
+same installationId/credential/hostname across restarts and across a brand-new
+generation respectively -- both reuse this same bootstrap persistence
+(`backend/src/stagepilot/remote_bootstrap.py`), not a separate mechanism.
+
+## Always-on lightweight check-in
+
+Independent of whether Remote Access has ever been turned on,
+`DesktopRemoteManager.run()` now performs a lightweight check-in once at
+startup and then every several hours for the life of the process
+(`DesktopRemoteManager.lightweight_checkin()`). This:
+
+- reuses the existing anonymous `POST /v1/installations/enroll` nonce-based
+  flow (`DesktopBootstrapStore.ensure_enrolled()`) to establish/confirm this
+  installation's identity;
+- reuses the existing authenticated `GET /v1/installations/:id/status` route
+  to send a minimal "I exist" signal plus the self-reported `deviceName` (see
+  below).
+
+It deliberately does **not** call `provision`/`reconcile`/`disable`/`revoke`,
+so it never creates or touches a Cloudflare tunnel or DNS record. Remote
+Access's own gating is completely unchanged: the tunnel/DNS/dashboard stay
+exactly as gated as before, behind `feature.intent().enabled`. The only new
+behavior is that every installation now reports its existence and
+`deviceName` to the control plane from first launch, with no opt-in -- an
+explicit product/privacy decision; see the code comment at the check-in call
+site and `docs/private-beta-enrollment-and-guardrails.md` for the data this
+sends. This should be reflected in user-facing privacy policy/release notes
+documentation (not handled by this change).
+
+## deviceName
+
+Every enroll/status/provision/reconcile request may optionally carry
+`deviceName`, the installation's self-reported hostname (Python
+`platform.node()`, validated/truncated to 1-253 chars with control characters
+stripped before it is ever sent). It is **untrusted and display-only**: the
+control plane never uses it for authentication, installation matching, or any
+other security decision, and an installation can claim any value. It exists
+purely so the fleet admin panel can show a human-meaningful hint next to the
+generated hostname/label. An installation's `label` auto-fills from
+`deviceName` only the very first time one is received while no label has ever
+been set; once an operator sets any label, this auto-fill never overwrites it
+again. `deviceName` is fully optional and backward compatible -- an
+installation that never sends it keeps working exactly as before.
+
 For the current backend-only validation path, create a private
 `BetaControlConfig` JSON outside the connector export with the exact HTTPS Worker
 origin, enrolled ID/hostname, absolute credential/state/export paths, and the

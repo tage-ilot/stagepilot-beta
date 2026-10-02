@@ -69,6 +69,19 @@ interface Installation {
   // or access-control state. Use `revoked` (via the existing revoke
   // endpoint) to actually cut off an installation's access.
   archived?: boolean;
+  // Self-reported device hostname (Python `platform.node()`), sent on the
+  // always-on lightweight check-in and on the authenticated status/
+  // provision/reconcile requests. UNTRUSTED and display-only: never use
+  // for auth, matching, or any security decision -- an installation can
+  // claim any value here. See docs/remote-control-plane.md.
+  deviceName?: string;
+  // Set true the first time this installation completes an actual
+  // provisioning side effect (tunnel/DNS created via ensureProvisioned()).
+  // Distinguishes "never enrolled Remote Access" (lightweight-check-in-only
+  // installations always have phase 'disabled' with this unset) from "was
+  // enabled, now off" (phase 'disabled' but this is true) for the admin
+  // panel's phaseLabel().
+  everProvisioned?: boolean;
 }
 
 interface RateWindow {
@@ -346,6 +359,20 @@ async function body(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
+// Self-reported, UNTRUSTED, display-only device hostname validation. Never
+// used for auth/matching/any security decision -- see the `deviceName`
+// field comment on Installation. Rejects non-string/empty-after-trim,
+// strips control characters, and caps length at 253 (matches the Python
+// side's sanitize_device_name truncation).
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
+
+function sanitizeDeviceName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(CONTROL_CHARS, '').trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, 253);
+}
+
 function publicInstallation(installation: Installation): Record<string, unknown> {
   return {
     installationId: installation.id,
@@ -355,6 +382,7 @@ function publicInstallation(installation: Installation): Record<string, unknown>
     revoked: installation.revoked,
     createdAt: installation.createdAt,
     updatedAt: installation.updatedAt,
+    deviceName: installation.deviceName ?? null,
   };
 }
 
@@ -566,6 +594,15 @@ export class Registry {
       }
       if (action === 'status' && request.method === 'GET') {
         await this.takeInstallationRate(installation, 'status');
+        // deviceName on the GET status route travels as a query parameter,
+        // not a body: GET requests are not permitted to carry a body in
+        // the standard Fetch API, and this status route must remain a
+        // normal body-less GET for the many plain status polls that never
+        // send deviceName at all.
+        if (this.applyDeviceName(installation, url.searchParams.get('deviceName'))) {
+          installation.updatedAt = new Date().toISOString();
+          await this.save(installation);
+        }
         return reply({
           ...publicInstallation(installation),
           pendingActions: await this.pendingActions(installation.id),
@@ -578,7 +615,7 @@ export class Registry {
       if (action === 'revoke') return await this.withProviderLane('recovery', () => this.disable(installation, true));
       if (action === 'reconcile') {
         const lane = installation.desiredEnabled ? 'normal' : 'recovery';
-        return await this.withProviderLane(lane, () => this.reconcile(installation));
+        return await this.withProviderLane(lane, () => this.reconcile(request, installation));
       }
       return reply({ error: 'method not allowed' }, 405);
     } catch (error) {
@@ -898,7 +935,12 @@ export class Registry {
   private async enroll(request: Request): Promise<Response> {
     const input = await body(request);
     const idempotencyKey = input.nonce;
-    if (Object.keys(input).length !== 1 || typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+    const allowedKeys = new Set(['nonce', 'deviceName']);
+    if (
+      !Object.keys(input).every((key) => allowedKeys.has(key))
+      || typeof idempotencyKey !== 'string'
+      || !IDEMPOTENCY_KEY.test(idempotencyKey)
+    ) {
       return reply({ error: 'invalid request' }, 400);
     }
     const requestKey = `enrollment:${String(idempotencyKey)}`;
@@ -930,6 +972,7 @@ export class Registry {
       delete installation.providerConfirmedAt;
       installation.credentialGeneration = (installation.credentialGeneration ?? 0) + 1;
       installation.updatedAt = new Date().toISOString();
+      this.applyDeviceName(installation, input.deviceName);
       stats.activeInstallations += 1;
       await this.state.storage.put({
         [`installation:${id}`]: installation,
@@ -979,6 +1022,7 @@ export class Registry {
         createdAt: now,
         updatedAt: now,
       };
+      this.applyDeviceName(installation, input.deviceName);
       const nextQuota: SourceQuota = {
         startedAt: quota?.startedAt ?? nowSeconds,
         count: (quota?.count ?? 0) + 1,
@@ -993,6 +1037,16 @@ export class Registry {
         'enrollment-source-index': index.includes(sourceHash) ? index : [...index, sourceHash],
         'registry:stats': stats,
       });
+    }
+    if (installation && !installation.revoked) {
+      // Idempotent replay of an already-known, active installation (most
+      // common case for the lightweight check-in that calls this route on
+      // every run() start): still allow deviceName to be refreshed/stored
+      // without touching credential/phase/quota bookkeeping.
+      if (this.applyDeviceName(installation, input.deviceName)) {
+        installation.updatedAt = new Date().toISOString();
+        await this.save(installation);
+      }
     }
     return reply({
       ...publicInstallation(installation),
@@ -1194,11 +1248,22 @@ export class Registry {
     installation.desiredEnabled = true;
     installation.phase = 'enabling';
     installation.updatedAt = new Date().toISOString();
+    this.applyDeviceName(installation, input.deviceName);
     await this.save(installation);
     return this.ensureProvisioned(installation);
   }
 
-  private async reconcile(installation: Installation): Promise<Response> {
+  private async reconcile(request: Request, installation: Installation): Promise<Response> {
+    let deviceNameInput: unknown;
+    try {
+      deviceNameInput = (await body(request)).deviceName;
+    } catch {
+      deviceNameInput = undefined;
+    }
+    if (this.applyDeviceName(installation, deviceNameInput)) {
+      installation.updatedAt = new Date().toISOString();
+      await this.save(installation);
+    }
     if (installation.desiredEnabled && installation.generation) {
       const cached = this.cachedProvision(installation);
       if (cached) return cached;
@@ -1247,6 +1312,7 @@ export class Registry {
     installation.phase = 'provisioned';
     installation.providerConfirmedAt = Math.floor(Date.now() / 1000);
     installation.updatedAt = new Date().toISOString();
+    installation.everProvisioned = true;
     await this.save(installation);
     this.tokenCache.set(installation.id, {
       token,
@@ -1402,6 +1468,7 @@ export class Registry {
         label: installation.label || '',
         archived: installation.archived ?? false,
         location: formatInstallationLocation(installation),
+        everProvisioned: installation.everProvisioned ?? false,
       }));
     return reply({ installations });
   }
@@ -1659,6 +1726,25 @@ export class Registry {
   // admin panel can show a passive "which cities are running" list. Called
   // on every authenticated status/provision/reconcile request so a moved
   // installation's location updates after its next check-in.
+  // Applies a self-reported deviceName from a request body: validates,
+  // stores it if changed, and auto-fills `label` from it ONLY the very
+  // first time a label has never been set (tracked by label being
+  // currently empty -- once an operator sets any label, even later
+  // cleared, this never overwrites it again because clearing a label is
+  // an explicit operator action elsewhere, not something this path does).
+  // Untrusted/display-only: never used for auth, matching, or any security
+  // decision. Caller is responsible for persisting via save().
+  private applyDeviceName(installation: Installation, rawDeviceName: unknown): boolean {
+    const deviceName = sanitizeDeviceName(rawDeviceName);
+    if (deviceName === undefined || deviceName === installation.deviceName) return false;
+    const hadDeviceNameBefore = installation.deviceName !== undefined;
+    installation.deviceName = deviceName;
+    if (!hadDeviceNameBefore && !installation.label) {
+      installation.label = deviceName;
+    }
+    return true;
+  }
+
   private async recordRequestGeo(request: Request, installation: Installation): Promise<void> {
     const cf = (request as Request & { cf?: IncomingRequestCfProperties }).cf;
     const city = typeof cf?.city === 'string' && cf.city.length > 0 ? cf.city : undefined;

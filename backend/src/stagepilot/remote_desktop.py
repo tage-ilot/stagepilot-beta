@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from platform import node as platform_node
 
 import httpx
 from fastapi import FastAPI
@@ -18,12 +19,20 @@ from stagepilot.remote_bootstrap import (
     DEFAULT_REMOTE_PORT,
     BootstrapMetadata,
     DesktopBootstrapStore,
+    sanitize_device_name,
 )
 from stagepilot.remote_connector import Connector
 from stagepilot.remote_feature import RemoteFeature
 from stagepilot.remote_files import BetaControlConfig, atomic_write, read_desired, safe_status
 from stagepilot.remote_provider import InstallationPermanentlyRevokedError, ProviderError
 from stagepilot.remote_runtime import attach_managed_remote
+
+# How often the always-on lightweight check-in (enrollment + existence/
+# deviceName signal) re-runs after its first run at the start of run().
+# Conservative on purpose: this is not a liveness/health system, just fleet
+# visibility, so there is no reason to poll more aggressively than the
+# existing Remote Access reconcile loop does.
+LIGHTWEIGHT_CHECKIN_INTERVAL_SECONDS = 6 * 60 * 60
 
 
 class DesktopRemoteManager:
@@ -56,6 +65,12 @@ class DesktopRemoteManager:
         self.control_plane_origin = control_plane_origin
         self.remote_port = remote_port
         self._connector_token: str | None = None
+        # Self-reported, untrusted, display-only hostname captured once per
+        # process (platform.node() is cheap but there is no reason to call
+        # it repeatedly); see DesktopBootstrapStore.sanitize_device_name for
+        # the validation/truncation applied before this ever leaves the
+        # machine.
+        self.device_name = sanitize_device_name(platform_node())
 
     def status(self) -> dict[str, object]:
         result = self.feature.status()
@@ -238,6 +253,13 @@ class DesktopRemoteManager:
         # Persisted intent remains retryable and local production stays available.
         reconcile_at = 0.0
         reconcile_delay = 1.0
+        # Always-on lightweight check-in (see lightweight_checkin()): runs
+        # once at the start of this loop and every
+        # LIGHTWEIGHT_CHECKIN_INTERVAL_SECONDS thereafter, UNCONDITIONALLY --
+        # independent of self.feature.intent().enabled (Remote Access). Only
+        # this existence+deviceName signal is unconditional; tunnel/DNS
+        # provisioning below stays exactly as gated as before.
+        checkin_at = 0.0
         connector = Connector(
             self.cloudflared_binary,
             self.desired_path,
@@ -248,6 +270,11 @@ class DesktopRemoteManager:
         )
         try:
             while not stop.is_set():
+                if time.monotonic() >= checkin_at:
+                    try:
+                        await asyncio.to_thread(self.lightweight_checkin)
+                    finally:
+                        checkin_at = time.monotonic() + LIGHTWEIGHT_CHECKIN_INTERVAL_SECONDS
                 if (
                     self.feature.intent().enabled
                     and self._connector_token is None
@@ -326,11 +353,61 @@ class DesktopRemoteManager:
                 config,
                 client,
                 credential_provider=lambda: self.bootstrap.credential(metadata),
+                device_name=self.device_name,
             )
             result = control.apply(action)
             if control.connector_token is not None:
                 result["tunnel_token"] = control.connector_token
             return result
+
+    def lightweight_checkin(self) -> None:
+        """Always-on "I exist" signal, independent of the Remote Access toggle.
+
+        This call is UNCONDITIONAL -- it runs for every installation from
+        first launch regardless of whether Remote Access has ever been
+        enabled. It is purely operational: it lets the control plane
+        approve/track installations and self-reports deviceName (display-
+        only, untrusted -- see remote_bootstrap.sanitize_device_name). It
+        deliberately reuses the existing anonymous enroll flow and the
+        existing authenticated GET status route; it must never trigger
+        tunnel/DNS provisioning (that stays strictly gated behind
+        self.feature.intent().enabled).
+        """
+
+        try:
+            active = self.bootstrap.ensure_enrolled(
+                control_plane_origin=self.control_plane_origin,
+                remote_port=self.remote_port,
+                transport=self.transport,
+                device_name=self.device_name,
+            )
+        except (ProviderError, InstallationPermanentlyRevokedError):
+            return
+        config = BetaControlConfig(
+            control_plane_url=active.control_plane_origin,
+            installation_id=active.installation_id,
+            hostname=active.hostname,
+            credential_file=None,
+            state_dir=self.state_dir,
+            installation_dir=self.installation_dir,
+            remote_port=active.remote_port,
+            lan_port=self.lan_port,
+        )
+        with httpx.Client(
+            base_url=config.control_plane_url,
+            timeout=20,
+            trust_env=False,
+            follow_redirects=False,
+            transport=self.transport,
+        ) as client:
+            control = BetaRemoteControl(
+                config,
+                client,
+                credential_provider=lambda: self.bootstrap.credential(active),
+                device_name=self.device_name,
+            )
+            with suppress(ProviderError, InstallationRevokedError):
+                control.lightweight_status()
 
     def _capture_connector_token(self, result: dict[str, object]) -> None:
         self._connector_token = None

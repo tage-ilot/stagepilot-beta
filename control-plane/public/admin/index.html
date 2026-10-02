@@ -489,6 +489,7 @@
   function phaseLabel(installation) {
     if (installation.revoked) return 'Removed';
     if (installation.phase === 'provisioned') return 'Online';
+    if (!installation.everProvisioned) return 'Not enabled';
     return 'Off';
   }
 
@@ -511,6 +512,9 @@
       main.appendChild(el('div', 'row-title', titleText + (inst.archived ? ' (archived)' : '')));
       var subBits = [phaseLabel(inst), inst.location, 'last seen ' + timeAgo(inst.updatedAt)];
       main.appendChild(el('div', 'row-sub', subBits.join(' · ')));
+      if (inst.deviceName && inst.deviceName !== titleText) {
+        main.appendChild(el('div', 'row-sub', 'reported hostname: ' + inst.deviceName));
+      }
       row.appendChild(main);
 
       var actions = el('div', 'row-actions');
