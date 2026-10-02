@@ -1111,7 +1111,7 @@ fn collect_diagnostic_bundle(
 /// content, keeping the end — and dropped entirely before any byte is cut
 /// from a newer (earlier-in-the-vec) log.
 fn truncate_logs_to_budget(
-    logs: &mut Vec<DiagnosticLogFile>,
+    logs: &mut [DiagnosticLogFile],
     budget_bytes: usize,
     frontend_crash: Option<&str>,
 ) {
