@@ -170,6 +170,14 @@ interface RegistryStats {
   statusDenied: number;
   mutationDenied: number;
   providerDenied: number;
+  // Running total of bytes currently stored under the diagnostics/ prefix in
+  // R2, maintained incrementally (incremented on upload, decremented on the
+  // lazy-expiry sweep in uploadDiagnostics()) rather than computed by
+  // listing the bucket on every request. This is the enforcement mechanism
+  // for DIAGNOSTICS_STORAGE_CAP_BYTES -- R2 itself has no hard storage quota,
+  // only billing past the free tier, so this counter is what actually stops
+  // writes once the operator's chosen ceiling is reached.
+  diagnosticsBytesUsed: number;
 }
 
 interface SourceQuota extends RateWindow {
@@ -228,8 +236,23 @@ const OAUTH_TOKEN_REQUESTS_PER_MINUTE = 20;
 const MAX_OAUTH_RATE_SOURCES = 2_000;
 const MAX_DIAGNOSTICS_BUNDLE_BYTES = 2 * 1024 * 1024;
 const DIAGNOSTICS_UPLOADS_PER_HOUR = 6;
-// Retention is enforced by an R2 bucket lifecycle rule (see wrangler.toml),
-// not in Worker code; documented here for discoverability.
+// Operator-requested hard ceiling, enforced here in code -- NOT by an R2
+// bucket lifecycle rule or any Cloudflare-side storage quota. Neither R2
+// nor the Cloudflare REST API offers a real "stop accepting writes" quota;
+// R2 only bills past its free tier. The operator's instruction was "100%
+// sure the free limits are not surpassed", so this is a real enforced cap,
+// checked synchronously before every write (see uploadDiagnostics()), not
+// a best-effort retention policy. Set well under the 10 GiB/month R2 free
+// tier (8 GiB) to leave real headroom for measurement slack and any other
+// account R2 usage. If this is ever hit, uploads fail closed (503) rather
+// than silently incurring billable overage.
+const DIAGNOSTICS_STORAGE_CAP_BYTES = 8 * 1024 * 1024 * 1024;
+// Objects older than this are deleted lazily (swept opportunistically on
+// each upload, not via a bucket lifecycle rule or a cron trigger) so the
+// running `diagnosticsBytesUsed` counter above stays accurate and storage
+// doesn't grow unbounded between uploads. Also keeps data retention tight,
+// but the storage cap above is the real safety backstop regardless of
+// whether this sweep runs often enough to do its own job.
 const DIAGNOSTICS_RETENTION_DAYS = 30;
 
 function exactLengthStream(
@@ -1246,7 +1269,18 @@ export class Registry {
 
   private async stats(): Promise<RegistryStats> {
     const existing = await this.state.storage.get<RegistryStats>('registry:stats');
-    if (existing) return existing;
+    if (existing) {
+      // Backward-compat: registry:stats already exists in production from
+      // before diagnosticsBytesUsed was added, so it would be `undefined`
+      // here rather than correctly defaulting to 0 -- patch and persist it
+      // once rather than leaving the cap check doing arithmetic on
+      // `undefined` on every single upload.
+      if (existing.diagnosticsBytesUsed === undefined) {
+        existing.diagnosticsBytesUsed = 0;
+        await this.state.storage.put('registry:stats', existing);
+      }
+      return existing;
+    }
     const rows = await this.state.storage.list<Installation>({ prefix: 'installation:' });
     const stats: RegistryStats = {
       activeInstallations: [...rows.values()].filter((row) => !row.revoked).length,
@@ -1255,6 +1289,7 @@ export class Registry {
       statusDenied: 0,
       mutationDenied: 0,
       providerDenied: 0,
+      diagnosticsBytesUsed: 0,
     };
     await this.state.storage.put('registry:stats', stats);
     return stats;
@@ -1661,6 +1696,18 @@ export class Registry {
     } catch {
       return reply({ error: 'invalid request' }, 400);
     }
+    const stats = await this.stats();
+    // Opportunistic lazy expiry: reclaim space from bundles past their
+    // retention window before deciding whether this new upload fits under
+    // the cap. Runs on every upload rather than a separate cron trigger, so
+    // it needs no extra scheduling infrastructure; worst case an expired
+    // bundle lingers a little past its exact expiry if uploads stop
+    // entirely, which is fine -- the cap check below is the real guarantee,
+    // this sweep only keeps it from being needlessly conservative.
+    await this.expireOldDiagnostics(stats);
+    if (stats.diagnosticsBytesUsed + bytes.byteLength > DIAGNOSTICS_STORAGE_CAP_BYTES) {
+      return reply({ error: 'diagnostics storage cap reached; try again later' }, 503);
+    }
     const uploadedAt = new Date().toISOString();
     const suffix = randomHex(4);
     const objectKey = this.diagnosticsKey(installation.id, uploadedAt, suffix);
@@ -1674,7 +1721,28 @@ export class Registry {
       size: bytes.byteLength,
     };
     await this.state.storage.put(`diagnostics-meta:${installation.id}:${uploadedAt}:${suffix}`, meta);
+    stats.diagnosticsBytesUsed += bytes.byteLength;
+    await this.state.storage.put('registry:stats', stats);
     return reply({ uploadedAt, size: meta.size }, 201);
+  }
+
+  // Deletes R2 objects (and their metadata records) past
+  // DIAGNOSTICS_RETENTION_DAYS and decrements the running byte total
+  // accordingly. Bounded to a modest batch per call (worst case on a cold
+  // bucket with a long-idle Worker) so a single upload request's latency
+  // doesn't balloon; any remainder is cleaned up on the next upload.
+  private async expireOldDiagnostics(stats: RegistryStats): Promise<void> {
+    const cutoff = Date.now() - DIAGNOSTICS_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const rows = await this.state.storage.list<DiagnosticsBundleMeta>({ prefix: 'diagnostics-meta:' });
+    let swept = 0;
+    for (const [metaKey, meta] of rows) {
+      if (swept >= 25) break;
+      if (new Date(meta.uploadedAt).getTime() > cutoff) continue;
+      if (this.env.DIAGNOSTICS) await this.env.DIAGNOSTICS.delete(meta.key);
+      await this.state.storage.delete(metaKey);
+      stats.diagnosticsBytesUsed = Math.max(0, stats.diagnosticsBytesUsed - meta.size);
+      swept += 1;
+    }
   }
 
   // The "id" segment in the admin GET route is the `<stamp>-<suffix>` tail of

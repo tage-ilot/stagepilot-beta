@@ -23,12 +23,14 @@ new_sqlite_classes = ["Registry"]
 binding = "DIAGNOSTICS"
 bucket_name = "stagepilot-beta-diagnostics"
 
-# Auto-expire uploaded bundles after 30 days (see DIAGNOSTICS_RETENTION_DAYS
-# in src/index.ts). Configured on the bucket itself via a lifecycle rule;
-# wrangler does not manage R2 lifecycle rules, so this must also be applied
-# out-of-band, e.g.:
-#   wrangler r2 bucket lifecycle add stagepilot-beta-diagnostics \
-#     --name expire-diagnostics --expire-days 30 --prefix diagnostics/
+# Retention (DIAGNOSTICS_RETENTION_DAYS) and the account-wide storage cap
+# (DIAGNOSTICS_STORAGE_CAP_BYTES, 8 GiB -- kept under the R2 free tier's
+# 10 GiB/month) are both enforced IN WORKER CODE (see uploadDiagnostics()/
+# expireOldDiagnostics() in src/index.ts), not via an R2 bucket lifecycle
+# rule. R2 has no platform-level "stop accepting writes" quota -- it only
+# bills past the free tier -- so a lifecycle rule alone would not have been
+# a real hard cap. No out-of-band `wrangler r2 bucket lifecycle` command is
+# needed or used.
 
 # The protected manual deployment workflow supplies CLOUDFLARE_ACCOUNT_ID,
 # CLOUDFLARE_ZONE_ID, REMOTE_HOST_SUFFIX, and REMOTE_PORT as deployment vars.
