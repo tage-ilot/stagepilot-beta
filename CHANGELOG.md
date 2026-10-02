@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.1.104-beta.19] - 2026-10-02
+
+### Added
+
+- Fleet admin panel: per-installation list with name, phase, location, and
+  last-seen time; operator-settable labels; archive/unarchive (hides an
+  installation from the default view without affecting its access, unlike
+  revoke); and removal.
+- Installations now self-report their OS device hostname on an always-on
+  lightweight check-in, independent of whether Remote Access is enabled —
+  improves fleet visibility and tunnel-access approval, and auto-fills an
+  installation's admin-panel label the first time it's empty. Self-reported
+  and display-only; never used for authentication or installation matching.
+- Admin panel password-based login (a short memorable password, padded
+  client-side to meet the bearer-token length floor) alongside the existing
+  long-token login.
+- "Send logs to developer" diagnostic bundle upload: a manual action
+  surfaced from crash/error dialogs and the backend settings panel.
+  Rate-limited per-installation (6 uploads/hour) and client-side
+  (1/minute), backed by Cloudflare R2 with an account-wide 8 GiB hard
+  storage cap and 30-day automatic expiry — both enforced in Worker code
+  rather than relying on an R2 platform quota, which does not exist; R2
+  only bills past its free tier.
+
+### Fixed
+
+- Mobile Remote Access loading screen: replaced an oversized fixed-width
+  wordmark with a responsive circular spinner matching the desktop loading
+  bar's style, removing horizontal overflow/forced pinch-zoom on phone and
+  tablet.
+- Service Plan hover preview: added an item-title heading and a 0.5s
+  hover-intent delay before the preview appears, with no re-delay when
+  moving between items.
+- Planning Center OAuth: the dashboard no longer shows a stale
+  "connection: error" after a successful sign-in — service types and the
+  day's plan now load automatically without manual reconnect steps.
+
 ## [1.1.104-beta.18] - 2026-09-29
 
 ### Added
