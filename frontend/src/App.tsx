@@ -4,6 +4,8 @@ import { Dashboard } from "./components/Dashboard";
 import { DesktopTitleBar } from "./components/DesktopTitleBar";
 import { DashboardAccessGate } from "./components/DashboardAccessGate";
 import { CrashLoopAlertDialog } from "./components/CrashLoopAlertDialog";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { GlobalErrorListener } from "./components/GlobalErrorListener";
 import {
   backendStartupTitle,
   copyBackendLog,
@@ -246,9 +248,12 @@ export default function App() {
   }, []);
 
   return (
-    <DashboardAccessGate>
-      <StagePilotApp />
-      <CrashLoopAlertDialog crashLoop={crashLoop} onDismiss={() => setCrashLoop(null)} />
-    </DashboardAccessGate>
+    <ErrorBoundary>
+      <DashboardAccessGate>
+        <StagePilotApp />
+        <CrashLoopAlertDialog crashLoop={crashLoop} onDismiss={() => setCrashLoop(null)} />
+        <GlobalErrorListener />
+      </DashboardAccessGate>
+    </ErrorBoundary>
   );
 }

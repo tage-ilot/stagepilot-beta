@@ -517,6 +517,11 @@
       }
       row.appendChild(main);
 
+      var diagLink = el('button', 'ghost', 'Diagnostics');
+      diagLink.addEventListener('click', function () { toggleDiagnostics(inst, row, diagLink); });
+      main.appendChild(diagLink);
+      loadDiagnosticsCount(inst, diagLink);
+
       var actions = el('div', 'row-actions');
       var nameInput = document.createElement('input');
       nameInput.type = 'text';
@@ -576,6 +581,69 @@
 
       els.installationsList.appendChild(row);
     });
+  }
+
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function loadDiagnosticsCount(inst, btn) {
+    api('/v1/admin/installations/' + encodeURIComponent(inst.installationId) + '/diagnostics')
+      .then(function (data) {
+        var bundles = data.bundles || [];
+        btn.textContent = 'Diagnostics (' + bundles.length + ')';
+        btn.dataset.bundles = JSON.stringify(bundles);
+      })
+      .catch(function () { /* leave the plain "Diagnostics" label on failure */ });
+  }
+
+  function diagnosticsDownloadUrl(installationId, bundleId) {
+    return '/v1/admin/installations/' + encodeURIComponent(installationId) +
+      '/diagnostics/' + encodeURIComponent(bundleId);
+  }
+
+  function toggleDiagnostics(inst, row, btn) {
+    var existing = row.querySelector('.diagnostics-panel');
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    var bundles = [];
+    try { bundles = JSON.parse(btn.dataset.bundles || '[]'); } catch (e) { bundles = []; }
+    var panel = el('div', 'diagnostics-panel');
+    panel.style.cssText = 'flex-basis:100%;margin-top:8px;';
+    if (!bundles.length) {
+      panel.appendChild(el('div', 'row-meta', 'No diagnostic bundles uploaded.'));
+    } else {
+      bundles.forEach(function (bundle) {
+        var line = el('div', 'city-row');
+        line.appendChild(el('span', null, bundle.uploadedAt + ' · ' + formatBytes(bundle.size)));
+        var downloadBtn = el('button', 'ghost', 'Download');
+        downloadBtn.addEventListener('click', function () {
+          // The route needs the admin bearer token, which a plain link
+          // can't send, so fetch the bundle ourselves and open it as a blob.
+          downloadBtn.disabled = true;
+          fetch(diagnosticsDownloadUrl(inst.installationId, bundle.id), {
+            headers: { Authorization: 'Bearer ' + getToken() },
+          }).then(function (res) {
+            if (!res.ok) throw new Error('download failed (' + res.status + ')');
+            return res.blob();
+          }).then(function (blob) {
+            var blobUrl = URL.createObjectURL(blob);
+            window.open(blobUrl, '_blank');
+            downloadBtn.disabled = false;
+          }).catch(function (err) {
+            downloadBtn.disabled = false;
+            setStatus('Could not download: ' + err.message, 'error');
+          });
+        });
+        line.appendChild(downloadBtn);
+        panel.appendChild(line);
+      });
+    }
+    row.appendChild(panel);
   }
 
   function handleDecision(reqItem, row, approved, btns) {

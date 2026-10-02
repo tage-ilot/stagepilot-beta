@@ -2051,3 +2051,202 @@ describe('fleet admin actions: rate-limit reset and approval requests', () => {
     });
   });
 });
+
+// Minimal in-memory stand-in for R2Bucket, covering only what index.ts uses
+// (put/get keyed by object key, returning an object whose .body is readable).
+class FakeR2Bucket {
+  readonly objects = new Map<string, { bytes: Uint8Array; httpMetadata?: Record<string, unknown> }>();
+
+  put = vi.fn(async (key: string, value: Uint8Array, options?: { httpMetadata?: Record<string, unknown> }): Promise<void> => {
+    this.objects.set(key, { bytes: value, httpMetadata: options?.httpMetadata });
+  });
+
+  get = vi.fn(async (key: string): Promise<{ body: ReadableStream<Uint8Array> } | null> => {
+    const object = this.objects.get(key);
+    if (!object) return null;
+    const bytes = object.bytes;
+    return {
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    };
+  });
+}
+
+function rawRequest(path: string, method: string, token: string | undefined, bytes: Uint8Array): Request {
+  return new Request(`https://control.example.com${path}`, {
+    method,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      'content-type': 'application/json',
+      'content-length': String(bytes.byteLength),
+    },
+    body: bytes,
+  });
+}
+
+describe('diagnostic bundle uploads and admin retrieval', () => {
+  let storage: MemoryStorage;
+  let provider: FakeCloudflare;
+  let diagnostics: FakeR2Bucket;
+  let registry: Registry;
+
+  beforeEach(() => {
+    storage = new MemoryStorage();
+    provider = new FakeCloudflare();
+    diagnostics = new FakeR2Bucket();
+    vi.stubGlobal('fetch', provider.fetch);
+    registry = new Registry({ storage } as unknown as DurableObjectState, { ...env, DIAGNOSTICS: diagnostics } as never);
+  });
+
+  function bundleBytes(size = 100): Uint8Array {
+    return new TextEncoder().encode(JSON.stringify({ frontend: 'x'.repeat(Math.max(0, size - 40)), version: '1.0.0' }));
+  }
+
+  it('rejects a diagnostics POST for an installation that does not exist', async () => {
+    const response = await registry.fetch(rawRequest(
+      '/v1/installations/deadbeef/diagnostics', 'POST', 'irrelevant-credential', bundleBytes(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects a diagnostics POST with the wrong installation credential', async () => {
+    const installation = await enroll(registry, 'diag-auth-0001');
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', 'not-the-real-credential', bundleBytes(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects a diagnostics POST for a revoked installation', async () => {
+    const installation = await enroll(registry, 'diag-auth-0002');
+    const revoke = await registry.fetch(request(
+      installationPath(installation, 'revoke'), 'POST', String(installation.installationCredential),
+    ));
+    expect(revoke.status).toBe(200);
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+    ));
+    expect(response.status).toBe(401);
+  });
+
+  it('accepts and stores a valid diagnostic bundle', async () => {
+    const installation = await enroll(registry, 'diag-store-0001');
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+    ));
+    expect(response.status).toBe(201);
+    const bodyJson = await json(response);
+    expect(bodyJson.size).toBeGreaterThan(0);
+    expect(diagnostics.objects.size).toBe(1);
+  });
+
+  it('rejects a bundle over the 2MB size cap', async () => {
+    const installation = await enroll(registry, 'diag-size-0001');
+    const huge = new Uint8Array(2 * 1024 * 1024 + 1);
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), huge,
+    ));
+    expect(response.status).toBe(400);
+    expect(diagnostics.objects.size).toBe(0);
+  });
+
+  it('still accepts a bundle right at the 2MB cap', async () => {
+    const installation = await enroll(registry, 'diag-size-0002');
+    const atCap = new Uint8Array(2 * 1024 * 1024);
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), atCap,
+    ));
+    expect(response.status).toBe(201);
+  });
+
+  it('rate-limits repeated diagnostic uploads independently of the mutation rate limit', async () => {
+    const installation = await enroll(registry, 'diag-rate-0001');
+    for (let index = 0; index < 6; index += 1) {
+      const response = await registry.fetch(rawRequest(
+        installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+      ));
+      expect(response.status).toBe(201);
+    }
+    const limited = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+    ));
+    expect(limited.status).toBe(429);
+
+    // The dedicated diagnostics rate limit does not consume the installation's
+    // normal mutation quota -- a status/mutation call still succeeds.
+    const status = await registry.fetch(request(
+      installationPath(installation, 'status'), 'GET', String(installation.installationCredential),
+    ));
+    expect(status.status).toBe(200);
+  });
+
+  it('responds 503 instead of throwing when the DIAGNOSTICS R2 binding is absent', async () => {
+    const registryWithoutR2 = new Registry({ storage } as unknown as DurableObjectState, env as never);
+    const installation = await enroll(registryWithoutR2, 'diag-no-binding-0001');
+    const response = await registryWithoutR2.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+    ));
+    expect(response.status).toBe(503);
+  });
+
+  it('requires the admin bearer token for listing and retrieving diagnostics', async () => {
+    const installation = await enroll(registry, 'diag-admin-auth-0001');
+    await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(),
+    ));
+    const missingList = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics`, 'GET',
+    ));
+    expect(missingList.status).toBe(401);
+    const list = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics`, 'GET', adminToken,
+    ));
+    expect(list.status).toBe(200);
+    const { bundles } = await json(list) as { bundles: Record<string, unknown>[] };
+    expect(bundles).toHaveLength(1);
+
+    const missingGet = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics/${String(bundles[0]?.id)}`, 'GET',
+    ));
+    expect(missingGet.status).toBe(401);
+  });
+
+  it('lists uploaded bundles with timestamp and size, and streams one back via admin GET', async () => {
+    const installation = await enroll(registry, 'diag-list-0001');
+    const uploadResponse = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(321),
+    ));
+    expect(uploadResponse.status).toBe(201);
+
+    const list = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics`, 'GET', adminToken,
+    ));
+    const { bundles } = await json(list) as { bundles: Record<string, unknown>[] };
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0]?.size).toBeGreaterThan(0);
+    expect(typeof bundles[0]?.uploadedAt).toBe('string');
+
+    const download = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics/${String(bundles[0]?.id)}`,
+      'GET', adminToken,
+    ));
+    expect(download.status).toBe(200);
+    const downloadedText = await download.text();
+    const parsed = JSON.parse(downloadedText) as Record<string, unknown>;
+    expect(parsed.version).toBe('1.0.0');
+  });
+
+  it('404s an admin diagnostics GET for an unknown bundle id', async () => {
+    const installation = await enroll(registry, 'diag-404-0001');
+    const response = await registry.fetch(request(
+      `/v1/admin/installations/${String(installation.installationId)}/diagnostics/20260101T000000Z-deadbeef`,
+      'GET', adminToken,
+    ));
+    expect(response.status).toBe(404);
+  });
+});
+

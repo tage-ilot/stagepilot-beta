@@ -11,6 +11,25 @@ bindings = [
 tag = "v1"
 new_sqlite_classes = ["Registry"]
 
+# R2 bucket for installation-uploaded diagnostic bundles (see
+# POST /v1/installations/:id/diagnostics in src/index.ts). Optional/deferred
+# the same way GITHUB_RELEASE_TOKEN is: if the deploying CLOUDFLARE_API_TOKEN
+# lacks R2 permissions, this binding and the bucket provisioning step can be
+# skipped and the diagnostics routes will respond 503 instead of failing
+# deploy. The bucket must be created once out-of-band (e.g.
+# `wrangler r2 bucket create stagepilot-beta-diagnostics`) before this
+# binding resolves; wrangler deploy does not auto-create R2 buckets.
+[[r2_buckets]]
+binding = "DIAGNOSTICS"
+bucket_name = "stagepilot-beta-diagnostics"
+
+# Auto-expire uploaded bundles after 30 days (see DIAGNOSTICS_RETENTION_DAYS
+# in src/index.ts). Configured on the bucket itself via a lifecycle rule;
+# wrangler does not manage R2 lifecycle rules, so this must also be applied
+# out-of-band, e.g.:
+#   wrangler r2 bucket lifecycle add stagepilot-beta-diagnostics \
+#     --name expire-diagnostics --expire-days 30 --prefix diagnostics/
+
 # The protected manual deployment workflow supplies CLOUDFLARE_ACCOUNT_ID,
 # CLOUDFLARE_ZONE_ID, REMOTE_HOST_SUFFIX, and REMOTE_PORT as deployment vars.
 # BETA_RELEASE_VERSIONS and BETA_LATEST_RELEASE_VERSION are also deployment

@@ -988,6 +988,180 @@ fn read_backend_log_tail(path: &std::path::Path) -> Result<String, String> {
     Ok(content)
 }
 
+/// Maximum total size (bytes) of the diagnostic bundle returned by
+/// `collect_diagnostic_bundle`. When the combined log content would exceed
+/// this, the OLDEST log generation's content is truncated/dropped first so
+/// the most recent (and most relevant) log content is always preserved.
+const DIAGNOSTIC_BUNDLE_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Serialize)]
+struct DiagnosticLogFile {
+    /// Logical name, e.g. "stagepilot-backend.log", "stagepilot-backend.log.1".
+    name: String,
+    /// UTF-8 (lossy) content of this log generation, possibly truncated.
+    content: String,
+    /// Original size in bytes before any truncation.
+    original_bytes: u64,
+    /// True if this file's content was truncated to fit the bundle budget.
+    truncated: bool,
+}
+
+#[derive(Serialize)]
+struct DiagnosticAppInfo {
+    app_version: String,
+    os: String,
+    arch: String,
+}
+
+#[derive(Serialize)]
+struct DiagnosticBundle {
+    app_info: DiagnosticAppInfo,
+    /// Optional frontend-supplied crash message/stack, when triggered from a
+    /// JS error boundary rather than the manual "send logs" button.
+    frontend_crash: Option<String>,
+    /// Log files ordered from most recent (active log) to oldest rotation.
+    logs: Vec<DiagnosticLogFile>,
+}
+
+/// Collects the active backend log plus any rotated `.log.1`/`.log.2`
+/// generations (see `rotate_backend_log` / `BACKEND_LOG_MAX_BACKUPS` above),
+/// basic non-identifying app/platform info, and an optional frontend crash
+/// message, into a single JSON blob the frontend can POST directly.
+///
+/// Deliberately does NOT include arbitrary user data, raw file listings, or
+/// PCO/ProPresenter credentials/tokens — only the backend log text itself
+/// and static app/OS/arch strings.
+///
+/// The combined bundle is capped at `DIAGNOSTIC_BUNDLE_MAX_BYTES`: if the
+/// logs together exceed the budget, the OLDEST log generation is truncated
+/// (from its start, keeping its tail) first, and dropped entirely before any
+/// byte of the most recent log is cut.
+#[tauri::command]
+fn collect_diagnostic_bundle(
+    app: tauri::AppHandle,
+    supervisor: tauri::State<'_, BackendSupervisor>,
+    frontend_crash: Option<String>,
+) -> Result<String, String> {
+    let log_path = supervisor.snapshot().log_path;
+
+    let mut generations: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(path_text) = log_path.as_ref() {
+        let active_path = std::path::Path::new(path_text).to_path_buf();
+        let name = active_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "stagepilot-backend.log".to_string());
+        generations.push((name, active_path.clone()));
+        for generation in 1..=BACKEND_LOG_MAX_BACKUPS {
+            let backup_path = active_path.with_extension(format!("log.{generation}"));
+            let backup_name = backup_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("stagepilot-backend.log.{generation}"));
+            generations.push((backup_name, backup_path));
+        }
+    }
+
+    let mut logs: Vec<DiagnosticLogFile> = Vec::new();
+    for (name, path) in &generations {
+        if let Ok(metadata) = fs::metadata(path) {
+            let original_bytes = metadata.len();
+            let content = fs::read_to_string(path).unwrap_or_else(|_| {
+                // Fall back to a lossy read for logs with non-UTF-8 bytes
+                // rather than dropping the generation entirely.
+                fs::read(path)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default()
+            });
+            logs.push(DiagnosticLogFile {
+                name: name.clone(),
+                content,
+                original_bytes,
+                truncated: false,
+            });
+        }
+    }
+
+    truncate_logs_to_budget(
+        &mut logs,
+        DIAGNOSTIC_BUNDLE_MAX_BYTES,
+        frontend_crash.as_deref(),
+    );
+
+    let app_info = DiagnosticAppInfo {
+        app_version: app.package_info().version.to_string(),
+        os: env::consts::OS.to_string(),
+        arch: env::consts::ARCH.to_string(),
+    };
+
+    let bundle = DiagnosticBundle {
+        app_info,
+        frontend_crash,
+        logs,
+    };
+
+    serde_json::to_string(&bundle)
+        .map_err(|error| format!("Unable to serialize the diagnostic bundle: {error}"))
+}
+
+/// Trims `logs` (ordered newest-first, as built by `collect_diagnostic_bundle`)
+/// so their combined content, plus a fixed-size allowance for `frontend_crash`
+/// and the app-info fields, fits within `budget_bytes`. The OLDEST entries
+/// (the tail of the vec) are truncated first — from the start of their
+/// content, keeping the end — and dropped entirely before any byte is cut
+/// from a newer (earlier-in-the-vec) log.
+fn truncate_logs_to_budget(
+    logs: &mut Vec<DiagnosticLogFile>,
+    budget_bytes: usize,
+    frontend_crash: Option<&str>,
+) {
+    // Reserve a small allowance for the non-log fields (app info, crash
+    // text, JSON structure/field-name overhead) so the final serialized
+    // bundle stays within budget, not just the raw log bytes.
+    let reserved = frontend_crash.map(str::len).unwrap_or(0) + 1024;
+    let mut remaining = budget_bytes.saturating_sub(reserved);
+
+    // First pass: logs are already ordered newest-first; walk them in that
+    // order, keeping each in full while budget allows.
+    let mut kept_full = vec![false; logs.len()];
+    for (index, log) in logs.iter().enumerate() {
+        let size = log.content.len();
+        if size <= remaining {
+            remaining -= size;
+            kept_full[index] = true;
+        } else {
+            break;
+        }
+    }
+
+    for (index, log) in logs.iter_mut().enumerate() {
+        if kept_full[index] {
+            continue;
+        }
+        if remaining == 0 {
+            // No budget left at all for this (older) generation: drop it.
+            log.content.clear();
+            log.truncated = true;
+            continue;
+        }
+        // Keep the TAIL (most recent portion) of this generation's content
+        // and truncate from the start, on a UTF-8 char boundary.
+        let content = std::mem::take(&mut log.content);
+        let total_len = content.len();
+        if total_len <= remaining {
+            log.content = content;
+            continue;
+        }
+        let mut start = total_len - remaining;
+        while start < total_len && !content.is_char_boundary(start) {
+            start += 1;
+        }
+        log.content = content[start..].to_string();
+        log.truncated = true;
+        remaining = 0;
+    }
+}
+
 #[tauri::command]
 async fn restart_managed_backend(
     app: tauri::AppHandle,
@@ -1462,6 +1636,7 @@ pub fn run() {
             backend_supervisor_status,
             restart_managed_backend,
             copy_backend_log,
+            collect_diagnostic_bundle,
             prepare_for_update,
             check_for_update_on_channel,
             install_environment,
@@ -1511,6 +1686,97 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_log(name: &str, content: &str) -> DiagnosticLogFile {
+        DiagnosticLogFile {
+            name: name.to_string(),
+            content: content.to_string(),
+            original_bytes: content.len() as u64,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn keeps_all_logs_unmodified_when_under_budget() {
+        let mut logs = vec![
+            make_log("stagepilot-backend.log", "recent content"),
+            make_log("stagepilot-backend.log.1", "older content"),
+        ];
+        truncate_logs_to_budget(&mut logs, DIAGNOSTIC_BUNDLE_MAX_BYTES, None);
+        assert_eq!(logs[0].content, "recent content");
+        assert_eq!(logs[1].content, "older content");
+        assert!(!logs[0].truncated);
+        assert!(!logs[1].truncated);
+    }
+
+    #[test]
+    fn truncates_oldest_log_first_when_over_budget() {
+        // Budget only large enough for the newest log plus a sliver of the
+        // older one.
+        let newest = "x".repeat(100);
+        let oldest = "y".repeat(200);
+        let mut logs = vec![
+            make_log("stagepilot-backend.log", &newest),
+            make_log("stagepilot-backend.log.1", &oldest),
+        ];
+        let budget = 1024 + 150; // reserved (1024) + room for newest + 50 of oldest
+        truncate_logs_to_budget(&mut logs, budget, None);
+
+        // Newest log is preserved in full and untouched.
+        assert_eq!(logs[0].content, newest);
+        assert!(!logs[0].truncated);
+
+        // Oldest log is truncated from the start, keeping its tail.
+        assert!(logs[1].truncated);
+        assert!(logs[1].content.len() < oldest.len());
+        assert!(oldest.ends_with(&logs[1].content));
+    }
+
+    #[test]
+    fn drops_oldest_log_entirely_before_touching_newest() {
+        let newest = "keep-me".repeat(50);
+        let oldest = "drop-me".repeat(500);
+        let mut logs = vec![
+            make_log("stagepilot-backend.log", &newest),
+            make_log("stagepilot-backend.log.1", &oldest),
+        ];
+        // Budget just barely fits the newest log and nothing else.
+        let budget = 1024 + newest.len();
+        truncate_logs_to_budget(&mut logs, budget, None);
+
+        assert_eq!(logs[0].content, newest);
+        assert!(!logs[0].truncated);
+        assert!(logs[1].content.is_empty());
+        assert!(logs[1].truncated);
+    }
+
+    #[test]
+    fn never_exceeds_the_total_byte_budget() {
+        let a = "a".repeat(3000);
+        let b = "b".repeat(3000);
+        let c = "c".repeat(3000);
+        let mut logs = vec![
+            make_log("stagepilot-backend.log", &a),
+            make_log("stagepilot-backend.log.1", &b),
+            make_log("stagepilot-backend.log.2", &c),
+        ];
+        let budget = 4000;
+        truncate_logs_to_budget(&mut logs, budget, None);
+        let total: usize = logs.iter().map(|log| log.content.len()).sum();
+        assert!(total <= budget);
+    }
+
+    #[test]
+    fn reserves_room_for_frontend_crash_text() {
+        let content = "z".repeat(5000);
+        let mut logs = vec![make_log("stagepilot-backend.log", &content)];
+        let crash = "x".repeat(2000);
+        truncate_logs_to_budget(&mut logs, 4096, Some(&crash));
+        // Reserved budget (crash text + 1024 overhead) leaves less than
+        // 4096 for the log, so it must be truncated.
+        assert!(logs[0].truncated);
+        assert!(logs[0].content.len() < content.len());
+    }
 
     #[test]
     fn detects_stagepilot_backend_in_windows_task_list_output() {

@@ -4,10 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BackendCrashLoopDetected } from "../desktop";
 
-const mocks = vi.hoisted(() => ({ copyBackendLog: vi.fn() }));
-vi.mock("../desktop", async (original) => ({
-  ...(await original<typeof import("../desktop")>()),
-  copyBackendLog: mocks.copyBackendLog,
+const mocks = vi.hoisted(() => ({ copyDiagnosticsLog: vi.fn(), sendDiagnosticsBundle: vi.fn() }));
+vi.mock("../diagnostics", async (original) => ({
+  ...(await original<typeof import("../diagnostics")>()),
+  copyDiagnosticsLog: mocks.copyDiagnosticsLog,
+  sendDiagnosticsBundle: mocks.sendDiagnosticsBundle,
 }));
 
 import { CrashLoopAlertDialog } from "./CrashLoopAlertDialog";
@@ -34,7 +35,7 @@ describe("CrashLoopAlertDialog", () => {
   });
 
   it("Copy Log calls the content-copy command and writes to the clipboard", async () => {
-    mocks.copyBackendLog.mockResolvedValue("log contents here");
+    mocks.copyDiagnosticsLog.mockResolvedValue("log contents here");
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -45,8 +46,18 @@ describe("CrashLoopAlertDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy Log" }));
 
     expect(await screen.findByText("Backend log copied.")).toBeInTheDocument();
-    expect(mocks.copyBackendLog).toHaveBeenCalledOnce();
+    expect(mocks.copyDiagnosticsLog).toHaveBeenCalledOnce();
     expect(writeText).toHaveBeenCalledWith("log contents here");
+  });
+
+  it("Send to developer calls the shared diagnostics helper", async () => {
+    mocks.sendDiagnosticsBundle.mockResolvedValue({ ok: true, message: "Logs sent to the developer." });
+
+    render(<CrashLoopAlertDialog crashLoop={crashLoop} onDismiss={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send to developer" }));
+
+    expect(await screen.findByText("Logs sent to the developer.")).toBeInTheDocument();
+    expect(mocks.sendDiagnosticsBundle).toHaveBeenCalledOnce();
   });
 
   it("Dismiss closes the dialog without disabling retry logic", async () => {

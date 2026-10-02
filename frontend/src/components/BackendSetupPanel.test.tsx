@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api";
 import * as desktop from "../desktop";
+import * as diagnostics from "../diagnostics";
 import type { ApplicationState } from "../types";
 import { BackendSetupPanel } from "./BackendSetupPanel";
 
@@ -14,6 +15,10 @@ vi.mock("../api", async (original) => ({
 vi.mock("../desktop", async (original) => ({
   ...await original<typeof import("../desktop")>(),
   setRemoteAutostart: vi.fn(),
+}));
+vi.mock("../diagnostics", async (original) => ({
+  ...await original<typeof import("../diagnostics")>(),
+  sendDiagnosticsBundle: vi.fn(),
 }));
 
 const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true, permanently_revoked: false};
@@ -156,5 +161,50 @@ describe("Remote Access checkbox", () => {
     await waitFor(() => expect(api.setRemoteEnabled).toHaveBeenCalledWith(false));
     expect(desktop.setRemoteAutostart).toHaveBeenCalledWith(false);
     await waitFor(() => expect(checkbox).not.toBeChecked());
+  });
+});
+
+describe("Send all logs to developer", () => {
+  it("clicking sends the bundle, enters cooldown, and re-enables after 60s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(diagnostics.sendDiagnosticsBundle).mockResolvedValue({
+      ok: true,
+      message: "Logs sent to the developer.",
+    });
+    renderPanel();
+
+    const button = screen.getByRole("button", { name: "Send all logs to developer" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(diagnostics.sendDiagnosticsBundle).toHaveBeenCalledOnce());
+    expect(await screen.findByText("Logs sent to the developer.")).toBeInTheDocument();
+
+    const cooldownButton = screen.getByRole("button", { name: /Send all logs to developer \(\d+s\)/ });
+    expect(cooldownButton).toBeDisabled();
+
+    // Clicking during cooldown must not fire a second request.
+    fireEvent.click(cooldownButton);
+    expect(diagnostics.sendDiagnosticsBundle).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const reenabled = screen.getByRole("button", { name: "Send all logs to developer" });
+    expect(reenabled).not.toBeDisabled();
+
+    fireEvent.click(reenabled);
+    await waitFor(() => expect(diagnostics.sendDiagnosticsBundle).toHaveBeenCalledTimes(2));
+
+    vi.useRealTimers();
+  });
+
+  it("shows an error message when the upload fails", async () => {
+    vi.mocked(diagnostics.sendDiagnosticsBundle).mockResolvedValue({
+      ok: false,
+      message: "Unable to send logs to the developer.",
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send all logs to developer" }));
+
+    expect(await screen.findByText("Unable to send logs to the developer.")).toBeInTheDocument();
   });
 });
