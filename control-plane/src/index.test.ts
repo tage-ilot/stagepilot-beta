@@ -2074,6 +2074,10 @@ class FakeR2Bucket {
       }),
     };
   });
+
+  delete = vi.fn(async (key: string): Promise<void> => {
+    this.objects.delete(key);
+  });
 }
 
 function rawRequest(path: string, method: string, token: string | undefined, bytes: Uint8Array): Request {
@@ -2247,6 +2251,99 @@ describe('diagnostic bundle uploads and admin retrieval', () => {
       'GET', adminToken,
     ));
     expect(response.status).toBe(404);
+  });
+
+  it('fails closed with 503 once the account-wide storage cap would be exceeded', async () => {
+    const installation = await enroll(registry, 'diag-cap-0001');
+    // Directly seed registry:stats so the test doesn't need to actually
+    // upload 8 GiB of bundles -- this is the same counter uploadDiagnostics()
+    // reads/writes, so seeding it is equivalent to having really uploaded
+    // that much.
+    await storage.put('registry:stats', {
+      activeInstallations: 1,
+      enrollments: 1,
+      enrollmentDenied: 0,
+      statusDenied: 0,
+      mutationDenied: 0,
+      providerDenied: 0,
+      diagnosticsBytesUsed: 8 * 1024 * 1024 * 1024 - 50, // 50 bytes of headroom left
+    });
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(200),
+    ));
+    expect(response.status).toBe(503);
+    expect(diagnostics.objects.size).toBe(0);
+  });
+
+  it('still accepts an upload that fits exactly within remaining cap headroom', async () => {
+    const installation = await enroll(registry, 'diag-cap-0002');
+    const bundle = bundleBytes(200);
+    await storage.put('registry:stats', {
+      activeInstallations: 1,
+      enrollments: 1,
+      enrollmentDenied: 0,
+      statusDenied: 0,
+      mutationDenied: 0,
+      providerDenied: 0,
+      diagnosticsBytesUsed: 8 * 1024 * 1024 * 1024 - bundle.byteLength,
+    });
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundle,
+    ));
+    expect(response.status).toBe(201);
+  });
+
+  it('backward-compat: treats a pre-existing registry:stats with no diagnosticsBytesUsed as zero, not NaN', async () => {
+    const installation = await enroll(registry, 'diag-compat-0001');
+    // Simulates production state from before this field existed.
+    await storage.put('registry:stats', {
+      activeInstallations: 1,
+      enrollments: 1,
+      enrollmentDenied: 0,
+      statusDenied: 0,
+      mutationDenied: 0,
+      providerDenied: 0,
+    });
+    const response = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(200),
+    ));
+    expect(response.status).toBe(201);
+    const stats = await storage.get<{ diagnosticsBytesUsed: number }>('registry:stats');
+    expect(Number.isFinite(stats?.diagnosticsBytesUsed)).toBe(true);
+    expect(stats?.diagnosticsBytesUsed).toBeGreaterThan(0);
+  });
+
+  it('lazily expires bundles past the retention window and reclaims their bytes from the running total', async () => {
+    const installation = await enroll(registry, 'diag-expire-0001');
+    const old = await registry.fetch(rawRequest(
+      installationPath(installation, 'diagnostics'), 'POST', String(installation.installationCredential), bundleBytes(500),
+    ));
+    expect(old.status).toBe(201);
+    expect(diagnostics.objects.size).toBe(1);
+
+    // Backdate the stored metadata to just past the retention window.
+    const rows = await storage.list<{ uploadedAt: string; size: number }>({ prefix: 'diagnostics-meta:' });
+    const [metaKey, meta] = [...rows.entries()][0];
+    const ancient = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    await storage.put(metaKey, { ...meta, uploadedAt: ancient });
+    const statsBefore = await storage.get<{ diagnosticsBytesUsed: number }>('registry:stats');
+    expect(statsBefore?.diagnosticsBytesUsed).toBeGreaterThan(0);
+
+    // Any subsequent upload triggers the lazy sweep before its own cap check.
+    const installation2 = await enroll(registry, 'diag-expire-0002');
+    const fresh = await registry.fetch(rawRequest(
+      installationPath(installation2, 'diagnostics'), 'POST', String(installation2.installationCredential), bundleBytes(100),
+    ));
+    expect(fresh.status).toBe(201);
+
+    // The expired bundle's R2 object and metadata are gone, and its bytes
+    // were subtracted from the running total (only the fresh upload's bytes
+    // remain counted).
+    expect(diagnostics.objects.size).toBe(1);
+    const metaAfter = await storage.get(metaKey);
+    expect(metaAfter).toBeUndefined();
+    const statsAfter = await storage.get<{ diagnosticsBytesUsed: number }>('registry:stats');
+    expect(statsAfter?.diagnosticsBytesUsed).toBeLessThan(statsBefore!.diagnosticsBytesUsed!);
   });
 });
 
