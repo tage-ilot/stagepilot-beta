@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.104-beta.23] - 2026-10-03
+
+### Fixed
+
+- "All service types" could flip the Planning Center connection to ERROR
+  even when most configured service types loaded successfully. Root cause:
+  one service type returning a plan response shape that failed internal
+  validation aborted the entire multi-service-type lookup, discarding every
+  other service type's already-fetched valid plan data. Each service type's
+  lookup is now isolated — a single bad response is logged and skipped, and
+  the nearest valid plan from the remaining healthy service types still
+  loads. Only surfaces an error if every configured service type fails.
+- Planning Center failure logs now record the exception type, HTTP status
+  (when applicable), and the affected service type ID(s) alongside the
+  existing sanitized error marker, without logging anything that could
+  identify a specific Planning Center account or organization. Makes future
+  "Send logs to developer" bundles actually diagnosable instead of a single
+  uninformative warning line.
+
 ## [1.1.104-beta.22] - 2026-10-03
 
 ### Fixed
