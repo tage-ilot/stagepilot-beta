@@ -19,6 +19,7 @@ vi.mock("../desktop", async (original) => ({
 vi.mock("../diagnostics", async (original) => ({
   ...await original<typeof import("../diagnostics")>(),
   sendDiagnosticsBundle: vi.fn(),
+  copyDiagnosticsLog: vi.fn(),
 }));
 
 const off: api.RemoteStatus = {available: true, provisioned: true, credential_available: true, enabled: false, state: "off", url: null, needs_operator: true, message: null, temporary_url: true, permanently_revoked: false};
@@ -206,5 +207,40 @@ describe("Send all logs to developer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send all logs to developer" }));
 
     expect(await screen.findByText("Unable to send logs to the developer.")).toBeInTheDocument();
+  });
+});
+
+describe("Copy Log", () => {
+  it("renders to the left of Send all logs to developer, copies via the content-copy command", async () => {
+    vi.mocked(diagnostics.copyDiagnosticsLog).mockResolvedValue("log contents here");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderPanel();
+
+    const copyButton = screen.getByRole("button", { name: "Copy Log" });
+    const sendButton = screen.getByRole("button", { name: "Send all logs to developer" });
+    // "to the left of" -- Copy Log must appear earlier in DOM order within
+    // the shared button row than Send all logs to developer.
+    expect(copyButton.compareDocumentPosition(sendButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(copyButton);
+
+    expect(diagnostics.copyDiagnosticsLog).toHaveBeenCalledOnce();
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("log contents here"));
+    expect(await screen.findByRole("button", { name: "Copy Log" })).toBeInTheDocument();
+  });
+
+  it("shows an error message when the copy fails", async () => {
+    vi.mocked(diagnostics.copyDiagnosticsLog).mockRejectedValue(
+      new Error("No backend log is available yet."),
+    );
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Log" }));
+
+    expect(await screen.findByTitle("No backend log is available yet.")).toBeInTheDocument();
   });
 });

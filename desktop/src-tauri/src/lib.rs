@@ -961,11 +961,25 @@ fn backend_supervisor_status(
 /// the "Copy Backend Log" button and the crash-loop alert dialog. Returns
 /// at most the last `BACKEND_LOG_COPY_MAX_BYTES` bytes when the file is
 /// larger, so a runaway log can't stall the UI or blow up the clipboard.
+///
+/// Uses `resolve_diagnostic_log_path` (see `collect_diagnostic_bundle`) for
+/// the same reason: `supervisor.snapshot().log_path` is only ever populated
+/// on a failure transition, so a healthy running backend previously made
+/// this command always fail with "No backend log is available yet." --
+/// which is why it only ever worked on the startup-crash screen and never
+/// as a normal Settings-panel action.
 #[tauri::command]
-fn copy_backend_log(supervisor: tauri::State<'_, BackendSupervisor>) -> Result<String, String> {
-    let log_path = supervisor
-        .snapshot()
-        .log_path
+fn copy_backend_log(
+    app: tauri::AppHandle,
+    supervisor: tauri::State<'_, BackendSupervisor>,
+) -> Result<String, String> {
+    let computed_log_path = app.path().app_log_dir().ok().map(|directory| {
+        directory
+            .join("stagepilot-backend.log")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let log_path = resolve_diagnostic_log_path(computed_log_path, supervisor.snapshot().log_path)
         .ok_or_else(|| "No backend log is available yet.".to_string())?;
     read_backend_log_tail(std::path::Path::new(&log_path))
 }
