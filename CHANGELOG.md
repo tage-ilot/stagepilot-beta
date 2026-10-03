@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.104-beta.21] - 2026-10-03
+
+### Added
+
+- A "Copy Log" button next to "Send all logs to developer" in Settings →
+  Backend: copies the current backend log straight to the clipboard, fully
+  offline (no network call, no upload rate limit, no Remote Access
+  requirement).
+
+### Fixed
+
+- "Send logs to developer" and the equivalent clipboard-copy command were
+  always empty for a normally-running (non-crashed) backend — the
+  overwhelming common case for both actions. Both now correctly read the
+  active backend log.
+
 ## [1.1.104-beta.20] - 2026-10-02
 
 ### Added
