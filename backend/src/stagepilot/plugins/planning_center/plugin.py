@@ -133,6 +133,22 @@ class PlanningCenterPlugin(Plugin):
         self._pending_reload = False
         self._status = PluginStatus.STOPPED
         self._last_error: str | None = None
+        # Tracks whether the MOST RECENT error means the configured settings
+        # are genuinely invalid (e.g. an archived/unavailable service type)
+        # versus a transient failure (timeout, rate limit, momentary API/auth
+        # hiccup) that the always-running scheduled-refresh loop will retry
+        # on its own. reconfigure() consults this -- NOT bare
+        # `self._status is PluginStatus.ERROR` -- to decide whether to
+        # reject a settings save and force a full restart/reload. See the
+        # 2026-10-03 production bug this fixes: selecting "All service
+        # types" hit a transient Planning Center error, reconfigure()
+        # rejected the save as if settings were invalid, the frontend
+        # reloaded the whole app to "recover", which re-ran the same save
+        # and hit the same transient error again -- an infinite restart
+        # loop every ~5-6 seconds, logging the unrelated MIDI settings
+        # every cycle along the way (startup activation re-applies MIDI
+        # settings unconditionally on every reload).
+        self._last_error_is_configuration = False
         self._last_activity_at: datetime | None = None
         self._stopping = False
         self._logger = get_logger(self.name)
@@ -251,7 +267,7 @@ class PlanningCenterPlugin(Plugin):
         except PlanningCenterError as exc:
             self._settings = previous_settings
             detail = self._with_cache_warning(str(exc))
-            self._record_error(detail)
+            self._record_error(detail, is_configuration=True)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             return ActionOutcome(False, detail)
 
@@ -263,7 +279,7 @@ class PlanningCenterPlugin(Plugin):
             self._client = previous_client
             detail = "Planning Center settings could not be applied to the running plugin."
             self._logger.error("planning_center_reconfigure_failed")
-            self._record_error(detail)
+            self._record_error(detail, is_configuration=True)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             return ActionOutcome(False, detail)
 
@@ -271,13 +287,22 @@ class PlanningCenterPlugin(Plugin):
             with suppress(Exception):
                 await previous_client.close()
 
-        if self._status is PluginStatus.ERROR:
+        if self._status is PluginStatus.ERROR and self._last_error_is_configuration:
             detail = (
                 self._last_error
                 or "Planning Center settings were applied but the connection failed."
             )
             return ActionOutcome(False, detail)
 
+        # A transient failure (timeout, rate limit, momentary API/auth
+        # hiccup) does NOT reject the settings save: the always-running
+        # scheduled-refresh loop will retry on its own, and the dashboard
+        # already reflects the live connection error via the normal
+        # SERVICE_LOADED/connection-status events _refresh_once publishes.
+        # Rejecting here (and the frontend's consequent full reload) would
+        # just repeat the same transient failure in a loop -- exactly the
+        # bug this fixes (2026-10-03: "All service types" + a momentary
+        # Planning Center error looped every ~5-6 seconds).
         return ActionOutcome(
             True, "Planning Center settings applied to the running service source."
         )
@@ -429,7 +454,7 @@ class PlanningCenterPlugin(Plugin):
                         selected_plan_id=preferred.id,
                     )
         except PlanningCenterPlanSelectionError as exc:
-            self._record_error(str(exc))
+            self._record_error(str(exc), is_configuration=True)
             await self._publish_connection(ConnectionStatus.CONNECTED, str(exc))
             await self._publish_load_state(
                 ServiceLoadStatus.AMBIGUOUS
@@ -450,7 +475,17 @@ class PlanningCenterPlugin(Plugin):
             if self._pending_reload:
                 return
             detail = self._with_cache_warning(str(exc))
-            self._record_error(detail)
+            # Only a genuinely invalid configuration (missing/invalid service
+            # type, credentials, etc.) should ever cause reconfigure() to
+            # reject a settings save and force a restart/reload. Everything
+            # else PlanningCenterError covers here -- timeouts, rate limits,
+            # transport errors, unexpected API responses -- is transient: the
+            # scheduled refresh loop below will retry on its own, so treating
+            # it as a hard rejection just causes a reload-retry-fail loop (the
+            # production bug this fixes, 2026-10-03).
+            self._record_error(
+                detail, is_configuration=isinstance(exc, PlanningCenterConfigurationError)
+            )
             connection_status = (
                 ConnectionStatus.CONNECTED
                 if api_connected and isinstance(exc, PlanningCenterConfigurationError)
@@ -475,7 +510,7 @@ class PlanningCenterPlugin(Plugin):
         except Exception:
             detail = self._with_cache_warning("Planning Center plan loading failed unexpectedly.")
             self._logger.error("planning_center_unexpected_load_failure")
-            self._record_error(detail)
+            self._record_error(detail, is_configuration=True)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             await self._publish_load_state(
                 ServiceLoadStatus.AMBIGUOUS
@@ -814,9 +849,10 @@ class PlanningCenterPlugin(Plugin):
             return None
         return state.plan.date
 
-    def _record_error(self, detail: str) -> None:
+    def _record_error(self, detail: str, *, is_configuration: bool = False) -> None:
         self._status = PluginStatus.ERROR
         self._last_error = detail
+        self._last_error_is_configuration = is_configuration
         self._last_activity_at = datetime.now(UTC)
         self._logger.warning(
             "planning_center_load_failed",
