@@ -12,11 +12,13 @@ import httpx
 from pydantic import ValidationError
 
 from stagepilot.core.config import PlanningCenterSettings
+from stagepilot.core.logging import get_logger
 from stagepilot.models.state import ServicePlan, Song
 from stagepilot.plugins.planning_center.errors import (
     PlanningCenterApiError,
     PlanningCenterAuthenticationError,
     PlanningCenterConfigurationError,
+    PlanningCenterError,
     PlanningCenterPermissionError,
     PlanningCenterPlanSelectionError,
     PlanningCenterRateLimitError,
@@ -90,6 +92,7 @@ class PlanningCenterClient:
             timeout=httpx.Timeout(settings.request_timeout_seconds),
             transport=transport,
         )
+        self._logger = get_logger("planning_center")
 
     async def __aenter__(self) -> PlanningCenterClient:
         return self
@@ -159,18 +162,39 @@ class PlanningCenterClient:
         selected_plan_id: str | None = None,
         lookahead_days: int = 0,
     ) -> PlanDiscoveryResult:
-        """Load the nearest plan across all supplied active service types."""
+        """Load the nearest plan across all supplied active service types.
 
-        candidates = [
-            candidate
-            for service_type in service_types
-            for candidate in await self._plan_candidates_for_date(
-                service_type,
-                target_date,
-                timezone_name,
-                lookahead_days=lookahead_days,
-            )
-        ]
+        One service type's failure must not discard every other service
+        type's already-fetched, valid candidates: isolate each service
+        type's lookup in its own try/except so a single bad response (e.g.
+        a plan shape that fails the typed response boundary) cannot abort
+        the whole aggregation. Only propagate a hard error when every
+        configured service type fails.
+        """
+
+        candidates: list[PlanningCenterPlanCandidate] = []
+        failures: list[tuple[PlanningCenterServiceType, PlanningCenterError]] = []
+        for service_type in service_types:
+            try:
+                candidates.extend(
+                    await self._plan_candidates_for_date(
+                        service_type,
+                        target_date,
+                        timezone_name,
+                        lookahead_days=lookahead_days,
+                    )
+                )
+            except PlanningCenterError as exc:
+                failures.append((service_type, exc))
+                self._logger.warning(
+                    "planning_center_service_type_load_failed",
+                    exception_type=type(exc).__name__,
+                    http_status=getattr(exc, "status_code", None),
+                )
+        if failures and len(failures) == len(service_types):
+            # Every configured service type failed: there is nothing valid
+            # to aggregate, so surface the first failure as before.
+            raise failures[0][1]
         return await self._resolve_plan_candidates(
             candidates,
             {service_type.id: service_type for service_type in service_types},
