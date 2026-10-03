@@ -55,6 +55,25 @@ const CRASH_LOOP_WINDOW: Duration = Duration::from_secs(120);
 const CRASH_LOOP_THRESHOLD: usize = 3;
 /// Maximum bytes of log content returned by the "copy backend log" command.
 const BACKEND_LOG_COPY_MAX_BYTES: u64 = 200 * 1024;
+/// Maximum number of (newest) lines returned by "Copy Log" / included per
+/// log generation in a "Send logs to developer" bundle. A backend under
+/// load can log the same handful of lines (e.g. repeated HTTP request
+/// entries) thousands of times in a short window; without a line cap, a
+/// "Copy Log" click can return thousands of near-duplicate lines that are
+/// unreadable to a human and, once JSON-escaped for the diagnostics
+/// bundle, can inflate well past the upload size limit even though the
+/// raw byte count looked fine (confirmed live: "Diagnostic bundle is too
+/// large to send." from a log that was comfortably under the raw-byte
+/// budget before escaping). Capping by line count fixes both the
+/// readability complaint and the size-after-escaping bug at the source.
+///
+/// 100, not a rounder/larger number: sized against a real captured log
+/// sample (2026-10-03) where a single repeating fetch-and-fail cycle is
+/// ~8-10 lines every ~5-6 seconds -- 100 lines keeps 2-3 full cycles
+/// visible (enough to see the repeating pattern) while staying far short
+/// of unreadable. At ~150-250 bytes/line for these particular HTTP request
+/// lines that is ~15-25KB, trivially inside the upload budget.
+const MAX_LOG_LINES: usize = 100;
 const STAGEPILOT_GITHUB_URL: &str = "https://github.com/tage-ilot/stagepilot";
 // Stable-channel updates come from the main (non-beta) desktop release feed;
 // beta-channel updates keep using whichever endpoint tauri.conf.json (or its
@@ -999,7 +1018,22 @@ fn read_backend_log_tail(path: &std::path::Path) -> Result<String, String> {
     let mut content = String::new();
     file.read_to_string(&mut content)
         .map_err(|error| format!("Unable to read the backend log: {error}"))?;
-    Ok(content)
+    Ok(tail_lines(&content, MAX_LOG_LINES).0)
+}
+
+/// Keeps at most the last `max_lines` lines of `content`, discarding from
+/// the start. Returns the (possibly unmodified) text plus whether anything
+/// was dropped. Line-based (rather than byte-based) truncation is what
+/// actually fixes the "thousands of near-identical repeated lines" case: a
+/// backend logging the same handful of lines under load can stay well
+/// under a byte budget while still being thousands of lines of noise.
+fn tail_lines(content: &str, max_lines: usize) -> (String, bool) {
+    let total_lines = content.lines().count();
+    if total_lines <= max_lines {
+        return (content.to_string(), false);
+    }
+    let kept: Vec<&str> = content.lines().skip(total_lines - max_lines).collect();
+    (kept.join("\n"), true)
 }
 
 /// Maximum total size (bytes) of the diagnostic bundle returned by
@@ -1123,11 +1157,20 @@ fn collect_diagnostic_bundle(
                     .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                     .unwrap_or_default()
             });
+            // Cap by line count BEFORE the byte-budget truncation below: a
+            // backend logging the same handful of lines thousands of times
+            // under load can stay well under DIAGNOSTIC_BUNDLE_MAX_BYTES in
+            // raw bytes while still being thousands of repeated lines --
+            // and once JSON-escaped, can exceed the upload size limit even
+            // though the raw read looked fine (confirmed live, 2026-10-03:
+            // "Diagnostic bundle is too large to send." from a log under
+            // the raw budget before escaping).
+            let (content, line_truncated) = tail_lines(&content, MAX_LOG_LINES);
             logs.push(DiagnosticLogFile {
                 name: name.clone(),
                 content,
                 original_bytes,
-                truncated: false,
+                truncated: line_truncated,
             });
         }
     }
@@ -1767,6 +1810,55 @@ mod tests {
     #[test]
     fn resolve_diagnostic_log_path_none_when_both_unavailable() {
         assert_eq!(resolve_diagnostic_log_path(None, None), None);
+    }
+
+    #[test]
+    fn tail_lines_keeps_everything_under_the_limit() {
+        let content = "line1\nline2\nline3";
+        let (result, truncated) = tail_lines(content, 500);
+        assert_eq!(result, content);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn tail_lines_keeps_only_the_newest_lines_over_the_limit() {
+        // Regression test for the production bug (2026-10-03): a backend
+        // logging the same handful of lines (e.g. repeated HTTP request
+        // entries) thousands of times stayed under the raw-byte budget but
+        // produced an unreadable "Copy Log" result and, once JSON-escaped,
+        // a diagnostics bundle that exceeded the server's upload size
+        // limit ("Diagnostic bundle is too large to send.").
+        let content = (1..=1000)
+            .map(|index| format!("line{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (result, truncated) = tail_lines(&content, 500);
+        assert!(truncated);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 500);
+        assert_eq!(lines.first(), Some(&"line501"));
+        assert_eq!(lines.last(), Some(&"line1000"));
+    }
+
+    #[test]
+    fn tail_lines_handles_exactly_the_limit() {
+        let content = (1..=500)
+            .map(|index| format!("line{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (result, truncated) = tail_lines(&content, 500);
+        assert!(!truncated);
+        assert_eq!(result.lines().count(), 500);
+    }
+
+    #[test]
+    fn max_log_lines_is_100() {
+        // Pins the real constant used by copy_backend_log and
+        // collect_diagnostic_bundle, sized against a real captured log
+        // sample (2026-10-03): ~8-10 lines per repeating fetch-and-fail
+        // cycle every ~5-6 seconds, so 100 lines keeps 2-3 full cycles
+        // visible without being unreadable.
+        assert_eq!(MAX_LOG_LINES, 100);
     }
 
     #[test]
