@@ -1664,3 +1664,47 @@ async def test_reconfigure_surfaces_failure_without_killing_the_plugin() -> None
         assert state.plan and state.plan.id == "plan-recovered"
     finally:
         await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_accepts_despite_a_transient_refresh_failure() -> None:
+    """Regression test for the production bug (2026-10-03): selecting "All
+    service types" hit a transient Planning Center error (a timeout, in
+    this test); reconfigure() used to reject the save as if the settings
+    themselves were invalid, which made the frontend force a full
+    restart/reload to "recover" -- immediately repeating the same save and
+    hitting the same transient error again, looping indefinitely every few
+    seconds.
+
+    A transient error (timeout/rate-limit/API hiccup, as opposed to a
+    genuinely invalid configuration) must be accepted: the settings are
+    valid, the scheduled refresh loop will retry on its own, and the
+    dashboard already reflects the live connection error via the normal
+    connection-status event.
+    """
+    initial_client = FakePlanningCenterClient(
+        [loaded_result("plan-old")],
+        service_types=[service_type("42", "Weekend Services")],
+    )
+    today = MutableToday(SERVICE_DATE)
+    harness = await plugin_harness(initial_client, today=today)
+    try:
+        await harness.plugin.start()
+
+        flaky_client = FakePlanningCenterClient(
+            [PlanningCenterTimeoutError("Planning Center timed out.")],
+            service_types=[service_type("42", "Weekend Services")],
+        )
+        harness.factory.client = flaky_client
+        new_settings = configured_settings().model_copy(
+            update={"service_type_id": ALL_SERVICE_TYPES_ID}
+        )
+
+        outcome = await harness.plugin.reconfigure(new_settings)
+
+        assert outcome.accepted is True
+        health = await harness.plugin.health()
+        assert health.status is PluginStatus.ERROR
+        assert health.last_error is not None
+    finally:
+        await harness.close()
