@@ -1,6 +1,24 @@
 # Changelog
 
-## [1.1.104-beta.21] - 2026-10-03
+## [1.1.104-beta.22] - 2026-10-03
+
+### Fixed
+
+- "Copy Log" and "Send logs to developer" now cap each log file to the
+  newest 100 lines: a backend under load repeating the same handful of
+  log lines (e.g. HTTP requests) previously returned thousands of
+  near-duplicate lines, unreadable, and could push the diagnostic upload
+  past its size limit once JSON-escaped.
+- Fixed a reload loop: a transient Planning Center failure (timeout,
+  rate limit, momentary API hiccup) right after saving settings — most
+  visibly after selecting "All service types" — used to be treated the
+  same as genuinely invalid settings, forcing a full app reload that hit
+  the same transient error again, looping indefinitely. Transient
+  failures are now accepted like any successful save; the live
+  connection status still reflects the real error, and the existing
+  background refresh retries on its own.
+
+## [1.1.104-beta.21] - 2026-10-02
 
 ### Added
 
