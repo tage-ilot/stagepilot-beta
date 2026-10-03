@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiOrigin, websocketUrl } from "../api";
-import { sendDiagnosticsBundle } from "../diagnostics";
+import { copyDiagnosticsLog, sendDiagnosticsBundle } from "../diagnostics";
 import { useRemoteAccess } from "../hooks/useRemoteAccess";
 import type {
   ApplicationState,
@@ -14,6 +14,47 @@ import { SetupPanelHeader } from "./SetupPanelHeader";
 
 /** Client-side cooldown (seconds) between manual "send all logs" clicks. */
 const SEND_LOGS_COOLDOWN_SECONDS = 60;
+
+/**
+ * Copies the current backend log straight to the clipboard, entirely
+ * offline/local -- no network call, no control-plane rate limit, no
+ * installation/Remote Access requirement. Placed to the left of "Send all
+ * logs to developer" as the quick local-only alternative: useful when the
+ * developer is debugging interactively over a screen share, or Remote
+ * Access/network isn't available.
+ */
+export function CopyLogButton() {
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const onClick = async () => {
+    if (status === "copying") return;
+    setStatus("copying");
+    setMessage(null);
+    try {
+      const content = await copyDiagnosticsLog();
+      await navigator.clipboard.writeText(content);
+      setStatus("copied");
+      setMessage("Backend log copied to the clipboard.");
+    } catch (error) {
+      setStatus("error");
+      setMessage(error instanceof Error ? error.message : "Unable to copy the backend log.");
+    }
+  };
+
+  return (
+    <button
+      aria-disabled={status === "copying"}
+      className="rounded-lg border border-white/15 px-3.5 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+      disabled={status === "copying"}
+      onClick={() => void onClick()}
+      title={message ?? undefined}
+      type="button"
+    >
+      {status === "copying" ? "Copying…" : "Copy Log"}
+    </button>
+  );
+}
 
 /**
  * Manually-triggered "send everything right now" button, distinct from the
@@ -69,6 +110,7 @@ export function SendAllLogsButton() {
 
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/7 pt-4">
+      <CopyLogButton />
       <button
         aria-disabled={disabled}
         className="rounded-lg border border-white/15 px-3.5 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
