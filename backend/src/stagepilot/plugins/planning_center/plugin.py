@@ -42,6 +42,7 @@ from stagepilot.models.state import (
 )
 from stagepilot.plugins.planning_center.client import PlanningCenterClient
 from stagepilot.plugins.planning_center.errors import (
+    PlanningCenterApiError,
     PlanningCenterConfigurationError,
     PlanningCenterError,
     PlanningCenterPlanSelectionError,
@@ -183,9 +184,12 @@ class PlanningCenterPlugin(Plugin):
         except PlanningCenterError as exc:
             await self._handle_start_failure(self._with_cache_warning(str(exc)))
             raise
-        except Exception:
+        except Exception as exc:
             detail = "Planning Center plugin initialization failed unexpectedly."
-            self._logger.error("planning_center_unexpected_initialization_failure")
+            self._logger.error(
+                "planning_center_unexpected_initialization_failure",
+                **self._error_fields(exc),
+            )
             await self._handle_start_failure(detail)
             raise PlanningCenterError(detail) from None
 
@@ -265,21 +269,23 @@ class PlanningCenterPlugin(Plugin):
         try:
             self._validate_configuration()
         except PlanningCenterError as exc:
+            fields = self._error_fields(exc)
             self._settings = previous_settings
             detail = self._with_cache_warning(str(exc))
-            self._record_error(detail, is_configuration=True)
+            self._record_error(detail, exc, is_configuration=True, fields=fields)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             return ActionOutcome(False, detail)
 
         self._client = self._client_factory(self._settings)
         try:
             await self._request_regular_refresh(wait=True)
-        except Exception:
+        except Exception as exc:
+            fields = self._error_fields(exc)
             self._settings = previous_settings
             self._client = previous_client
             detail = "Planning Center settings could not be applied to the running plugin."
-            self._logger.error("planning_center_reconfigure_failed")
-            self._record_error(detail, is_configuration=True)
+            self._logger.error("planning_center_reconfigure_failed", **fields)
+            self._record_error(detail, exc, is_configuration=True, fields=fields)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             return ActionOutcome(False, detail)
 
@@ -427,6 +433,7 @@ class PlanningCenterPlugin(Plugin):
         )
 
         api_connected = False
+        configured_service_types: list[PlanningCenterServiceType] | None = None
         try:
             client = self._require_client()
             service_types = await client.list_service_types()
@@ -454,7 +461,12 @@ class PlanningCenterPlugin(Plugin):
                         selected_plan_id=preferred.id,
                     )
         except PlanningCenterPlanSelectionError as exc:
-            self._record_error(str(exc), is_configuration=True)
+            self._record_error(
+                str(exc),
+                exc,
+                is_configuration=True,
+                fields=self._error_fields(exc, configured_service_types),
+            )
             await self._publish_connection(ConnectionStatus.CONNECTED, str(exc))
             await self._publish_load_state(
                 ServiceLoadStatus.AMBIGUOUS
@@ -484,7 +496,10 @@ class PlanningCenterPlugin(Plugin):
             # it as a hard rejection just causes a reload-retry-fail loop (the
             # production bug this fixes, 2026-10-03).
             self._record_error(
-                detail, is_configuration=isinstance(exc, PlanningCenterConfigurationError)
+                detail,
+                exc,
+                is_configuration=isinstance(exc, PlanningCenterConfigurationError),
+                fields=self._error_fields(exc, configured_service_types),
             )
             connection_status = (
                 ConnectionStatus.CONNECTED
@@ -507,10 +522,11 @@ class PlanningCenterPlugin(Plugin):
                 is_stale=has_actionable_plan,
             )
             return
-        except Exception:
+        except Exception as exc:
             detail = self._with_cache_warning("Planning Center plan loading failed unexpectedly.")
-            self._logger.error("planning_center_unexpected_load_failure")
-            self._record_error(detail, is_configuration=True)
+            fields = self._error_fields(exc, configured_service_types)
+            self._logger.error("planning_center_unexpected_load_failure", **fields)
+            self._record_error(detail, exc, is_configuration=True, fields=fields)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
             await self._publish_load_state(
                 ServiceLoadStatus.AMBIGUOUS
@@ -543,10 +559,11 @@ class PlanningCenterPlugin(Plugin):
                 previous_skipped_items,
                 previous_plan_type_still_active,
             )
-        except Exception:
+        except Exception as exc:
             detail = "Planning Center plan projection failed unexpectedly."
-            self._logger.error("planning_center_unexpected_projection_failure")
-            self._record_error(detail)
+            fields = self._error_fields(exc, configured_service_types)
+            self._logger.error("planning_center_unexpected_projection_failure", **fields)
+            self._record_error(detail, exc, fields=fields)
             current_state = await self.state_store.snapshot()
             current_plan_date = self._actionable_plan_date(current_state, search_date)
             await self._publish_connection(ConnectionStatus.ERROR, detail)
@@ -849,7 +866,38 @@ class PlanningCenterPlugin(Plugin):
             return None
         return state.plan.date
 
-    def _record_error(self, detail: str, *, is_configuration: bool = False) -> None:
+    def _error_fields(
+        self,
+        exc: Exception,
+        service_types: list[PlanningCenterServiceType] | None = None,
+    ) -> dict[str, object]:
+        # Never include messages, args, traceback locals, or service type names.
+        fields: dict[str, object] = {"exception_type": type(exc).__name__}
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, PlanningCenterApiError):
+                fields["http_status"] = current.status_code
+                break
+            current = current.__cause__ or (
+                current.__context__ if not current.__suppress_context__ else None
+            )
+        if self._settings.service_type_id == ALL_SERVICE_TYPES_ID:
+            if service_types is not None:
+                fields["service_type_ids"] = [value.id for value in service_types]
+        elif self._settings.service_type_id is not None:
+            fields["service_type_id"] = self._settings.service_type_id
+        return fields
+
+    def _record_error(
+        self,
+        detail: str,
+        exc: Exception,
+        *,
+        is_configuration: bool = False,
+        fields: dict[str, object] | None = None,
+    ) -> None:
         self._status = PluginStatus.ERROR
         self._last_error = detail
         self._last_error_is_configuration = is_configuration
@@ -857,6 +905,7 @@ class PlanningCenterPlugin(Plugin):
         self._logger.warning(
             "planning_center_load_failed",
             error_type="safe_planning_center_error",
+            **(fields if fields is not None else self._error_fields(exc)),
         )
 
     async def _restore_cached_plan(self) -> None:
