@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Playback API input is the schema-2 default, with heartbeat-verified local-first
+  discovery, manual-address override, reconnect, bounded event monitoring and
+  live source switching. Existing native/network MIDI remains the unchanged
+  alternative and all saved MIDI settings survive migration.
+- Explicit confirmed Discover Song Order walks only Previous/Next while Playback
+  is stopped, suppresses Playback-triggered actions, restores the original
+  selection, and atomically saves completed order/version/time. Version changes
+  and unknown IDs disarm starts until rediscovery; reconnect revalidates safely.
+  No Playback play/pause/select/seek or general control routes are exposed.
+
 ## [1.1.104-beta.23] - 2026-10-03
 
 ### Fixed

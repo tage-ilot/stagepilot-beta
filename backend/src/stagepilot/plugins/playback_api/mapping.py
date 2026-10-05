@@ -51,6 +51,11 @@ class PlaybackMapper:
             self.discovery = active
             self._generation += 1  # Also suppress pre-discovery queued actions.
 
+    def discard_pending(self) -> None:
+        """A disconnect drops queued work, without invalidating the saved order."""
+        self._generation += 1
+        self._heartbeat = None
+
     def observe(
         self, heartbeat: Heartbeat | None, events: tuple[PlaybackEvent, ...]
     ) -> tuple[Observation, ...]:

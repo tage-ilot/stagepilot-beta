@@ -350,7 +350,12 @@ def test_disabled_midi_never_constructs_hardware_and_rejects_simulation(
     assert simulation_response.status_code == 409
     assert simulation_response.json() == {"detail": "The MIDI Playback plugin is disabled."}
     assert health.status == "healthy"
-    assert [plugin.name for plugin in health.plugins] == ["lights", "planning_center"]
+    assert [plugin.name for plugin in health.plugins] == [
+        "lights",
+        "planning_center",
+        "playback_api",
+    ]
+    assert health.plugins[-1].status is PluginStatus.RUNNING
     assert midi_factory.calls == 0
 
 
@@ -371,7 +376,8 @@ def test_demo_mode_stays_hardware_free_even_when_midi_is_enabled() -> None:
 
     assert inputs.enabled is False
     assert inputs.inputs == []
-    assert [plugin.name for plugin in health.plugins] == ["lights", "demo"]
+    assert [plugin.name for plugin in health.plugins] == ["lights", "demo", "playback_api"]
+    assert health.plugins[-1].status is PluginStatus.RUNNING
     assert midi_factory.calls == 0
 
 

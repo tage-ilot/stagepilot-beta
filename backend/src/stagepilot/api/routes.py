@@ -18,7 +18,7 @@ from stagepilot.core.events import (
     new_event,
 )
 from stagepilot.core.lights import LightsSnapshot
-from stagepilot.core.midi import MidiInputSnapshot
+from stagepilot.core.midi import MidiController, MidiInputSnapshot
 from stagepilot.core.propresenter import ProPresenterSnapshot
 from stagepilot.core.runtime import Runtime
 from stagepilot.core.settings import (
@@ -81,6 +81,7 @@ from stagepilot.plugins.planning_center.errors import (
     PlanningCenterRateLimitError,
 )
 from stagepilot.plugins.planning_center.plugin import ALL_SERVICE_TYPES_ID
+from stagepilot.plugins.playback_api.plugin import DiscoveryConflict
 from stagepilot.plugins.propresenter.errors import ProPresenterError
 
 router = APIRouter(prefix="/api/v1", route_class=RemoteRetryRoute)
@@ -88,6 +89,15 @@ router = APIRouter(prefix="/api/v1", route_class=RemoteRetryRoute)
 
 def _runtime(request: Request) -> Runtime:
     return request.app.state.runtime  # type: ignore[no-any-return]
+
+
+def _midi_controller(runtime: Runtime) -> MidiController | None:
+    inputs = runtime.playback_input
+    if inputs is not None:
+        if inputs.settings.integration_modes.midi_source is not MidiSource.REAL:
+            return None
+        return inputs.midi
+    return runtime.midi_controller
 
 
 def _current_local_date(timezone_name: str) -> date:
@@ -301,24 +311,50 @@ async def update_settings(
 ) -> SettingsResponse:
     runtime = _runtime(request)
     previous = runtime.settings_service.effective_runtime_settings()
+    if runtime.playback_input is not None:
+        if runtime.playback_input.discovery == "running":
+            raise HTTPException(409, "Wait for Discover Song Order before changing settings.")
+        saved_order = runtime.settings_service.snapshot().playback_api
+        if (
+            settings.playback_api.song_order != saved_order.song_order
+            or settings.playback_api.captured_version != saved_order.captured_version
+            or settings.playback_api.captured_at != saved_order.captured_at
+        ):
+            raise HTTPException(400, "Song order can only be changed by Discover Song Order.")
     try:
-        runtime.settings_service.save(settings)
+        if runtime.playback_input is not None:
+            await runtime.playback_input.save_settings(settings)
+        else:
+            runtime.settings_service.save(settings)
     except SettingsFileError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except DiscoveryConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     updated = runtime.settings_service.effective_runtime_settings()
     restart_required = True
-    controller = runtime.midi_controller
+    controller = _midi_controller(runtime)
     only_midi_runtime_settings_changed = _runtime_settings_without_midi(
         previous
     ) == _runtime_settings_without_midi(updated)
     if (
-        controller is not None
+        runtime.playback_input is None
+        and controller is not None
         and updated.integration_modes.midi_source is MidiSource.REAL
         and updated.midi.enabled
         and only_midi_runtime_settings_changed
     ):
         outcome = await controller.reconfigure(updated.midi)
         restart_required = not outcome.accepted
+    if (
+        runtime.playback_input is not None
+        and previous.model_dump(exclude={"midi", "playback_api", "integration_modes"})
+        == updated.model_dump(exclude={"midi", "playback_api", "integration_modes"})
+        and previous.integration_modes.service_source == updated.integration_modes.service_source
+        and previous.integration_modes.timer_output == updated.integration_modes.timer_output
+    ):
+        restart_required = False
     return _settings_response(runtime, restart_required=restart_required)
 
 
@@ -561,7 +597,7 @@ async def planning_center_service_types(
 @router.get("/midi/inputs", response_model=MidiInputsResponse)
 async def midi_inputs(request: Request) -> MidiInputsResponse:
     runtime = _runtime(request)
-    controller = runtime.midi_controller
+    controller = _midi_controller(runtime)
     if controller is None:
         return MidiInputsResponse(
             enabled=False,
@@ -583,7 +619,7 @@ async def refresh_midi_inputs(request: Request) -> MidiInputsResponse:
 
 @router.get("/midi/messages", response_model=MidiMonitorResponse)
 async def midi_messages(request: Request) -> MidiMonitorResponse:
-    controller = _runtime(request).midi_controller
+    controller = _midi_controller(_runtime(request))
     if controller is None:
         return MidiMonitorResponse(messages=[])
     messages = await controller.recent_messages()
@@ -616,7 +652,7 @@ async def select_midi_input(
     request: Request,
 ) -> MidiInputSelectionResponse:
     runtime = _runtime(request)
-    controller = runtime.midi_controller
+    controller = _midi_controller(runtime)
     if controller is None:
         raise HTTPException(status_code=409, detail="The MIDI Playback plugin is disabled.")
     outcome = await controller.select_input(selection.input_id)
@@ -643,7 +679,7 @@ async def simulate_midi_cue(
     request: Request,
 ) -> MidiCueSimulationResponse:
     runtime = _runtime(request)
-    controller = runtime.midi_controller
+    controller = _midi_controller(runtime)
     if controller is None:
         raise HTTPException(status_code=409, detail="The MIDI Playback plugin is disabled.")
     outcome = await controller.simulate_cue(simulation.cue)

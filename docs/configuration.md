@@ -27,8 +27,9 @@ warning; expired or mismatched service-type caches are not loaded.
 
 `GET /api/v1/settings` returns ordinary settings and whether a Planning Center
 secret has been saved. `PUT /api/v1/settings` validates and persists ordinary
-settings. It never accepts or returns the PAT secret. Settings that affect
-plugin registration currently take effect after the backend restarts.
+settings. It never accepts or returns the PAT secret. Input-source, MIDI filter,
+and Playback connection changes apply live. Other settings that affect plugin
+registration still take effect after the backend restarts.
 
 ## General variables
 
@@ -38,7 +39,7 @@ plugin registration currently take effect after the backend restarts.
 | `STAGEPILOT_PORT` | `8765` | Local FastAPI port, from 1 through 65535. |
 | `STAGEPILOT_LOG_LEVEL` | `INFO` | Backend structured-log threshold. |
 | `STAGEPILOT_SERVICE_SOURCE` | `demo` | `demo` or `planning_center`. |
-| `STAGEPILOT_MIDI_SOURCE` | `simulated` | `simulated` or `real`. |
+| `STAGEPILOT_MIDI_SOURCE` | `playback_api` | `playback_api`, `simulated`, or `real` (native/network MIDI alternative). |
 | `STAGEPILOT_TIMER_OUTPUT` | `simulated` | `simulated` or `propresenter`. |
 | `STAGEPILOT_TIMEZONE` | `America/Los_Angeles` | IANA time zone used for local-date plan selection. |
 
@@ -62,6 +63,29 @@ POSIX shell example:
 ```sh
 STAGEPILOT_LOG_LEVEL=DEBUG uv run --project backend stagepilot
 ```
+
+## Playback input default and migration
+
+Schema 2 switches schema-1/unversioned installations to Playback API while
+preserving every saved MIDI value. Explicit environment source overrides still
+win. The `playback_api` settings block defaults to `enabled: true`, `host: null`,
+`port: 8080`, and `auto_scan: true`. No manual host means local-first discovery,
+then attached-LAN scanning. A manual host exclusively overrides discovery.
+
+Playback receives observations only, except the operator-confirmed Discover Song
+Order operation, whose only commands are Next/Previous while Playback is stopped.
+Only its completed/restored result saves `song_order`, `captured_version`, and
+`captured_at`. Unknown IDs or changed/missing versions make the order stale and
+block start/restart; pause/stop may still stop the timer outside discovery.
+Reconnect revalidates its first snapshot rather than invalidating by itself.
+
+`PUT /api/v1/playback-api/settings` applies on/off and endpoint settings live;
+`GET /api/v1/playback-api/status`, `GET /events`, `POST /find`, and confirmed
+`POST /discover-song-order` support the existing configuration window. MIDI
+remains selected with `integration_modes.midi_source: real`; source switching
+closes old listeners and discards old queues before starting the alternative.
+See [Playback API](playback-api.md) for full route bodies, discovery limits,
+monitor fields, safety guarantees and protocol limitations.
 
 ## Planning Center variables
 

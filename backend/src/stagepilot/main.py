@@ -19,6 +19,7 @@ from stagepilot.api.access import router as access_router
 from stagepilot.api.dashboard_auth import router as dashboard_auth_router
 from stagepilot.api.dashboard_auth_middleware import DashboardAuthMiddleware
 from stagepilot.api.diagnostics import router as diagnostics_router
+from stagepilot.api.playback import router as playback_router
 from stagepilot.api.remote_auth import router as remote_auth_router
 from stagepilot.api.remote_feature import router as remote_feature_router
 from stagepilot.api.remote_ingress import RemoteAccess
@@ -59,6 +60,11 @@ from stagepilot.plugins.planning_center import (
     PlanningCenterPlugin,
     TodayProvider,
 )
+from stagepilot.plugins.playback_api.plugin import (
+    ClientFactory,
+    PlaybackInputPlugin,
+    default_client,
+)
 from stagepilot.plugins.propresenter import ProPresenterClientFactory, ProPresenterPlugin
 from stagepilot.services.dashboard_auth import DashboardSessionStore
 from stagepilot.services.planning_center_setup import PlanningCenterSetupService
@@ -96,6 +102,7 @@ def create_app(
     planning_center_client_factory: PlanningCenterClientFactory | None = None,
     planning_center_today_provider: TodayProvider | None = None,
     midi_backend_factory: MidiBackendFactory | None = None,
+    playback_client_factory: ClientFactory = default_client,
     lights_backend_factory: MidiOutputBackendFactory | None = None,
     propresenter_client_factory: ProPresenterClientFactory | None = None,
     settings_service: SettingsService | None = None,
@@ -194,19 +201,26 @@ def create_app(
         )
         plugin_manager.register(planning_center_plugin)
 
-    real_midi_enabled = (
-        resolved_settings.midi.enabled
-        and resolved_settings.integration_modes.midi_source is MidiSource.REAL
-    )
-    if real_midi_enabled:
-        midi_plugin = MidiPlaybackPlugin(
+    def make_midi(input_settings: Settings) -> MidiPlaybackPlugin:
+        return MidiPlaybackPlugin(
             event_bus,
             state_store,
-            resolved_settings.midi,
+            input_settings.midi,
             state_service,
             backend_factory=midi_backend_factory,
         )
-        plugin_manager.register(midi_plugin)
+
+    playback_input = PlaybackInputPlugin(
+        event_bus,
+        state_store,
+        resolved_settings,
+        state_service,
+        resolved_settings_service,
+        make_midi,
+        client_factory=playback_client_factory,
+    )
+    midi_plugin = playback_input.midi
+    plugin_manager.register(playback_input)
 
     real_propresenter_enabled = (
         resolved_settings.propresenter.enabled
@@ -238,6 +252,7 @@ def create_app(
         lights_controller=lights_plugin,
         planning_center=planning_center_plugin,
         planning_center_oauth=planning_center_oauth,
+        playback_input=playback_input,
     )
     startup_activation = StartupActivationService(
         plugin_manager=plugin_manager,
@@ -340,6 +355,7 @@ def create_app(
     )
     application.include_router(access_router)
     application.include_router(api_router)
+    application.include_router(playback_router)
     application.include_router(dashboard_auth_router)
     application.include_router(diagnostics_router)
     application.include_router(remote_auth_router)
