@@ -1,18 +1,16 @@
 # Updating StagePilot
 
-> **Private beta 1.1.103-beta.6: in-app update is off.** The release broker is
-> not deployed for the beta by operator decision, so an installed beta build's
-> update check finds no endpoint and no Update button appears. Beta testers get
-> a newer build by downloading the installer from the new GitHub Release. The
-> mechanism described below is fully implemented, CI-tested, and promotable —
-> it simply has nothing to talk to during the beta. See
-> [`native-completion-runbook.md`](native-completion-runbook.md).
+The public beta updater is live. `tage-ilot/stagepilot-beta` stays public
+indefinitely; its base config and release overlays select anonymous GitHub
+`releases/latest/download/latest.json`. No broker or release-download PAT is
+in this delivery path. The retained STABLE/BETA settings switch selects the
+runtime channel; stable uses the stable repository's public release metadata.
+Latest verified for this refresh was `v1.1.104-beta.23`, not a permanent target.
+Read latest again when testing. Fresh native update acceptance remains UNPROVEN;
+see [the operator checklist](native-completion-runbook.md#step-4--operator-hardware-acceptance-pass).
 
-StagePilot checks for updates after the desktop dashboard is ready. Main builds
-use the public main GitHub Release endpoint; private-beta release builds point
-at the beta control-plane metadata/download broker because private GitHub
-Releases are not anonymously readable. The broker never disables or replaces
-Tauri signature verification and does not relay Remote traffic. StagePilot waits about five seconds so the check never blocks
+StagePilot checks after the desktop dashboard is ready and waits about five
+seconds so the check never blocks
 startup, checks again every six hours, and may check when the app regains focus
 after that interval.
 
@@ -40,16 +38,16 @@ background check does not make the dashboard unhealthy or show a modal.
 
 ## Recovery
 
-If a release is broken, mark it non-latest or delete its GitHub Release and
-remove/replace the bad `latest.json`. Fix the defect and publish a **newer
-version number**; never reuse a published version. If in-app recovery is not
-possible, install a newer release manually. macOS may require Privacy &
-Security approval again for that browser-downloaded replacement.
-
-For the private beta, first move `BETA_LATEST_RELEASE_VERSION` back to the last
-known-good allowlisted version and redeploy/read back the Worker. Then publish a
-higher signed version; never mutate or reuse a published tag. See
-[the private beta plan](private-beta-release-and-acceptance.md).
+An authorized release operator may draft a bad GitHub Release, preserving its
+immutable tag/assets. This removes it from eligible public latest releases;
+`releases/latest/download/latest.json` follows GitHub's newly selected latest
+(or fails if none exists). Read back the selected tag and anonymous manifest;
+never assume the previous release is now latest. No broker variable/deploy is
+involved. Drafting does not downgrade already-updated clients. Fix forward with
+a higher signed version; never reuse a tag or replace a published payload.
+If in-app recovery is impossible, install a safe build manually. macOS may
+require Privacy & Security approval for the browser-downloaded replacement.
+See [rollback](native-completion-runbook.md#step-5--rollback-of-a-live-public-updater).
 
 Tauri updater signatures are not Apple code signatures. Their contents are
 embedded in `latest.json` and allow installed StagePilot copies to authenticate

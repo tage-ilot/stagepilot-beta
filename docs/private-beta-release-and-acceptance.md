@@ -1,61 +1,24 @@
 # Private beta release and native acceptance plan
 
-## Delivery decision as shipped (release 1)
+## Current delivery decision
 
-Two operator decisions changed the delivery shape after the analysis below was
-written, and they are what release 1 actually ships:
+`tage-ilot/stagepilot-beta` is public indefinitely by operator decision.
+The updater is live: base Tauri config and both release overlays select
+`https://github.com/tage-ilot/stagepilot-beta/releases/latest/download/latest.json`.
+The retained STABLE/BETA settings switch selects the runtime channel. No release
+broker or GitHub release-download PAT is needed; never embed one in the app.
 
-1. **In-app update is off for the beta.** No `STAGEPILOT_RELEASE_TOKEN` is
-   issued and the release broker is **not** deployed. The updater code,
-   allowlisting, and `latest.json` generation all stay implemented, tested in
-   CI, and promotable — they are deferred, not removed.
-2. **`tage-ilot/stagepilot-beta` is temporarily public**, so the release page and
-   its assets are readable without any GitHub credential, and hosted
-   Windows/macOS Actions minutes are free.
+Fresh remote reads for this refresh returned non-draft `v1.1.104-beta.23`, six
+published assets, and an anonymous manifest for `1.1.104-beta.23` with three
+platform entries, non-empty signatures and direct GitHub URLs. Resolve latest
+again at acceptance time. Native install/reboot/publisher-trust/update acceptance
+is still UNPROVEN; metadata, CI and production anecdotes cannot clear it.
 
-Therefore release 1 is distributed as a **direct GitHub Release download**:
-testers open the release page and download the installer for their platform.
-`latest.json` is still generated, signature-validated, and published with the
-release because it is the same artifact a future promoted release depends on,
-but nothing consumes it during the beta. See
-[`native-completion-runbook.md`](native-completion-runbook.md) for the
-authoritative PROVEN/DEFERRED ledger.
-
-The analysis below remains accurate for the private-repository case and is what
-the broker implementation is built against; it applies again the moment the
-repository is made private or the updater is switched on.
-
-## Delivery decision and evidence (private-repository analysis)
-
-An installed Tauri client cannot directly consume a release in the private `tage-ilot/stagepilot-beta` repository without a GitHub credential. On 2026-09-15, unauthenticated GET requests to both the browser download URL for `latest.json` and `GET /repos/tage-ilot/stagepilot-beta/releases/latest` returned 404. GitHub documents that only people with repository read access can view releases, and its release-asset API uses authenticated API requests for private resources. Tauri accepts a static JSON endpoint or update server and always verifies updater payload signatures; verification cannot be disabled.
-
-References:
-
-- https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases
-- https://docs.github.com/en/rest/releases/assets
-- https://v2.tauri.app/plugin/updater/
-
-A PAT must never ship in StagePilot. Beta release builds instead use the existing beta control plane only for:
-
-- `GET /v1/releases/latest.json`
-- `GET /v1/releases/vVERSION/StagePilot_VERSION_PLATFORM-UPDATER`
-
-The Worker holds a `GITHUB_RELEASE_TOKEN` runtime secret, populated by the
-environment-scoped GitHub Actions secret `STAGEPILOT_RELEASE_TOKEN` (GitHub
-reserves the `GITHUB_` prefix). That token must have read-only Contents access to
-only `tage-ilot/stagepilot-beta`. The broker accepts only versions in
-`BETA_RELEASE_VERSIONS`, exposes `latest.json` only for
-`BETA_LATEST_RELEASE_VERSION`, and permits only five exact release filenames:
-two DMGs, two Tauri macOS updater archives, and the Windows installer/updater.
-It rejects drafts, duplicates, foreign asset API URLs, truncated or oversized
-assets, and fetches by immutable release tag and GitHub asset ID. Metadata
-caches for at most five minutes; immutable payloads advertise a one-year cache.
-Per canonical source address, the Durable Object allows 30 metadata requests or
-6 downloads per minute and bounds retained source windows at 2,000. The broker
-has no arbitrary URL, hostname, method, or Remote-traffic relay route. Tauri
-still verifies the embedded signature with the existing public key.
-
-The base Tauri configuration retains the main `tage-ilot/stagepilot` endpoint. Only the Windows release and macOS release overlays select the beta broker. This prevents a normal/main build from following beta metadata and prevents a beta release build from following main releases.
+The former private-repository broker design remains historical implementation,
+not the current delivery route. Public GitHub delivery preserves Tauri signature
+verification and does not relay Remote traffic. See the single
+[Operator hardware acceptance pass](native-completion-runbook.md#step-4--operator-hardware-acceptance-pass)
+for current commands and safe disposable-only cleanup.
 
 ## CI runner boundary
 
@@ -69,7 +32,7 @@ on that runner.
 
 Windows x64 packaging and macOS arm64/x64 packaging/lifecycle jobs now run on
 GitHub-hosted `windows-latest`, `macos-15`, and `macos-15-intel` runners: the
-repository is temporarily public, so hosted Actions minutes on standard
+repository stays public indefinitely, so hosted Actions minutes on standard
 runners are free and unlimited, removing the need for native self-hosted
 machines. See [`native-completion-runbook.md`](native-completion-runbook.md)
 for the current PROVEN/DEFERRED status of the native build/sign/publish path.
@@ -94,8 +57,8 @@ cross-platform mypy defect and an unusable signing key), `v1.1.103-beta.3`
 Windows-only backend test failures that only the release job's full pytest run
 exercises) and `v1.1.103-beta.5` (all three signed builds succeeded, but the
 publish step called the `gh` CLI, which is not installed on the self-hosted
-Linux runner), so **release 1 is `v1.1.103-beta.6`** and the next available
-version is `v1.1.103-beta.7`. Never move or reuse any of these tags/versions.
+Linux runner). **Historical release 1 was `v1.1.103-beta.6`**; many releases
+have followed. Read latest dynamically and never move or reuse published tags.
 
 Each release staging directory must contain exactly:
 
@@ -144,30 +107,20 @@ artifact is rejected. `tage-ilot/stagepilot` was confirmed unchanged at
 
 ## Friend download instructions
 
-While `tage-ilot/stagepilot-beta` is public, a tester needs no invitation and no
-GitHub account: send them the exact immutable release URL and tell them to
-download only the installer matching their platform.
+No invitation or GitHub account is needed. Resolve the latest published tag
+with `gh release view --repo tage-ilot/stagepilot-beta --json tagName -q .tagName`
+and send its immutable release URL, not the historical release-1 inventory.
+After removing the tag's leading `v`, match VERSION to:
 
-- Windows x64: `StagePilot_1.1.103-beta.6_x64-setup.exe`
-- macOS Apple Silicon: `StagePilot_1.1.103-beta.6_aarch64.dmg`
-- macOS Intel: `StagePilot_1.1.103-beta.6_x64.dmg`
+- Windows x64: `StagePilot_VERSION_x64-setup.exe`
+- macOS Apple Silicon: `StagePilot_VERSION_aarch64.dmg`
+- macOS Intel: `StagePilot_VERSION_x64.dmg`
 
-The `.app.tar.gz` archives are updater payloads, not downloads — testers should
-ignore them. In-app update is off for this beta, so a newer build is delivered
-as a new release and a fresh installer download.
-
-If the repository is made private again, first invite each tester with read
-access; the same release URL then requires them to sign in to GitHub.
-
-Send the matching SHA-256 value from the preserved asset inventory alongside the
-release URL, and have the tester compare the download hash before installing.
-Never send a PAT, updater signing material, machine evidence, or a control-plane
-credential.
-
-There is **no in-app update in this beta**: the Update button has no deployed
-broker to talk to, so a later build is delivered the same way — a new immutable
-tag, a new release, and a fresh download. Testers never need GitHub credentials
-inside StagePilot.
+The `.app.tar.gz` files are updater payloads, not manual installer downloads.
+Verify each download against the inventory for that exact release, never a
+historical hash. Installed compatible-key builds can use Update and Restart;
+retired-key builds need a manual bootstrap. Testers never need credentials
+inside StagePilot. Do not send signing material or private machine evidence.
 
 ## Signing recovery and rollback
 
@@ -234,47 +187,22 @@ updater-enabled copy. Recovery is then a new key plus a fresh installer
 download by every tester — which is why two independently recoverable offline
 copies are required before release 1, not after.
 
-Rollback for this beta is distribution-side only, because the broker is not
-deployed and no client polls for updates:
+## Rollback and native acceptance
 
-- Keep the bad tag and release immutable. Never delete, move, or reuse a version.
-- Unpublish the bad release with `gh release edit TAG --repo tage-ilot/stagepilot-beta --draft`, which hides it from the Releases page while preserving the tag and assets for audit.
-- Fix the problem, bump to the next version, publish a new release, and point all download instructions at the new tag.
+The updater actively consumes public GitHub latest metadata. An authorized
+operator can draft a bad release while preserving its immutable tag/assets;
+this removes it from eligible public latest releases. Read back both GitHub's
+selected latest tag and the anonymous manifest, which may select another
+eligible release or fail if none exists. This does not downgrade installed
+clients: fix forward with a higher signed version or manually recover.
+No broker variable or redeploy is involved; Remote identities are unaffected.
+See [rollback commands](native-completion-runbook.md#step-5--rollback-of-a-live-public-updater).
 
-Only if the broker is later deployed does the variable-based rollback apply: set `BETA_LATEST_RELEASE_VERSION` back to the last known-good allowlisted version, redeploy, and read the Worker back; keep the broken tag immutable but remove it from `BETA_RELEASE_VERSIONS` once affected clients have a newer recovery path. The beta broker does not alter Remote installation state.
-
-## Native acceptance matrix
-
-Use fresh isolated accounts/machines for:
-
-- Windows x64
-- macOS arm64 12+
-- macOS x64 12+
-
-For each platform, record the release-1 installer:
-
-```text
-python scripts/beta_release_acceptance.py --report PRIVATE_REPORT installer --platform PLATFORM --version 1.1.103-beta.6 --file INSTALLER
-```
-
-Install beta 1 and record secret-free receipts for every release-1 check name: `local_health`, `transparent_enrollment`, `first_operator`, `https_wss_roles`, `restart_recovery`, `reboot_recovery`, `disable_reenable_provider_cleanup`, and `final_cleanup`. Use:
-
-```text
-python scripts/beta_release_acceptance.py --report PRIVATE_REPORT check --platform PLATFORM --name CHECK --evidence "short local receipt"
-```
-
-`updater_discovery`, `updater_install_relaunch`, and the two-release `verify --from-version … --to-version …` gate are **not part of release 1** — they belong to the deferred update-acceptance path and need a second release that this beta does not publish.
-
-The operator must observe: installer hash/version; loopback local health; no-auth transparent enrollment; exactly one first Operator; Viewer/Operator HTTPS and WSS policy; app/connector restart; actual machine reboot; disable, re-enable with a new generation, and exact provider cleanup; then revocation/removal of disposable DNS, tunnel, sessions, credentials, test users, installers, and private evidence as policy requires. The harness rejects obvious credential-bearing evidence strings but the operator must still inspect the report before sharing it.
-
-No local mock, CI build, service restart, or prior Linux/LXC proof substitutes for this physical matrix.
-
-## Native completion runbook and status ledger
-
-The exact, ordered, copy-pasteable commands that finish release 1 and release 2
-the moment a native self-hosted runner is registered — including runner labels,
-required secrets, tag names, expected assets, and read-back checks — plus the
-authoritative PROVEN-on-Linux versus DEFERRED ledger, live in
-[`native-completion-runbook.md`](native-completion-runbook.md). Treat that file
-as the single source of truth for what has actually been validated; never
-present a DEFERRED item there as proven.
+Fresh Windows x64, macOS arm64 and macOS x64 acceptance is UNPROVEN, including
+real reboot and Gatekeeper/SmartScreen observation. `updater_discovery` and
+`updater_install_relaunch` are required, not deferred. Follow the single
+[Operator hardware acceptance pass](native-completion-runbook.md#step-4--operator-hardware-acceptance-pass)
+for exact installer/check/verify CLI, two-version receipts, report locations,
+and exact disposable-install revocation with provider read-back. No CI build,
+mock or production-use anecdote replaces physical proof. Historical PROVEN
+rows and CI URLs in that runbook remain historical evidence.
