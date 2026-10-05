@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from structlog.testing import capture_logs
 
 from stagepilot.core.config import PlanningCenterSettings
 from stagepilot.core.event_bus import EventBus, Subscription
@@ -33,6 +34,7 @@ from stagepilot.models.state import (
 from stagepilot.plugins.planning_center.errors import (
     PlanningCenterConfigurationError,
     PlanningCenterError,
+    PlanningCenterRateLimitError,
     PlanningCenterResponseError,
     PlanningCenterTimeoutError,
 )
@@ -397,6 +399,72 @@ async def wait_for_state(
         return state
     finally:
         await state_store.unsubscribe(queue)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_types", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [
+        PlanningCenterRateLimitError(30),
+        PlanningCenterConfigurationError("private-organization"),
+        RuntimeError("private-organization"),
+    ],
+)
+async def test_failure_logs_include_only_categorical_diagnostics(
+    error: Exception, all_types: bool
+) -> None:
+    settings = configured_settings()
+    if all_types:
+        settings.service_type_id = ALL_SERVICE_TYPES_ID
+    client = FakePlanningCenterClient(
+        [error], service_types=[service_type(), service_type("43", "private-organization")]
+    )
+    harness = await plugin_harness(client, settings=settings)
+    try:
+        with capture_logs() as logs:
+            await harness.plugin.start()
+        failures = [entry for entry in logs if entry["event"] == "planning_center_load_failed"]
+        assert len(failures) == 1
+        entry = failures[0]
+        assert entry["error_type"] == "safe_planning_center_error"
+        assert entry["exception_type"] == type(error).__name__
+        if isinstance(error, PlanningCenterRateLimitError):
+            assert entry["http_status"] == 429
+        else:
+            assert "http_status" not in entry
+        if all_types:
+            assert entry["service_type_ids"] == ["42", "43"]
+            assert "service_type_id" not in entry
+        else:
+            assert entry["service_type_id"] == "42"
+            assert "service_type_ids" not in entry
+        if isinstance(error, RuntimeError):
+            unexpected = next(
+                entry
+                for entry in logs
+                if entry["event"] == "planning_center_unexpected_load_failure"
+            )
+            assert unexpected["exception_type"] == "RuntimeError"
+        assert "private-organization" not in repr(logs)
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_wrapped_api_failure_retains_status_without_message() -> None:
+    error = RuntimeError("private-organization")
+    error.__cause__ = PlanningCenterRateLimitError(30)
+    harness = await plugin_harness(FakePlanningCenterClient([error]))
+    try:
+        with capture_logs() as logs:
+            await harness.plugin.start()
+        failures = [entry for entry in logs if entry["event"] == "planning_center_load_failed"]
+        assert failures[0]["exception_type"] == "RuntimeError"
+        assert failures[0]["http_status"] == 429
+        assert "private-organization" not in repr(logs)
+    finally:
+        await harness.close()
 
 
 async def settle_scheduled_refresh() -> None:

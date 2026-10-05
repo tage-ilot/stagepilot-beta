@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from stagepilot.core.config import PlanningCenterSettings
 from stagepilot.plugins.planning_center.client import PlanningCenterClient
@@ -226,6 +227,113 @@ class MultiServiceDiscoveryApi:
 
 def mock_transport(handler: Handler) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
+
+
+class PartiallyFailingMultiServiceApi:
+    """One service type's /plans response is malformed; the rest are valid."""
+
+    def __init__(
+        self,
+        *,
+        failing_service_type_id: str,
+        plans_by_service_type: Mapping[str, list[JsonObject]],
+        plan_times_by_plan: Mapping[str, list[JsonObject]],
+        items_by_plan: Mapping[str, list[JsonObject]] | None = None,
+    ) -> None:
+        self.failing_service_type_id = failing_service_type_id
+        self.plans_by_service_type = dict(plans_by_service_type)
+        self.plan_times_by_plan = dict(plan_times_by_plan)
+        self.items_by_plan = dict(items_by_plan or {})
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        path = request.url.path
+        parts = path.split("/")
+        service_type_id = parts[4]
+        if path.endswith("/plans"):
+            if service_type_id == self.failing_service_type_id:
+                # HTTP 200, but a response shape the typed boundary rejects
+                # (missing the required "type" discriminator on the resource).
+                return httpx.Response(200, request=request, json={"data": [{"id": "plan-bad"}]})
+            data = self.plans_by_service_type.get(service_type_id, [])
+        elif path.endswith("/plan_times"):
+            plan_id = path.rsplit("/", 2)[-2]
+            data = self.plan_times_by_plan[plan_id]
+        elif path.endswith("/items"):
+            plan_id = path.rsplit("/", 2)[-2]
+            data = self.items_by_plan[plan_id]
+        else:
+            raise AssertionError(f"Unexpected Planning Center request: {path}")
+        return httpx.Response(200, request=request, json={"data": data})
+
+
+@pytest.mark.asyncio
+async def test_all_service_types_isolates_one_failing_service_type() -> None:
+    """One service type's unparsable /plans response must not abort the rest.
+
+    Regression test for the production bug where a single service type
+    (e.g. real-world id 1387640) returning a plan shape that fails Pydantic
+    validation aborted `load_plan_for_service_types` entirely, discarding
+    every other configured service type's already-fetched valid candidates.
+    """
+
+    api = PartiallyFailingMultiServiceApi(
+        failing_service_type_id="84",
+        plans_by_service_type={
+            "42": [plan_resource("plan-healthy", "Sunday")],
+        },
+        plan_times_by_plan={
+            "plan-healthy": [plan_time_resource("time-healthy", "2026-07-12T16:00:00Z")],
+        },
+        items_by_plan={
+            "plan-healthy": [item_resource("item-healthy", "Opening Song", "song", 1)],
+        },
+    )
+    service_types = [
+        weekend_service_type(),
+        PlanningCenterServiceType(id="84", name="Midweek", sequence=2),
+    ]
+
+    with capture_logs() as logs:
+        async with PlanningCenterClient(client_settings(), transport=mock_transport(api)) as client:
+            result = await client.load_plan_for_service_types(
+                service_types,
+                TARGET_DATE,
+                TIMEZONE_NAME,
+                lookahead_days=30,
+            )
+
+    assert isinstance(result, PlanLoadedResult)
+    assert result.plan.id == "plan-healthy"
+    assert result.plan.service_type_id == "42"
+    failure_logs = [
+        entry for entry in logs if entry.get("event") == "planning_center_service_type_load_failed"
+    ]
+    assert len(failure_logs) == 1
+    assert failure_logs[0]["log_level"] == "warning"
+    assert failure_logs[0]["exception_type"] == "PlanningCenterResponseError"
+
+
+@pytest.mark.asyncio
+async def test_all_service_types_raises_when_every_type_fails() -> None:
+    """If no service type produces valid data, the aggregation must still error."""
+
+    api = PartiallyFailingMultiServiceApi(
+        failing_service_type_id="42",
+        plans_by_service_type={},
+        plan_times_by_plan={},
+    )
+    service_types = [weekend_service_type()]
+
+    async with PlanningCenterClient(client_settings(), transport=mock_transport(api)) as client:
+        with pytest.raises(PlanningCenterResponseError):
+            await client.load_plan_for_service_types(
+                service_types,
+                TARGET_DATE,
+                TIMEZONE_NAME,
+                lookahead_days=30,
+            )
 
 
 @pytest.mark.asyncio
