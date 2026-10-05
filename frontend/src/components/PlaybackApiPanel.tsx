@@ -38,7 +38,7 @@ export function PlaybackApiPanel({ playback }: { playback?: PlaybackController }
       </p>
       {status?.selected && status.enabled && !apiConnected && <p className="text-sm text-amber-200">Playback remote connections may be off. Enable them in Playback; StagePilot will keep reconnecting.</p>}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="min-w-0 flex-1 text-sm text-slate-300">
+        <label className="w-full min-w-0 flex-none text-sm text-slate-300 sm:min-w-48 sm:flex-1">
           Manual address
           <input className="mt-1 block min-h-11 w-full rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={host} placeholder="Automatic (this computer, then LAN)" disabled={!status || busy} onChange={(event) => setHost(event.target.value)} aria-invalid={!valid} />
         </label>
@@ -72,10 +72,10 @@ export function PlaybackApiPanel({ playback }: { playback?: PlaybackController }
         <h3 className="text-sm font-semibold text-slate-200">Recent Playback events</h3>
         <p className="text-xs text-slate-400">Time is seconds on the backend's monotonic clock, not wall-clock time. Song numbers follow the discovered order.</p>
         {!playback?.events.length ? <p className="mt-2 text-sm text-slate-400">No Playback events received yet.</p> : <div className="mt-2 max-h-56 overflow-auto"><table className="w-full text-left text-sm text-slate-300">
-          <thead><tr><th>Time (s)</th><th>Event</th><th>Song</th></tr></thead>
+          <thead><tr><th className="pr-3">Time (s)</th><th className="pr-3">Event</th><th>Song</th></tr></thead>
           <tbody>{[...playback.events].reverse().map(({ event, discovery }, index) => {
             const position = event.song_id === null ? -1 : status?.song_order.indexOf(event.song_id) ?? -1;
-            return <tr key={`${event.timestamp}-${index}`}><td>{event.timestamp.toFixed(1)}</td><td>{event.type}{discovery ? " (discovery)" : ""}</td><td>{status?.stale || position < 0 ? "Unknown" : position + 1}</td></tr>;
+            return <tr key={`${event.timestamp}-${index}`}><td className="whitespace-nowrap pr-3">{event.timestamp.toFixed(1)}</td><td className="pr-3">{event.type}{discovery ? " (discovery)" : ""}</td><td>{status?.stale || position < 0 ? "Unknown" : position + 1}</td></tr>;
           })}</tbody>
         </table></div>}
       </div>
