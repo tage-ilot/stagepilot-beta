@@ -116,14 +116,22 @@ class ArbitratedDispatcher:
         self.dispatcher = dispatcher
         self.state = state
         self.suppressed: Callable[[], bool] = lambda: False
+        self.api_mapping_revision: Callable[[], int] = lambda: 0
 
     async def dispatch(self, action: ActionName, source: str = "api") -> ActionOutcome:
         self.arbiter.snapshot()
         revision = self.arbiter.revision
+        mapping_revision = self.api_mapping_revision()
         state = await self.state.snapshot()
         self.arbiter.snapshot()
         if revision != self.arbiter.revision:
             return ActionOutcome(False, "ignored: Playback source ownership changed")
+        if (
+            source == "playback_api"
+            and action in (ActionName.START_NEXT, ActionName.RESTART_CURRENT)
+            and mapping_revision != self.api_mapping_revision()
+        ):
+            return ActionOutcome(False, "ignored: Playback song order changed")
         position = state.current_song_index + 1 if state.current_song_index is not None else None
         if action is ActionName.START_NEXT:
             position = 1 if state.current_song_index is None else state.current_song_index + 2

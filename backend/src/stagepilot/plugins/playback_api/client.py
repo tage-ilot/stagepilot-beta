@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -44,6 +45,26 @@ class PlaybackStatus:
 Observer = Callable[[PlaybackStatus, tuple[PlaybackEvent, ...]], None]
 Finder = Callable[[ConnectionOptions], DiscoveryResult | None]
 SocketFactory = Callable[[str, int, float], WebSocket]
+
+
+async def _join_worker(
+    task: asyncio.Task[None], on_cancel: Callable[[], None] = lambda: None
+) -> None:
+    """Cancellation cannot abandon a blocking worker; report it after joining."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+            on_cancel()
+        except Exception:
+            break
+    if cancelled:
+        with suppress(Exception):
+            task.result()
+        raise asyncio.CancelledError
+    task.result()
 
 
 def _find(options: ConnectionOptions) -> DiscoveryResult | None:
@@ -112,10 +133,12 @@ class PlaybackClient:
                 self._socket.close()
             # Do not cancel to_thread work: wait for its bounded network timeout
             # so shutdown/reconfigure cannot leave an orphan receive/discovery.
-            if self._task:
-                await self._task
+            try:
+                if self._task:
+                    await _join_worker(self._task)
+            finally:
                 self._task = None
-            self._status = PlaybackStatus(port=self.options.port)
+                self._status = PlaybackStatus(port=self.options.port)
 
     async def reconfigure(self, options: ConnectionOptions) -> None:
         await self.stop()
@@ -208,4 +231,19 @@ class PlaybackClient:
             raise WSClosed("Playback is disconnected")
         if heartbeat is None or heartbeat.playing:
             raise ValueError("Stop Playback before discovering song order")
-        await asyncio.to_thread(self._socket._discovery_step, direction)
+        socket = self._socket
+        cancelled = threading.Event()
+
+        def allowed() -> bool:
+            status = self._status
+            return (
+                not cancelled.is_set()
+                and not self._stopping.is_set()
+                and self._socket is socket
+                and status.connected
+                and status.heartbeat is not None
+                and not status.heartbeat.playing
+            )
+
+        worker = asyncio.create_task(asyncio.to_thread(socket._discovery_step, direction, allowed))
+        await _join_worker(worker, cancelled.set)

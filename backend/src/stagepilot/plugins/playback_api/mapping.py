@@ -56,6 +56,10 @@ class PlaybackMapper:
         self._generation += 1
         self._heartbeat = None
 
+    @property
+    def revision(self) -> int:
+        return self._generation
+
     def observe(
         self, heartbeat: Heartbeat | None, events: tuple[PlaybackEvent, ...]
     ) -> tuple[Observation, ...]:

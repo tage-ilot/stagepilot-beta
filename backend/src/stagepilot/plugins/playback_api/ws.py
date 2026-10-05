@@ -8,6 +8,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Literal
 
@@ -155,7 +156,9 @@ class WebSocket:
         with self._write_lock:
             self._sock.sendall(frame)
 
-    def _discovery_step(self, direction: Literal["previous", "next"]) -> None:
+    def _discovery_step(
+        self, direction: Literal["previous", "next"], allowed: Callable[[], bool] = lambda: True
+    ) -> None:
         """Integration must guard confirmation/stopped state before each step."""
         if direction == "previous":
             payload = b'{"transportPreviousSong":{}}'
@@ -167,6 +170,8 @@ class WebSocket:
         frame = bytes((129, 128 | len(payload))) + mask
         frame += bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
         with self._write_lock:
+            if not allowed():
+                raise WSClosed("Playback discovery cancelled or no longer stopped")
             self._sock.sendall(frame)
 
     def close(self) -> None:

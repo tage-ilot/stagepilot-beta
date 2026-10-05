@@ -90,6 +90,7 @@ class PlaybackInputPlugin(Plugin):
         self._dispatcher = ArbitratedDispatcher(self.arbiter, dispatcher, state_store)
         self.mapper = PlaybackMapper(self._dispatcher, state_store)
         self._dispatcher.suppressed = lambda: self.mapper.discovery
+        self._dispatcher.api_mapping_revision = lambda: self.mapper.revision
         self._ticker: asyncio.Task[None] | None = None
         self._published: tuple[bool, str] | None = None
         self._ownership_revision = 0
