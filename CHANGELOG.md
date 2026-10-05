@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.1.104-beta.24] - 2026-10-05
+## [1.1.104-beta.25] - 2026-10-05
 
 ### Changed
 
@@ -17,6 +17,12 @@
 - Docs: operator hardware acceptance documentation (#84). Planning Center
   all-service-types diagnostics and regression test aligned with the released
   failure isolation (#81); no production behavior change.
+
+### Fixed
+
+- Playback integration tests were timing-sensitive on slow CI runners (beta.24 was
+  tagged but its build failed validation and was never published); widened
+  fake-endpoint timeouts. No production code change.
 
 ### Added
 

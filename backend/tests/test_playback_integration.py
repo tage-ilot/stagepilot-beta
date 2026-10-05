@@ -139,8 +139,8 @@ class FakePlayback:
 
 
 async def wait_for(predicate: Callable[[], bool]) -> None:
-    async with asyncio.timeout(2):
-        for _ in range(400):
+    async with asyncio.timeout(10):
+        for _ in range(2000):
             if predicate():
                 return
             await asyncio.sleep(0.005)
@@ -174,7 +174,7 @@ async def application(
         midi_backend_factory=(lambda: midi) if midi else None,
     )
     inputs = controller(app)
-    inputs._step_timeout = 0.08
+    inputs._step_timeout = 0.6
     try:
         async with (
             app.router.lifespan_context(app),
@@ -221,7 +221,7 @@ async def test_loopback_discovery_ends_restore_persist_and_suppress(initial: int
         assert data["song_order"] == [900, 17, 42]
         assert data["captured_version"] == 8 and data["captured_at"]
         assert not data["stale"] and fake.index == initial
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         dispatcher.dispatch.assert_not_awaited()
         dispatcher.dispatch_song_position.assert_not_awaited()
         events = (await client.get("/api/v1/playback-api/events")).json()["events"]
@@ -308,13 +308,13 @@ async def test_live_mapping_known_restart_stale_unknown_and_monitor_bound() -> N
         state = (await client.get("/api/v1/state")).json()
         assert state["current_song_index"] == 0
         fake.position = 3
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         fake.playing = False
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         fake.position = 0
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         fake.playing = True
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         state = (await client.get("/api/v1/state")).json()
         assert any(event["type"] == "song.restarted" for event in state["recent_events"])
         dispatcher = AsyncMock()
@@ -325,13 +325,13 @@ async def test_live_mapping_known_restart_stale_unknown_and_monitor_bound() -> N
         fake.version = 9
         fake.index = 2
         await wait_for(lambda: inputs.mapper.stale)
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         assert dispatcher.dispatch_song_position.await_count == 1
         fake.playing = False
         await wait_for(lambda: dispatcher.dispatch.await_count == 1)
         dispatcher.dispatch.assert_awaited_with(ActionName.STOP_TIMER, source="playback_api")
         fake.songs[2] = 12345
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         assert inputs.mapper.stale
         # Normal receive operations have never sent an application command.
         assert fake.commands == []
@@ -381,7 +381,7 @@ async def test_reconnect_revalidates_and_source_switch_closes_old_listeners() ->
         await wait_for(lambda: inputs.status.connected)
         state_before = (await client.get("/api/v1/state")).json()["current_song_index"]
         old_port.callback(MidiMessage(type="note_on", channel=1, note=112, velocity=2))
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.25)
         assert (await client.get("/api/v1/state")).json()["current_song_index"] == state_before
         assert (
             await client.post("/api/v1/midi/cue-simulation", json={"cue": "start_next"})
