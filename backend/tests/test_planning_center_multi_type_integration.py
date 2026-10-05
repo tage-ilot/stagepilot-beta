@@ -184,8 +184,8 @@ async def test_four_type_discovery_through_real_client_and_plugin(
 
 
 @pytest.mark.asyncio
-async def test_http_200_can_still_fail_on_an_ancillary_type_response() -> None:
-    """Negative control, NOT evidence that the operator actually received null titles."""
+async def test_invalid_ancillary_type_response_preserves_valid_plan() -> None:
+    """An invalid ancillary response must not undo the isolation shipped in PR82."""
     api = FourTypeApi("invalid_response")
     settings = PlanningCenterSettings(
         app_id="test-app-id",
@@ -208,17 +208,18 @@ async def test_http_200_can_still_fail_on_an_ancillary_type_response() -> None:
     try:
         await plugin.start()
         state = await state_store.snapshot()
-        assert state.planning_center_status is ConnectionStatus.ERROR
-        assert state.service_load.status is ServiceLoadStatus.ERROR
-        assert (
-            await plugin.health()
-        ).last_error == "Planning Center returned an invalid plan response."
+        assert state.planning_center_status is ConnectionStatus.CONNECTED
+        assert state.service_load.status is ServiceLoadStatus.LOADED
+        assert state.plan is not None and state.plan.id == "plan-22"
+        assert (await plugin.health()).last_error is None
         assert [
             request.url.path.split("/")[4]
             for request in api.requests
             if request.url.path.endswith("/plans")
         ] == api.active_ids
-        assert not any(request.url.path.endswith("/items") for request in api.requests)
+        assert [
+            request.url.path for request in api.requests if request.url.path.endswith("/items")
+        ] == ["/services/v2/service_types/22/plans/plan-22/items"]
     finally:
         await plugin.stop()
         await state_service.stop()

@@ -6,6 +6,13 @@ or actual plan fixtures were available to this run. The test resources are
 synthetic JSON:API fixtures using the application's existing fixture helpers,
 not a replay of the operator's account.
 
+Release integration update: the observations below describe beta.22, not the
+current behavior. PR #82 subsequently isolated per-service-type failures. On
+current main, the synthetic invalid fourth-type response leaves the valid
+plan loaded and the connection healthy. The integration regression now asserts
+that isolation; it no longer expects the historical CONNECTED-to-ERROR result.
+The original operator report remains unverified against a real account.
+
 ## What was exercised
 
 `backend/tests/test_planning_center_multi_type_integration.py` runs the real
@@ -112,5 +119,7 @@ on the affected installation and retrieve the existing diagnostic bundle. Inspec
 If response validation is confirmed, obtain a privacy-sanitized fixture through
 an authorized path (preserve field types/nulls/relationships/pagination; remove
 names and credentials), then create the real failing regression and narrowly
-correct the supported response handling. Do not skip failed service types: that
-could silently choose the wrong plan. No release or tag was created by this run.
+correct the supported response handling. Current PR #82 policy isolates failed
+service types and logs safe warnings, while propagating an error if every type
+fails. These mock tests do not establish that every production account scenario
+is resolved. No release or tag was created by the original investigation run.
