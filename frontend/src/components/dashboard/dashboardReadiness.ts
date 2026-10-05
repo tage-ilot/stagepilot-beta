@@ -6,13 +6,16 @@ import type {
   PlanningCenterStatusResponse,
   ProPresenterStatusResponse,
   SettingsResponse,
+  PlaybackStatusResponse,
 } from "../../types";
+import { playbackConnectionDetail, playbackOrderNotice } from "../playbackStatus";
 
 export type ConnectionCardView = {
   status: ConnectionStatus;
   detail: string;
   configured: boolean;
   mode: "real" | "simulated" | "demo" | "disabled";
+  actionNotice?: string | null;
 };
 
 export type ReadinessCheck = {
@@ -45,6 +48,7 @@ export function buildConnectionCardViews({
   settings,
   planningCenterStatus,
   midi,
+  playback,
   propresenter,
   lights,
   stateOnly = false,
@@ -54,6 +58,7 @@ export function buildConnectionCardViews({
   settings: SettingsResponse | null;
   planningCenterStatus?: PlanningCenterStatusResponse | null;
   midi: MidiInputsResponse | null;
+  playback?: PlaybackStatusResponse | null;
   propresenter: ProPresenterStatusResponse | null;
   lights: LightsStatusResponse | null;
 }): DashboardIntegrationViews {
@@ -116,7 +121,17 @@ export function buildConnectionCardViews({
           configured: planningConfigured,
           mode: planningConfigured ? "real" : "disabled",
         },
-    midi: midiIsSimulated
+    midi: playback && !midiIsSimulated
+      ? {
+          status: playback.connected ? "connected" : "disconnected",
+          detail: playbackConnectionDetail(playback),
+          configured: playback.selected ? playback.enabled : Boolean(selectedMidi),
+          mode: "real",
+          actionNotice: playback.active_source === "playback_api" ? playbackOrderNotice(playback) : null,
+        }
+      : modes?.midi_source === "playback_api"
+        ? { status: state.midi_status, detail: statusDetail(state.midi_status, null), configured: Boolean(settings?.settings.playback_api?.enabled), mode: "real" }
+        : midiIsSimulated
       ? {
           status: "disconnected",
           detail: midiEnabled
@@ -265,7 +280,7 @@ export function buildReadinessChecks({
     },
     {
       id: "midi",
-      label: views.midi.status === "connected" ? "MIDI input connected" : "MIDI input disconnected",
+      label: views.midi.status === "connected" ? "Playback connected" : "Playback disconnected",
       passed: views.midi.status === "connected",
       required: true,
       severity: "blocking",
@@ -299,6 +314,11 @@ export function buildReadinessChecks({
     });
   }
   const lightsConfigured = views.lights.configured;
+  if (views.midi.actionNotice) checks.push({
+    id: "playback-order", label: views.midi.actionNotice, passed: false,
+    required: true, severity: "blocking", status: "disconnected",
+    detail: "Connection is healthy. Discover Song Order in the Playback panel before starting songs.",
+  });
   const lightsRequired = lightsConfigured || views.lights.status === "error";
   checks.push({
     id: "lights",

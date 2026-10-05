@@ -145,7 +145,7 @@ export interface HealthResponse {
 }
 
 export type ServiceSource = "demo" | "planning_center";
-export type MidiSource = "simulated" | "real";
+export type MidiSource = "simulated" | "real" | "playback_api";
 export type TimerOutput = "simulated" | "propresenter";
 
 export interface IntegrationModes {
@@ -164,7 +164,7 @@ export interface PlanningCenterPublicSettings {
 }
 
 export interface PersistentSettings {
-  schema_version: 1;
+  schema_version: 1 | 2;
   onboarding: {
     general_completed: boolean;
   };
@@ -184,6 +184,7 @@ export interface PersistentSettings {
     mappings: Partial<Record<MidiCueName, number | null>>;
     debounce_ms: number;
   };
+  playback_api?: PlaybackApiSettings;
   lights: LightsSettings;
   propresenter: {
     enabled: boolean;
@@ -270,6 +271,69 @@ export interface DashboardAuthStatus {
 }
 
 export type MidiSettingsInput = PersistentSettings["midi"];
+
+export interface PlaybackSettingsInput {
+  enabled: boolean;
+  host: string | null;
+  port: number;
+  auto_scan: boolean;
+}
+
+export interface PlaybackApiSettings extends PlaybackSettingsInput {
+  song_order: number[];
+  captured_version: number | null;
+  captured_at: string | null;
+}
+
+export interface PlaybackConnection {
+  connected: boolean;
+  active_source: "playback_api" | "midi" | "none";
+  reason: string;
+  sources: Record<"playback_api" | "midi", { connected: boolean; reason: string }>;
+}
+
+export interface PlaybackStatusResponse extends PlaybackConnection {
+  selected: boolean;
+  enabled: boolean;
+  host: string | null;
+  port: number;
+  source: "manual" | "loopback" | "lan" | null;
+  last_error: string | null;
+  playing: boolean;
+  setlist_cloud_version: number | null;
+  discovery: "idle" | "running" | "failed" | "done";
+  progress: number;
+  song_order: number[];
+  captured_version: number | null;
+  captured_at: string | null;
+  stale: boolean;
+  settings: PlaybackSettingsInput;
+}
+
+export interface PlaybackMonitorEntry {
+  event: {
+    type: string;
+    timestamp: number;
+    song_id: number | null;
+    position: number | null;
+    previous_song_id: number | null;
+    continues_playing: boolean;
+    playing: boolean | null;
+    pad: boolean | null;
+    setlist_version: number | null;
+    previous_version: number | null;
+    section_id: number | null;
+    active: boolean | null;
+    reason: string | null;
+    message_kind: string | null;
+  };
+  discovery: boolean;
+}
+
+export interface PlaybackEventsResponse {
+  events: PlaybackMonitorEntry[];
+  capacity: number;
+}
 
 export interface PlanningCenterStatusResponse {
   connection_status: ConnectionStatus;

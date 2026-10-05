@@ -573,9 +573,9 @@ describe("Dashboard Planning Center plan states", () => {
     });
 
     expect(screen.getByRole("heading", { name: "StagePilot" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "MIDI playback input" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Playback connection" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^MIDI \/ Playback connected/ }));
-    expect(screen.getByRole("heading", { name: "MIDI playback input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Playback connection" })).toBeInTheDocument();
     expect(screen.getAllByText("Connected to Playback").length).toBeGreaterThan(0);
     expect(screen.queryByText("Demo integration running")).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
@@ -587,12 +587,12 @@ describe("Dashboard Planning Center plan states", () => {
     const user = userEvent.setup();
     renderDashboard(loadedServiceState);
 
-    expect(screen.queryByRole("heading", { name: "MIDI playback input" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Playback connection" })).not.toBeInTheDocument();
     expect(screen.getByText("Connected to Playback")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^MIDI \/ Playback connected/ }));
 
-    expect(screen.getByRole("heading", { name: "MIDI playback input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Playback connection" })).toBeInTheDocument();
   });
 
   it("uses clear failure labels for readiness checks", () => {
@@ -614,7 +614,7 @@ describe("Dashboard Planning Center plan states", () => {
     expect(screen.getByText("Planning Center disconnected")).toBeInTheDocument();
     expect(screen.getByText("Planning Center plan not loaded")).toBeInTheDocument();
     expect(screen.getByText("Song durations invalid")).toBeInTheDocument();
-    expect(screen.getByText("MIDI input disconnected")).toBeInTheDocument();
+    expect(screen.getByText("Playback disconnected")).toBeInTheDocument();
     expect(screen.getByText("ProPresenter disconnected")).toBeInTheDocument();
   });
 
@@ -1140,12 +1140,12 @@ describe("Dashboard connection configuration panels", () => {
     expect(planningCenter).toHaveAttribute("aria-expanded", "false");
     expect(midiConnection).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByRole("heading", { name: "Planning Center Services" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "MIDI playback input" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Playback connection" })).toBeInTheDocument();
 
     await user.click(midiConnection);
 
     expect(midiConnection).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("heading", { name: "MIDI playback input" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Playback connection" })).not.toBeInTheDocument();
   });
 
   it("keeps all connection cards in one row with persistent icons", () => {
@@ -1183,7 +1183,7 @@ describe("Dashboard connection configuration panels", () => {
       {
         card: /^MIDI \/ Playback connected/,
         close: "Close MIDI / Playback configuration",
-        heading: "MIDI playback input",
+        heading: "Playback connection",
       },
       {
         card: /^ProPresenter connected/,

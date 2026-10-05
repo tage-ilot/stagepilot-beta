@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -114,6 +114,7 @@ function renderPanel({
       songs={songs}
     />,
   );
+  fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
 }
 
 describe("MidiSetupPanel", () => {

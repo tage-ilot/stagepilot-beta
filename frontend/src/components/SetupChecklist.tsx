@@ -6,7 +6,9 @@ import type {
   PlanningCenterStatusResponse,
   ProPresenterStatusResponse,
   SettingsResponse,
+  PlaybackStatusResponse,
 } from "../types";
+import { playbackConnectionDetail, playbackOrderNotice } from "./playbackStatus";
 
 type SetupPanel = "planning-center" | "midi" | "propresenter" | "backend";
 
@@ -15,6 +17,7 @@ export function SetupChecklist({
   settings,
   planningCenterStatus,
   midi,
+  playback,
   propresenter,
   live,
   onOpen,
@@ -23,6 +26,7 @@ export function SetupChecklist({
   settings: SettingsResponse | null;
   planningCenterStatus?: PlanningCenterStatusResponse | null;
   midi: MidiInputsResponse | null;
+  playback?: PlaybackStatusResponse | null;
   propresenter: ProPresenterStatusResponse | null;
   live: boolean;
   onOpen: (panel: SetupPanel) => void;
@@ -43,8 +47,9 @@ export function SetupChecklist({
   );
   const midiComplete = Boolean(
     saved
-    && saved.integration_modes.midi_source === "real"
-    && saved.midi.input_name,
+    && (saved.integration_modes.midi_source === "playback_api"
+      ? saved.playback_api?.enabled
+      : saved.integration_modes.midi_source === "real" && saved.midi.input_name),
   );
   const proPresenterComplete = Boolean(
     saved?.integration_modes.timer_output === "propresenter"
@@ -53,11 +58,11 @@ export function SetupChecklist({
   );
   const connectionsComplete = live
     && state.planning_center_status === "connected"
-    && state.midi_status === "connected"
     && state.propresenter_status === "connected"
-    && Boolean(midi?.inputs.some((input) => input.connected))
+    && (playback ? playback.connected : state.midi_status === "connected" && (saved?.integration_modes.midi_source === "playback_api" || Boolean(midi?.inputs.some((input) => input.connected))))
     && Boolean(propresenter?.timer_found);
   const ready = connectionsComplete
+    && !(playback?.active_source === "playback_api" && playbackOrderNotice(playback))
     && state.service_load.status === "loaded"
     && !state.service_load.is_stale
     && Boolean(state.plan?.songs.length)
@@ -82,8 +87,8 @@ export function SetupChecklist({
       panel: "planning-center",
     },
     {
-      label: "MIDI / Playback",
-      detail: midiComplete ? "Real MIDI input selected" : "Save cue mapping, restart, and select an input",
+      label: "Playback",
+      detail: playback ? playbackConnectionDetail(playback) : midiComplete ? "Playback source configured" : "Configure Playback API or select a MIDI input",
       complete: midiComplete,
       panel: "midi",
     },
@@ -95,12 +100,12 @@ export function SetupChecklist({
     },
     {
       label: "Connection test",
-      detail: connectionsComplete ? "All integrations are connected" : "Connect Planning Center, MIDI, and ProPresenter",
+      detail: connectionsComplete ? "All integrations are connected" : "Connect Planning Center, Playback, and ProPresenter",
       complete: connectionsComplete,
     },
     {
       label: "Ready",
-      detail: ready ? "A current or upcoming service is loaded" : "Load a valid service plan and confirm song durations",
+      detail: ready ? "A current or upcoming service is loaded" : (playback?.active_source === "playback_api" && playbackOrderNotice(playback)) || "Load a valid service plan and confirm song durations",
       complete: ready,
     },
   ];
