@@ -480,7 +480,17 @@ class PlanningCenterClient:
 
         try:
             return document_type.model_validate(response.json())
-        except (ValueError, ValidationError):
+        except (ValueError, ValidationError) as exc:
+            # Temporary diagnostic for the unresolved all-service-types report:
+            # HTTP 200 can still fail here, before candidate resolution runs.
+            # Never log response bodies, validation inputs, messages or URLs.
+            get_logger("planning_center").warning(
+                "planning_center_response_validation_diagnostic",
+                temporary_diagnostic=True,
+                exception_type=type(exc).__name__,
+                resource_kind=resource_label,
+                http_status=response.status_code,
+            )
             raise PlanningCenterResponseError(
                 f"Planning Center returned an invalid {resource_label} response."
             ) from None
