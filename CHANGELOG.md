@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [1.1.104-beta.24] - 2026-10-05
+
+### Changed
+
+- Playback API is now the default Playback connection (settings schema 2).
+  MIDI (native, network, gateway) moved under a collapsed Advanced section and
+  is unchanged as the alternative. Unified status/readiness is consistent across
+  the config panel, dashboard and checklist; when both are connected the
+  Playback API wins and MIDI is used only when the API is not connected.
+- Settings migration: existing settings files are upgraded once and
+  idempotently; all saved MIDI values are kept and the default source flips to
+  Playback API.
+- Docs: operator hardware acceptance documentation (#84). Planning Center
+  all-service-types diagnostics and regression test aligned with the released
+  failure isolation (#81); no production behavior change.
+
 ### Added
 
 - Playback API input is the schema-2 default, with heartbeat-verified local-first
