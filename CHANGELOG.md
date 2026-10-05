@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.1.104-beta.25] - 2026-10-05
+## [1.1.104-beta.26] - 2026-10-05
 
 ### Changed
 
@@ -20,9 +20,10 @@
 
 ### Fixed
 
-- Playback integration tests were timing-sensitive on slow CI runners (beta.24 was
-  tagged but its build failed validation and was never published); widened
-  fake-endpoint timeouts. No production code change.
+- Playback integration tests were timing-sensitive on slow CI runners (beta.24 and
+  beta.25 were tagged but their builds failed validation and were never
+  published); widened fake-endpoint timeouts and slowed the fake heartbeat,
+  which starved the fake server on the Windows event loop. No production code change.
 
 ### Added
 

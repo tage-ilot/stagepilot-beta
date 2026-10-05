@@ -86,7 +86,7 @@ class FakePlayback:
                             )
                         )
                         await writer.drain()
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.05)
 
             sender = asyncio.create_task(send())
             while True:
