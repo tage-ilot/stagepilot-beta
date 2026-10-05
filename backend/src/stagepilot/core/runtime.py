@@ -14,6 +14,7 @@ from stagepilot.core.settings import SettingsService
 from stagepilot.core.state import StateStore
 from stagepilot.planning_center_oauth import PlanningCenterOAuthService
 from stagepilot.plugins.planning_center.plugin import PlanningCenterPlugin
+from stagepilot.plugins.playback_api.plugin import PlaybackInputPlugin
 from stagepilot.services.planning_center_setup import PlanningCenterSetupService
 from stagepilot.services.state_service import StateService
 
@@ -32,3 +33,4 @@ class Runtime:
     lights_controller: LightsController | None = None
     planning_center: PlanningCenterPlugin | None = None
     planning_center_oauth: PlanningCenterOAuthService | None = None
+    playback_input: PlaybackInputPlugin | None = None

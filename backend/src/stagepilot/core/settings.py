@@ -14,21 +14,23 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from stagepilot.core.config import (
     IntegrationModes,
     LightsSettings,
     MidiSettings,
     MidiSource,
+    NetworkMidiSettings,
     PlanningCenterSettings,
+    PlaybackApiSettings,
     ProPresenterSettings,
     ServiceSource,
     Settings,
     TimerOutput,
 )
 
-SETTINGS_SCHEMA_VERSION: Literal[1] = 1
+SETTINGS_SCHEMA_VERSION: Literal[2] = 2
 KEYRING_SERVICE = "StagePilot"
 KEYRING_ACCOUNT = "planning-center-secret"
 # The OAuth token blob (access token, refresh token, expiry, reconnect
@@ -92,7 +94,7 @@ class PersistentSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = SETTINGS_SCHEMA_VERSION
+    schema_version: Literal[2] = SETTINGS_SCHEMA_VERSION
     onboarding: OnboardingSettings = Field(default_factory=OnboardingSettings)
     integration_modes: IntegrationModes = Field(default_factory=IntegrationModes)
     timezone: str = "America/Los_Angeles"
@@ -106,8 +108,27 @@ class PersistentSettings(BaseModel):
         default_factory=PersistentPlanningCenterSettings
     )
     midi: MidiSettings = Field(default_factory=MidiSettings)
+    playback_api: PlaybackApiSettings = Field(default_factory=PlaybackApiSettings)
+    network_midi: NetworkMidiSettings = Field(default_factory=NetworkMidiSettings)
     lights: LightsSettings = Field(default_factory=LightsSettings)
     propresenter: ProPresenterSettings = Field(default_factory=ProPresenterSettings)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_v1(cls, value: object) -> object:
+        """Switch legacy installs once, without altering their saved MIDI block."""
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version", SETTINGS_SCHEMA_VERSION)
+        if type(version) is int and version == 1:
+            migrated = dict(value)
+            modes = value.get("integration_modes", {})
+            if not isinstance(modes, dict):
+                return value
+            migrated["integration_modes"] = {**modes, "midi_source": MidiSource.PLAYBACK_API}
+            migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
+            return migrated
+        return value
 
     @field_validator("timezone")
     @classmethod
@@ -139,12 +160,10 @@ class PersistentSettings(BaseModel):
                 upcoming_lookahead_days=settings.planning_center.upcoming_lookahead_days,
                 request_timeout_seconds=settings.planning_center.request_timeout_seconds,
             ),
-            midi=settings.midi.model_copy(
-                update={
-                    "enabled": settings.integration_modes.midi_source is MidiSource.REAL,
-                }
-            ),
+            midi=settings.midi.model_copy(deep=True),
+            network_midi=settings.network_midi,
             lights=settings.lights,
+            playback_api=settings.playback_api,
             propresenter=settings.propresenter.model_copy(
                 update={
                     "enabled": (
@@ -174,9 +193,11 @@ class PersistentSettings(BaseModel):
                 request_timeout_seconds=planning_center.request_timeout_seconds,
             ),
             midi=self.midi.model_copy(
-                update={"enabled": self.integration_modes.midi_source is MidiSource.REAL}
+                update={"enabled": self.integration_modes.midi_source is not MidiSource.SIMULATED}
             ),
             lights=self.lights,
+            playback_api=self.playback_api,
+            network_midi=self.network_midi,
             propresenter=self.propresenter.model_copy(
                 update={"enabled": self.integration_modes.timer_output is TimerOutput.PROPRESENTER}
             ),
@@ -208,7 +229,12 @@ class SettingsFileStore:
             return None
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return PersistentSettings.model_validate(payload)
+            if isinstance(payload, dict):
+                payload.setdefault("schema_version", 1)
+            settings = PersistentSettings.model_validate(payload)
+            if isinstance(payload, dict) and payload.get("schema_version") == 1:
+                self.save(settings)
+            return settings
         except (OSError, ValueError, TypeError) as exc:
             raise SettingsFileError(
                 "Saved settings are corrupt or invalid; built-in defaults were used."
@@ -599,6 +625,7 @@ class SettingsService:
                 "onboarding": self._persistent.onboarding,
                 "web_dashboard_pin_enabled": self._persistent.web_dashboard_pin_enabled,
                 "web_dashboard_pin_hash": self._persistent.web_dashboard_pin_hash,
+                "midi": resolved.midi.model_copy(update={"enabled": self._persistent.midi.enabled}),
             },
             deep=True,
         )

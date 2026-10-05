@@ -58,6 +58,7 @@ import type {
   StateEnvelope,
 } from "../types";
 import { restartDesktopBackend, signInWithPlanningCenter } from "../desktop";
+import { usePlaybackInput } from "./usePlaybackInput";
 
 import { useDashboardAccess } from "../access/AccessContext";
 import { accessGeneration, invalidateAccess, onAccessInvalidated } from "../access/accessState";
@@ -82,6 +83,7 @@ export function useStagePilot() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [pendingSettingsOperation, setPendingSettingsOperation] = useState(false);
+  const playback = usePlaybackInput(canConfigure, setSettings);
 
   const [planningCenterStatus, setPlanningCenterStatus] =
     useState<PlanningCenterStatusResponse | null>(null);
@@ -899,6 +901,7 @@ export function useStagePilot() {
   ]);
 
   return {
+    playback,
     state,
     health,
     live,

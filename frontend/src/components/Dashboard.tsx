@@ -44,6 +44,7 @@ import {
 } from "./dashboard/dashboardReadiness";
 import { LightsSetupPanel } from "./LightsSetupPanel";
 import { MidiSetupPanel } from "./MidiSetupPanel";
+import type { PlaybackController } from "../hooks/usePlaybackInput";
 import { PlanningCenterSetupPanel } from "./PlanningCenterSetupPanel";
 import { ProPresenterSetupPanel } from "./ProPresenterSetupPanel";
 import { SetupChecklist } from "./SetupChecklist";
@@ -425,6 +426,7 @@ export function Dashboard({
   pendingPlanningCenterOperation = null,
   midi,
   midiMessages,
+  playback,
   midiError,
   midiMessage,
   pendingMidiOperation,
@@ -478,6 +480,7 @@ export function Dashboard({
   pendingPlanningCenterOperation?: "test" | "load-types" | "save" | "oauth-sign-in" | "oauth-disconnect" | null;
   midi: MidiInputsResponse | null;
   midiMessages: MidiMonitorMessage[];
+  playback?: PlaybackController;
   midiError: string | null;
   midiMessage: string | null;
   pendingMidiOperation: "refresh" | "connect" | "disconnect" | null;
@@ -711,6 +714,7 @@ export function Dashboard({
     return () => window.clearTimeout(timeout);
   }, [notification]);
   const connectionViews = buildConnectionCardViews({
+    playback: playback?.status,
     state,
     stateOnly: !canConfigure,
     settings,
@@ -868,6 +872,7 @@ export function Dashboard({
 
       {canConfigure && FIRST_LAUNCH_SETUP_ENABLED && (
         <SetupChecklist
+          playback={playback?.status}
           live={live}
           midi={midi}
           planningCenterStatus={planningCenterStatus}
@@ -994,6 +999,7 @@ export function Dashboard({
 
       {canConfigure && activeConnection === "midi" && (
         <MidiSetupPanel
+          playback={playback}
           error={midiError}
           message={midiMessage}
           midi={midi}

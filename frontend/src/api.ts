@@ -16,6 +16,9 @@ import type {
   MidiInputsResponse,
   MidiMonitorResponse,
   PersistentSettings,
+  PlaybackEventsResponse,
+  PlaybackSettingsInput,
+  PlaybackStatusResponse,
   PlanningCenterOAuthStartResponse,
   PlanningCenterOAuthStatusResponse,
   PlanningCenterServiceType,
@@ -235,6 +238,17 @@ export const disconnectPlanningCenterOAuth = () =>
   });
 
 export const getMidiInputs = () => requestJson<MidiInputsResponse>("/api/v1/midi/inputs");
+export const getPlaybackStatus = () => requestJson<PlaybackStatusResponse>("/api/v1/playback-api/status");
+export const getPlaybackEvents = () => requestJson<PlaybackEventsResponse>("/api/v1/playback-api/events");
+export const findPlayback = () => requestJson<PlaybackStatusResponse>("/api/v1/playback-api/find", { method: "POST" });
+export const updatePlaybackSettings = (settings: PlaybackSettingsInput) =>
+  requestJson<PlaybackStatusResponse>("/api/v1/playback-api/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
+  });
+export const discoverPlaybackSongOrder = () =>
+  requestJson<PlaybackStatusResponse>("/api/v1/playback-api/discover-song-order", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
+  });
 export const getMidiMessages = () => requestJson<MidiMonitorResponse>("/api/v1/midi/messages");
 export const refreshMidiInputs = () =>
   requestJson<MidiInputsResponse>("/api/v1/midi/inputs/refresh", { method: "POST" });

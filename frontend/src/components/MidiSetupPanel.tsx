@@ -9,6 +9,9 @@ import type {
   Song,
 } from "../types";
 import { SetupPanelHeader } from "./SetupPanelHeader";
+import type { PlaybackController } from "../hooks/usePlaybackInput";
+import { PlaybackApiPanel } from "./PlaybackApiPanel";
+import { playbackConnectionDetail, playbackMidiDetail } from "./playbackStatus";
 
 const cues: ReadonlyArray<readonly [MidiCueName, string]> = [
   ["start_next", "Start next"],
@@ -52,6 +55,7 @@ export function MidiSetupPanel({
   settingsMessage = null,
   onSaveSettings,
   songs = [],
+  playback,
 }: {
   midi: MidiInputsResponse | null;
   messages: MidiMonitorMessage[];
@@ -69,7 +73,9 @@ export function MidiSetupPanel({
   settingsMessage?: string | null;
   onSaveSettings: (settings: MidiSettingsInput) => void;
   songs?: Song[];
+  playback?: PlaybackController;
 }) {
+  const [advanced, setAdvanced] = useState(false);
   const [candidateId, setCandidateId] = useState("");
   const [channel, setChannel] = useState("1");
   const [note, setNote] = useState("112");
@@ -127,7 +133,8 @@ export function MidiSetupPanel({
   const selectedInput = midi?.inputs.find((input) => input.selected) ?? null;
   const connectedInput = midi?.inputs.find((input) => input.connected) ?? null;
   const controlsPending = pendingOperation !== null;
-  const connectionStatus = connectedInput ? "connected" : midi ? "disconnected" : "loading";
+  const connectionStatus = playback?.status ? playback.status.connected ? "connected" : "disconnected"
+    : playback ? "loading" : connectedInput ? "connected" : midi ? "disconnected" : "loading";
 
   return (
     <section
@@ -142,8 +149,21 @@ export function MidiSetupPanel({
         headingId="midi-setup-heading"
         onClose={onClose}
         status={connectionStatus}
-        title="MIDI playback input"
+        title="Playback connection"
       />
+
+      {playback?.status && <p className="mt-3 text-sm text-slate-200" aria-live="polite">{playbackConnectionDetail(playback.status)}</p>}
+      <PlaybackApiPanel playback={playback} />
+      <button className="mt-4 min-h-11 rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5" aria-expanded={advanced} aria-controls="playback-advanced" onClick={() => setAdvanced((value) => !value)} type="button">{advanced ? "▾" : "▸"} Advanced</button>
+      {advanced && <div id="playback-advanced">
+        <label className="mt-3 block text-sm text-slate-300">Playback source
+          <select className="ml-3 min-h-11 rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={settings?.settings.integration_modes.midi_source ?? "playback_api"} disabled={!playback || Boolean(playback.pending) || playback.status?.discovery === "running"} onChange={(event) => playback?.selectSource(event.target.value === "real" ? "real" : "playback_api")}>
+            <option value="playback_api">Playback API (default)</option>
+            <option value="real">MIDI</option>
+            {settings?.settings.integration_modes.midi_source === "simulated" && <option value="simulated" disabled>Simulation (legacy)</option>}
+          </select>
+        </label>
+        {playback?.status && <p className="mt-2 text-sm text-slate-300">{playbackMidiDetail(playback.status)}</p>}
 
       <div className="mt-4 rounded-lg border border-fuchsia-400/15 bg-fuchsia-400/[0.05] p-3">
         <div className="mb-4 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.07] p-3">
@@ -296,7 +316,7 @@ export function MidiSetupPanel({
 
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             <span className={`rounded-full px-2.5 py-1 font-bold ${connectedInput ? "bg-emerald-400/15 text-emerald-300" : "bg-white/5 text-slate-400"}`}>
-              {connectedInput ? `Connected: ${connectedInput.name}` : "No input connected"}
+              {playback?.status?.sources.midi.connected && playback.status.active_source === "playback_api" ? `Connected: ${connectedInput?.name ?? "MIDI"} — standing by` : connectedInput ? `Connected: ${connectedInput.name}` : "No input connected"}
             </span>
             {midi?.selected_input_name && !connectedInput && (
               <span className="rounded-full bg-amber-400/10 px-2.5 py-1 font-bold text-amber-300">
@@ -417,6 +437,7 @@ export function MidiSetupPanel({
           </div>
         )}
       </div>
+      </div>}
     </section>
   );
 }

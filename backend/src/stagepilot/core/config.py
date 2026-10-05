@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from stagepilot.core.midi import MidiCueName
 
@@ -32,6 +41,7 @@ class MidiSource(StrEnum):
 
     SIMULATED = "simulated"
     REAL = "real"
+    PLAYBACK_API = "playback_api"
 
 
 class MidiTransport(StrEnum):
@@ -52,7 +62,7 @@ class IntegrationModes(BaseModel):
     """Independent integration modes used for safe mixed-mode testing."""
 
     service_source: ServiceSource = ServiceSource.DEMO
-    midi_source: MidiSource = MidiSource.SIMULATED
+    midi_source: MidiSource = MidiSource.PLAYBACK_API
     timer_output: TimerOutput = TimerOutput.SIMULATED
 
 
@@ -102,6 +112,32 @@ class MidiVelocityMappings(BaseModel):
 # Backwards-compatible import name for code that imported the old class.
 # The values now represent velocities, not note numbers.
 MidiNoteMappings = MidiVelocityMappings
+
+
+class PlaybackApiSettings(BaseModel):
+    """Connection configuration for the primary Playback API input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    host: str | None = Field(default=None, max_length=255)
+    port: int = Field(default=8080, ge=1, le=65535)
+    auto_scan: bool = True
+    song_order: list[StrictInt] = Field(default_factory=list, max_length=200)
+    captured_version: StrictInt | None = None
+    captured_at: datetime | None = None
+
+    @field_validator("song_order")
+    @classmethod
+    def song_ids_are_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("Discovered song IDs must be unique and in setlist order.")
+        return value
+
+    @field_validator("host", mode="before")
+    @classmethod
+    def empty_host_is_unset(cls, value: object) -> object:
+        return value.strip() or None if isinstance(value, str) else value
 
 
 class MidiSettings(BaseModel):
@@ -340,6 +376,7 @@ class Settings(BaseModel):
     timezone: str = "America/Los_Angeles"
     planning_center: PlanningCenterSettings = Field(default_factory=PlanningCenterSettings)
     midi: MidiSettings = Field(default_factory=MidiSettings)
+    playback_api: PlaybackApiSettings = Field(default_factory=PlaybackApiSettings)
     lights: LightsSettings = Field(default_factory=LightsSettings)
     network_midi: NetworkMidiSettings = Field(default_factory=NetworkMidiSettings)
     propresenter: ProPresenterSettings = Field(default_factory=ProPresenterSettings)

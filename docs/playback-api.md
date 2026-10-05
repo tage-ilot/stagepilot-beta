@@ -1,0 +1,202 @@
+# Playback API input
+
+Playback API is the default input for new installations and for settings migrated
+from schema 1/unversioned files to schema 2. Native and network MIDI remain the
+unchanged alternative (`integration_modes.midi_source = "real"`). Their saved
+port, transport, channel, note, mappings, debounce and private IPC values survive
+migration. Select `simulated` explicitly to use neither live input.
+
+## Connection and safety
+
+Enable Playback's remote connections. StagePilot negotiates `pr-protocol` on
+`ws://HOST:8080/` and reports connected only after a valid heartbeat. With no
+manual host it checks `127.0.0.1` first, then attached IPv4 /24s (or smaller
+attached networks) when `auto_scan` is enabled. A manual host, for example
+`192.0.2.10`, exclusively overrides both local and LAN discovery. Port defaults
+to 8080. Address discovery validates the handshake and heartbeat and sends no
+Playback application commands. The copied transport uses only the Python
+standard library; no dependency or MIDI transport implementation was changed.
+
+Receive/reconnect continues with capped 1/2/4/8/15-second backoff. Five seconds
+without a valid heartbeat disconnects even when other messages arrive. Failure
+status includes `Playback unavailable; remote connections may be off`. Playback
+may disable remote connections when it restarts; re-enable them in Playback.
+Find closes the old listener and starts a fresh address search; it does not
+change the saved manual override. Disable/source switching and shutdown close
+the old transport, wait for its bounded thread work, and discard old queued
+observations before starting the next input. MIDI callbacks retain their existing
+connection-generation guards. In Playback API mode, the saved native/network
+MIDI input stays open as an automatic fallback (missing native MIDI capability
+does not prevent the API listener from starting). Explicit `real` mode runs MIDI
+only; `simulated` runs neither live input.
+
+### One Playback connection and one action owner
+
+The unified connection is successful whenever either live input is connected.
+API health requires WebSocket up and a valid heartbeat less than five seconds
+old; MIDI uses its existing verified input-connected state. API-only owns
+immediately. With MIDI already connected, API takes over after three seconds of
+stable heartbeats (gaps over 1.5 seconds restart that stability interval). A
+disconnect or heartbeat expiry immediately permits MIDI actions; the status
+projection checks expiry/failback every 50 ms even without incoming events.
+MIDI loss does not delay an already healthy API. No suppressed event is replayed.
+
+Once API owns, every MIDI action is ignored and retained in the MIDI monitor as
+`ignored: Playback API active`. Song-order validity never changes ownership:
+healthy API with stale/unknown order remains connected and sole owner, blocks
+starts/restarts from both inputs, and allows API pause/stop outside discovery.
+Stale API order never gates MIDI actions when MIDI actually owns. Discovery
+suppresses both inputs until exit. Queued work rechecks current ownership and
+ownership generations; API events received while MIDI owns are monitor-only.
+
+A two-second cross-source dedupe window suppresses the same position start or
+restart, or timer-stop action across ownership changes. A legacy unpositioned
+`start_next` arriving after another source's start is also deduplicated in that
+window. Different explicit positions and same-source repeats retain their
+existing behavior. Rejected actions do not reserve a successful-action key.
+
+## Discover Song Order: the sole control exception
+
+Opaque song IDs do not encode position. StagePilot never infers absolute song
+numbers from passive transitions, sorts IDs, or matches them to plan titles.
+The operator must run Discover Song Order while Playback is stopped. Confirm
+that the complete Playback setlist order matches the StagePilot plan order.
+Number N is the discovered list index plus one (the existing MIDI position path).
+
+The confirmed operation sends only `{"transportPreviousSong":{}}` and
+`{"transportNextSong":{}}` over the current connection. It remembers the original
+selection, walks Previous to the nonwrapping start, walks Next to the end, then
+restores the original selection using Previous only. No select-song command or
+generic send/control API exists. The operation is capped at 200 total navigation
+steps (including the walk to the start and restoration), with five seconds per
+step. A very long setlist/original selection may exceed that cap and fail safely.
+At an end, at least two fresh unchanged heartbeats and continued recent receipt
+are required; a silent endpoint is a timeout, never an empty/successful result.
+The usual approximately two-second song changes make runtime depend on setlist
+length; probing both ends may each take five seconds.
+
+All Playback-triggered StagePilot actions are suppressed from discovery entry
+until exit, including starts and stop/pause actions. Monitor events carry
+`discovery: true`; pre-operation and discovery queue envelopes cannot dispatch
+later. Playing/disconnected/already-running requests are rejected. Playback
+starting to play, version changes, wrapping navigation, loss of connection,
+timeouts, shutdown, or failure to restore abort without saving a partial result.
+On failure, check the selection in Playback; restoration cannot be promised if
+the transport failed. Shutdown cancels and joins the operation before transport
+cleanup. Discovery cannot be started by startup, reconnect, Find, or settings.
+
+Only a complete restored result atomically saves
+`{song_order, captured_version, captured_at}`. Start/restart actions require the
+current heartbeat version to match and every observed heartbeat ID to belong to
+the saved order. Changed/missing version or an unknown ID makes the order sticky
+stale; matching later observations do not silently rearm it. Rediscover to repair.
+Reconnect alone does not invalidate: its first heartbeat is snapshot-only and
+revalidates the saved order. The protocol does not prove unique setlist identity
+or detect every same-version reorder with the same IDs. Rediscover after known
+setlist/plan reorder changes; StagePilot does not claim that stronger guarantee.
+
+## Event mapping
+
+| Observation | StagePilot action |
+| --- | --- |
+| `song.started`, known non-active position, valid order | `dispatch_song_position(N)` |
+| `song.started`, already active position, valid order | `restart_current` |
+| `song.paused`, `song.stopped` outside discovery | `stop_timer`, even while stale |
+| `song.resumed` | Monitor only |
+| selected/changed/ended, section, seek/jump, fade, pad, snapshot and unknown | Monitor only |
+
+Continuing song changes emit changed then started; changed never double-fires an
+action. Duplicate unchanged heartbeats do not create another start. All actions
+use the existing StateService pipeline, outside receive-worker threads.
+
+## Backend API for the existing Playback configuration window
+
+All routes use the existing dashboard authentication/remote retry boundary under
+`/api/v1/playback-api`. There are no play, pause, select, seek or individual
+Previous/Next routes. Keep controls inside the existing MIDI/Playback settings
+widget, with MIDI in the initially collapsed Advanced disclosure (frontend task).
+
+- `GET /status`: typed network/configuration/discovery snapshot below.
+- `GET /connection`: only the unified `{active_source, sources, connected, reason}`.
+- `GET /events`: `{events: [{event: PlaybackEvent, discovery: bool}], capacity: 100}`.
+  Oldest-first bounded recent receive observations, including monitor-only ones.
+  Poll while the configuration window is open; replace the list, do not append
+  snapshots. Event `timestamp` is monotonic observation time, not a UNIX date.
+- `PUT /settings`: `{enabled: bool, host: string|null, port: int, auto_scan: bool}`.
+  Omitted fields use enabled=true, host=null, port=8080, auto_scan=true. Supply all
+  four fields from the current status when changing one. Saves and applies live;
+  does not select the source or modify/arm song order. Extra order/trust fields are
+  rejected (422), invalid endpoint syntax is 422, persistence failure is 503,
+  discovery conflict is 409. An empty manual field should be sent as null.
+- `POST /find`: starts a fresh asynchronous receive/address search with the saved
+  policy; returns the initial status immediately, normally disconnected while
+  probing. Poll `/status` for the final network outcome. Selected+enabled required
+  (409 otherwise); while discovery runs, returns 409. Sends no application control.
+- `POST /discover-song-order`: JSON `{confirm: true}` is mandatory. Missing body,
+  missing/false/nonboolean confirmation returns 400. Live-state conflicts return
+  409 with plain-language detail. This request remains open until discovery ends;
+  poll `/status` concurrently to show progress and prevent duplicate clicks. A
+  completed or safely failed run returns 200 with `discovery: done|failed`; inspect
+  `last_error` rather than treating every 200 as discovery success. HTTP disconnect
+  or application shutdown may cancel it; the status records failed/no result saved.
+
+Status fields:
+
+```text
+selected: bool                 source is playback_api, independently of enable
+ enabled: bool                 persisted/effective on/off setting
+ connected: bool               either verified live input is connected
+ active_source: playback_api|midi|none
+ sources: {playback_api: {connected, reason}, midi: {connected, reason}}
+ reason: string                plain-language unified connection/action eligibility
+ host: string|null             current/last attempted endpoint, not manual setting
+ port: int
+ source: manual|loopback|lan|null
+ last_error: string|null        discovery/action error takes precedence over network error
+ playing: bool                 latest heartbeat; false without one
+ setlist_cloud_version: int|null
+ discovery: idle|running|failed|done
+ progress: int                 navigation commands issued, not estimated percentage
+ song_order: int[]              complete saved/discovered opaque IDs
+ captured_version: int|null
+ captured_at: ISO8601|null      UTC capture time
+ stale: bool                   start/restart disarmed; initially true without order
+ settings: {enabled, host, port, auto_scan}
+```
+
+Read full settings at `GET /api/v1/settings`; change
+`integration_modes.midi_source` through `PUT /api/v1/settings` to select
+`playback_api`, `real`, or `simulated`. Source-only/MIDI/Playback updates apply
+without restart and report `restart_required: false`; unrelated integration
+registration changes retain the existing restart requirement. MIDI selection and
+monitor routes remain available for the fallback while API is selected; cue
+simulation still requires explicitly selecting MIDI. No stopped/old controller
+can bypass ownership checks. Both settings
+routes refuse order/capture edits; only completed discovery produces those fields.
+Settings writes/Find are serialized against discovery and cannot persist a
+configuration change after returning a discovery conflict. Other aspect-specific
+settings routes and unrelated generic settings writes do not re-install/rearm the
+Playback mapping.
+
+The legacy application `midi_status` readiness slot represents the unified
+Playback connection; only the arbiter projects connection changes there. The
+dashboard state and unified status therefore cannot report one source's failure
+as a disconnected Playback while the other is connected. `/playback-api/status`
+exposes the active owner and both sources; use `sources.playback_api.connected`
+for API-only controls such as discovery, not top-level `connected`. Legacy fields
+remain available, but API endpoint/playing/order fields still describe the API,
+not MIDI. A disconnected non-owner's transport error does not become a top-level
+error on the healthy unified connection. Plugin health describes lifecycle-task
+health, not proof of connectivity. The input lifecycle is registered under
+`midi_playback` for initial real MIDI and `playback_api` otherwise; its managed
+name remains stable while switching source.
+
+## Verification and limits
+
+All transport/discovery/integration tests use synthetic IDs and fake loopback
+WebSockets. The application-test default finder is disabled by an autouse fixture
+so migration does not make unrelated tests scan a real production LAN. No real
+Playback/hardware validation, deployment, release or merge has been performed.
+See `playback-settings-contract.md`, `playback-transport-handoff.md`, and
+`playback-mapping-handoff.md` for slice contracts. Consolidated verification is
+recorded in the integration handoff, not inferred from older slice counts.
