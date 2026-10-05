@@ -1,15 +1,15 @@
 # Native completion runbook and PROVEN/DEFERRED ledger
 
-This is the single authoritative source for (a) exactly what the self-hosted
-Linux runner `stagepilot-ci` has actually proven, (b) what remains DEFERRED and
-precisely what evidence each deferred item still needs, and (c) the exact
-ordered commands that finish private beta release 1 — the only release this
-beta ships — the moment a native self-hosted runner is registered. The in-app
-updater, release 2, and the release broker are deferred by operator choice;
-see "Deferred by operator choice" below.
+This is the authoritative historical proof ledger and current operator native
+acceptance runbook. Releases are ongoing; the updater is live through public
+GitHub `latest.json`, without a release broker. Fresh physical install, reboot,
+Gatekeeper/SmartScreen, and update acceptance remain UNPROVEN until recorded on
+real Windows x64, macOS arm64, and macOS x64 hardware. Neither hosted builds nor
+production-use anecdotes substitute for that matrix.
 
-Nothing in this file may be presented as validated unless it appears under
-PROVEN with a CI run URL. See
+The PROVEN rows below are preserved historical evidence, including historical
+broker/config claims, not fresh native acceptance or current deployed-state
+claims. New native proof requires actual operator receipts. See
 [`private-beta-release-and-acceptance.md`](private-beta-release-and-acceptance.md)
 for the delivery decision and
 [`private-beta-enrollment-and-guardrails.md`](private-beta-enrollment-and-guardrails.md)
@@ -19,17 +19,16 @@ for the guardrail thresholds.
 
 | Label | Machine | Status |
 |---|---|---|
-| `stagepilot-linux` | `stagepilot-ci` (Linux X64) | Registered and online (self-hosted, stays self-hosted) |
+| `stagepilot-linux` | `stagepilot-ci` (Linux X64) | Registered; offline at this refresh (self-hosted, stays self-hosted) |
 | `windows-latest` | GitHub-hosted | Available — public repo, unlimited free minutes on standard runners |
 | `macos-15` | GitHub-hosted | Available — public repo, unlimited free minutes on standard runners |
 | `macos-15-intel` | GitHub-hosted | Available — public repo, unlimited free minutes on standard runners |
 
-`tage-ilot/stagepilot-beta` is **temporarily public** so that GitHub-hosted
-Windows/macOS Actions minutes are free and unlimited on standard runners.
-This is what unblocks the native path below without spending any paid
-allowance. The repository will be made private again later once the native
-path is proven; whoever reads this after that should not be surprised that
-the native jobs ran on hosted runners while the repo was public.
+`tage-ilot/stagepilot-beta` stays **public indefinitely**, by operator decision.
+Standard hosted Windows/macOS Actions minutes are free for this public repo;
+the public release endpoint also permits anonymous in-app updater downloads.
+Runner availability is not hardware acceptance. Do not start a stopped runner
+or override an operator drain/maintenance hold to run this checklist.
 
 Linux jobs use exactly `runs-on: [self-hosted, stagepilot-linux]` and must
 never move to a hosted `ubuntu-*` runner. Native Windows/macOS jobs use
@@ -65,7 +64,7 @@ rather than trusting this table alone.
 | P17 | Windows x64 installer builds and publishes **signed** (release 1, real tag) | `release-macos.yml:build` (Windows leg, `runs-on: windows-latest`) and `release-macos.yml:publish` (`runs-on: [self-hosted, stagepilot-linux]`) green at tag `v1.1.103-beta.6`, release run [`35229334636`](https://github.com/tage-ilot/stagepilot-beta/actions/runs/35229334636); published asset `StagePilot_1.1.103-beta.6_x64-setup.exe` plus signed `latest.json` entry |
 | P18 | macOS arm64/x64 `.app`, `.dmg`, and `.app.tar.gz` build, sign, and publish (release 1, real tag) | `release-macos.yml:build` macOS legs (`macos-15` for Apple Silicon, `macos-15-intel` for Intel) and `release-macos.yml:publish` (`runs-on: [self-hosted, stagepilot-linux]`) green at tag `v1.1.103-beta.6`, release run [`35229334636`](https://github.com/tage-ilot/stagepilot-beta/actions/runs/35229334636); published assets `StagePilot_1.1.103-beta.6_aarch64.dmg`, `StagePilot_1.1.103-beta.6_aarch64.app.tar.gz`, `StagePilot_1.1.103-beta.6_x64.dmg`, `StagePilot_1.1.103-beta.6_x64.app.tar.gz` plus signed `latest.json` entries |
 
-## DEFERRED — not proven, required for release 1, with the exact evidence still required
+## UNPROVEN native acceptance — exact evidence still required
 
 Never describe any of these as validated. D1 and D2 (real signed Windows
 installer and signed macOS bundles) were cleared by release 1: see P17 and
@@ -127,8 +126,11 @@ exact IDs.
 
    ```sh
    gh workflow run revoke-control-plane-live-installation.yml \
-     --repo tage-ilot/stagepilot-beta --ref main -f installation=<32-hex-id>
+     --repo tage-ilot/stagepilot-beta --ref main -f 'installation=EXACT_DISPOSABLE_32_HEX_ID'
    ```
+
+   Replace the placeholder only with an ID from this disposable run, never a
+   production ID. The workflow rejects the unsubstituted placeholder.
 
 2. Confirm no provider residue remains (this is the residue that costs money,
    holds DNS, or stays reachable):
@@ -138,17 +140,13 @@ exact IDs.
      --ref main -f apply=report
    ```
 
-3. Only if the report lists disposable objects, delete them:
+3. If residue remains, retain the exact disposable IDs and request scoped
+   admin recovery. Do not use the sweep's global apply mode for hardware
+   cleanup: it has no exact-installation filter. Never target a production
+   installation. Require the revocation and report run read-backs before
+   recording cleanup as passed; queued workflows are not cleanup proof.
 
-   ```sh
-   gh workflow run sweep-control-plane-residue.yml --repo tage-ilot/stagepilot-beta \
-     --ref main -f apply=apply
-   ```
-
-The sweep touches only `sp-<32 hex>.<REMOTE_HOST_SUFFIX>` DNS records and
-`stagepilot-<32 hex>-<generation>` tunnels, and reads back to confirm removal.
-
-### Known unrecoverable registry entries — 2 stranded, zero provider residue
+### Known unrecoverable registry entries — historical 2 stranded, zero provider residue
 
 The first acceptance attempt of 2026-09-16 (run `35119782474`, at commit
 `33a39fe`, before the `badb3a4` fix) enrolled two installations and then died
@@ -157,9 +155,10 @@ that commit appended to `installations` only *after* its assertions, so the
 `finally` block had nothing to revoke and printed no receipts. Their exact IDs
 were never emitted and the Worker exposes no enumeration route, so **they
 cannot be recovered or revoked**. They are the persistent
-`activeInstallations: 2` in every reading since.
+`activeInstallations: 2` in the historical readings documented here. This
+refresh did not query live installation counters or mutate provider state.
 
-This is bounded and costs nothing:
+The recorded evidence established a bounded, zero-provider-residue baseline:
 
 - Provider residue is **zero** — confirmed by direct Cloudflare reads at 16:41Z
   (run `35123422067`) and 17:02Z (run `35125995391`), both
@@ -177,22 +176,24 @@ the residual 2 as a permanent, harmless baseline offset — the residue check
 asserts `activeInstallations` is **not greater than** its baseline for exactly
 this reason, rather than asserting zero.
 
-## Deferred by operator choice — required only when promoting to the stable public release repo
+## Current delivery and remaining update proof
 
-These are **not failures and not validated** because they are **out of scope
-for the private beta**, not because anything about them is broken. The
-operator has decided the in-app updater is off for the beta: it ships as a
-directly downloaded installer, there is no release 2, no Update-button
-acceptance, and no release-broker deployment. No `STAGEPILOT_RELEASE_TOKEN`
-will be issued for the beta. The implementation stays intact and promotable —
-nothing here was removed, only deferred.
+The latest non-draft release verified for this refresh is `v1.1.104-beta.23`.
+The live anonymous GitHub manifest reports `1.1.104-beta.23`, all three platform
+entries, non-empty signatures, and direct GitHub asset URLs. This is metadata
+evidence, not new cryptographic or physical-install proof. Read latest again
+at acceptance time; do not treat this snapshot as a permanent target.
 
-| Item | Why it is deferred | What clears it |
-|---|---|---|
-| Release-broker deployment (`deploy-control-plane.yml` with `STAGEPILOT_RELEASE_TOKEN` set) | Operator decision: no release-download token will be issued for the beta | An operator decision to promote beyond the private beta, plus the token |
-| Real signed `latest.json` served end to end and `GET /v1/releases/latest.json` returning the real tag | Depends on the broker being deployed | Broker deployment above |
-| Release 2 (`v1.1.103-beta.6` or later) build/sign/publish | Operator decision: beta ships exactly one release | An operator decision to publish a second release |
-| In-app update discovery, download, install, relaunch, and version read-back (`updater_discovery`, `updater_install_relaunch`, `verify --from-version … --to-version …`) | Depends on the broker and release 2, both deferred above | Broker deployment + release 2 |
+Base Tauri config and both release overlays select the public beta endpoint.
+The retained STABLE/BETA settings switch selects the channel at runtime; do not
+remove it. A release broker or `STAGEPILOT_RELEASE_TOKEN` is not required for
+this delivery path. Historical broker unit proofs below/above remain history,
+not descriptions of the current deployed updater path.
+
+`updater_discovery`, `updater_install_relaunch`, and two-version verification
+are required native acceptance, not operator-deferred features. Use an earlier
+compatible signed beta as the source and the current latest as the target.
+Clients carrying retired signing keys need a manual bootstrap installer first.
 
 ## Bounded packaging smoke-test finding — blocked, do not pursue further
 
@@ -242,186 +243,240 @@ an operator/runner-provisioning action, not a code change.
 
 # Native completion runbook
 
-Execute top to bottom. Every command is copy-pasteable and requires no
-rediscovery. Do not skip a read-back. This is exactly the release-1 native
-path: enable native jobs on GitHub-hosted runners, confirm signing secrets,
-build/sign/publish release 1, native acceptance for release 1, rollback. The
-release-broker deploy, release 2, and update acceptance are out of scope — see
-"Deferred by operator choice" above.
+## Step 1 — Read runner state, do not change policy
 
-## Step 1 — Enable the native jobs
-
-The native jobs now run on GitHub-hosted `windows-latest`/`macos-15`/
-`macos-15-intel` runners since the repository is public. Remove the
-`if: ${{ false }}` line from each job, point `runs-on` at the hosted label,
-and update the runner-policy validator's expected native-job inventory to
-match:
-
-- `.github/workflows/ci.yml` → `desktop` (`windows-latest`)
-- `.github/workflows/ci.yml` → `desktop-macos-lifecycle` (`macos-15` / `macos-15-intel`)
-- `.github/workflows/release-macos.yml` → `build` (`macos-15` / `macos-15-intel` / `windows-latest`)
-- `.github/workflows/release-windows.yml` → `build` (`windows-latest`)
-
-Also drop the `DEFERRED — ` name prefix on each, restoring the original job
-names. Change nothing else: do not alter a signing step, a secret reference,
-the source audit, the immutable-tag guard, or the `latest.json` ordering.
-
-Validate and push:
+Native build jobs are already enabled on hosted Windows/macOS runners. Linux
+jobs stay self-hosted. No workflow edit or runner restart is part of acceptance.
 
 ```sh
+gh api repos/tage-ilot/stagepilot-beta/actions/runners --jq '.runners[] | {name,status}'
 uv run --with PyYAML==6.0.3 python scripts/validate_workflow_runners.py
-git add .github/workflows scripts/validate_workflow_runners.py
-git commit -m "ci: enable native jobs now that self-hosted native runners exist"
-git push beta HEAD:refs/heads/main
 ```
 
-## Step 2 — Confirm the release-1 signing secrets exist
+If Linux jobs queue, wait for separately authorized runner recovery; do not
+bypass a drain or maintenance hold.
 
-```sh
-gh secret list --repo tage-ilot/stagepilot-beta
-```
+## Step 2 — Signing prerequisites
 
-Required for release 1, and never printed:
+Release signing uses repository Actions secrets `TAURI_SIGNING_PRIVATE_KEY`
+and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Inspect names only with
+`gh secret list --repo tage-ilot/stagepilot-beta`; never print values.
+No release-download PAT or broker allowlist is needed by the live updater.
+Do not rotate keys or publish releases during a hardware acceptance pass.
 
-| Name | Scope | Purpose |
-|---|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | repository | Signs updater artifacts |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | repository | Unlocks the signing key |
+## Step 3 — Current release and historical release 1
 
-The beta control plane (enrollment/guardrails) is already live and unrelated
-to these two secrets. `STAGEPILOT_RELEASE_TOKEN` and the release broker are
-**deferred by operator choice** (see above) — do not set it and do not block
-release 1 on it.
-
-Verify the release allowlist variable before tagging:
-
-```sh
-gh variable get BETA_RELEASE_VERSIONS --repo tage-ilot/stagepilot-beta --env stagepilot-control-plane
-```
-
-`BETA_RELEASE_VERSIONS` must include `1.1.103-beta.6`.
-
-## Step 3 — Release 1: `v1.1.103-beta.6` — DONE
-
-**Completed 2026-09-17.** Release 1 is published at
+Release 1 (`v1.1.103-beta.6`) remains historical proof, not today's beta:
 https://github.com/tage-ilot/stagepilot-beta/releases/tag/v1.1.103-beta.6
-(release id `390773788`) from commit
-`e7af35a7c2e9e0bd53cec90eacb77c0511699058`, built and signed in run
-https://github.com/tage-ilot/stagepilot-beta/actions/runs/35229334636 after
-exact-head CI run
-https://github.com/tage-ilot/stagepilot-beta/actions/runs/35227555657 passed all
-eight jobs. The published inventory, SHA-256 hashes and post-publication
-signature verification are recorded in
-[`private-beta-release-and-acceptance.md`](private-beta-release-and-acceptance.md).
-The next available version is `v1.1.103-beta.7`.
+from `e7af35a7c2e9e0bd53cec90eacb77c0511699058`, release run
+https://github.com/tage-ilot/stagepilot-beta/actions/runs/35229334636 and CI
+https://github.com/tage-ilot/stagepilot-beta/actions/runs/35227555657.
+The abandoned `v1.1.103-beta.1`–`v1.1.103-beta.5` tags remain unmoved history;
+never reuse them. New publication follows `releasing-stagepilot.md`, using a
+new version, lockfile validation and exact-head CI, not the old release-1 tag.
+The latest release at this refresh is `v1.1.104-beta.23`; dynamically resolve
+it again below. The public GitHub manifest is actively consumed by the updater.
 
-> **The private beta is `v1.1.103-beta.6` — full stop.** Tags
-> `v1.1.103-beta.2` through `v1.1.103-beta.5` exist in the repository but are
-> **abandoned failed release attempts**, not prior betas: each was tagged,
-> hit a build/publish failure (lockfile drift, signing, or workflow issues)
-> before a release was ever published from it, and was superseded by the
-> next attempt. None of `beta.2`–`beta.5` has a corresponding GitHub Release;
-> only `beta.6` does. Do not reference `beta.2` (or any of `beta.3`–`beta.5`)
-> as "the beta" in any doc, script default, or support answer — always say
-> `v1.1.103-beta.6` explicitly. The next release, if one is ever cut, must
-> use `v1.1.103-beta.7` (or later) — never reuse or fall back to `beta.2`–`beta.5`.
+## Step 4 — Operator hardware acceptance pass
 
-The procedure below is retained for the next release.
+1. Use disposable, isolated OS accounts/machines with no production StagePilot
+   installation, Remote identity, sessions, or provider objects. Run on Windows
+   x64 and both Apple Silicon and Intel Macs (macOS 12+). One Mac architecture
+   cannot clear the other. Use a reviewed checkout for the receipt script, not
+   a development backend as a substitute for the installed application.
+   Keep private evidence outside Git; never put secrets or personal data in it.
 
-Set every application version to `1.1.103-beta.6`, then:
+2. Read current latest and its actual assets. In PowerShell on Windows:
+
+   ```powershell
+   $Repo = "tage-ilot/stagepilot-beta"
+   $Tag = gh release view --repo $Repo --json tagName -q .tagName
+   $Version = $Tag -replace '^v', ''
+   $Platform = "windows-x86_64"
+   $Asset = "StagePilot_${Version}_x64-setup.exe"
+   $Work = Join-Path $env:USERPROFILE "StagePilot-disposable-acceptance"
+   New-Item -ItemType Directory -Force $Work | Out-Null
+   $Report = Join-Path $Work "native-acceptance.json"
+   gh release view $Tag --repo $Repo --json tagName,isDraft,assets
+   gh release download $Tag --repo $Repo --pattern $Asset --dir $Work
+   python scripts/beta_release_acceptance.py --report $Report installer --platform $Platform --version $Version --file (Join-Path $Work $Asset)
+   ```
+
+   On a Mac, use this shell block; `uname -m` selects the correct installer:
+
+   ```sh
+   REPO=tage-ilot/stagepilot-beta
+   TAG=$(gh release view --repo "$REPO" --json tagName -q .tagName)
+   VERSION=${TAG#v}
+   case "$(uname -m)" in
+     arm64) PLATFORM=darwin-aarch64; ARCH=aarch64 ;;
+     x86_64) PLATFORM=darwin-x86_64; ARCH=x64 ;;
+     *) printf 'Unsupported Mac architecture\n'; exit 1 ;;
+   esac
+   ASSET="StagePilot_${VERSION}_${ARCH}.dmg"
+   WORK="$HOME/StagePilot-disposable-acceptance"
+   mkdir -p "$WORK"; chmod 700 "$WORK"
+   REPORT="$WORK/native-acceptance.json"
+   gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,assets
+   gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" --dir "$WORK"
+   python3 scripts/beta_release_acceptance.py --report "$REPORT" installer --platform "$PLATFORM" --version "$VERSION" --file "$WORK/$ASSET"
+   ```
+
+   Check non-draft status and exactly these six asset names against the returned
+   inventory (VERSION is the dynamically read version):
+   `StagePilot_VERSION_x64-setup.exe`, `StagePilot_VERSION_aarch64.dmg`,
+   `StagePilot_VERSION_x64.dmg`, `StagePilot_VERSION_aarch64.app.tar.gz`,
+   `StagePilot_VERSION_x64.app.tar.gz`, and `latest.json`. DMGs/installers are
+   human downloads; `.app.tar.gz` files are macOS updater payloads. No standalone
+   `.sig` is published. Read the anonymous manifest with:
+
+   ```sh
+   curl -fsSL https://github.com/tage-ilot/stagepilot-beta/releases/latest/download/latest.json
+   ```
+
+   Its version, three platform URLs and signatures must match the frozen target.
+   If latest changes during acceptance, stop and reconcile the target before
+   recording update receipts. Do not silently mix releases in one report.
+
+3. Install the target through the native GUI on the fresh account. Record actual
+   Gatekeeper/SmartScreen prompts and approval steps in `$Work`/`$WORK` as a
+   private operator observation (D8 has no dedicated harness check). Tauri
+   updater signatures do not mean Apple notarization or Windows publisher trust.
+   Verify local dashboard/health (D3), transparent no-account enrollment and
+   exactly one first Operator (D4), and Viewer/Operator HTTPS/WSS, CSRF/session
+   policy (D5). Observe app/connector restart and actual OS reboot recovery
+   (D6); restore the same variable values after reboot. Disable and re-enable
+   Remote, observe a new generation and read back cleanup of the previous exact
+   disposable DNS/tunnel (D7). Do not test against a production installation.
+
+4. Record each observation only after it actually passes. These are receipt
+   commands, not automated hardware probes. For each CHECK below, substitute
+   a short factual receipt in EVIDENCE (maximum 256 characters, no secrets).
+
+   ```powershell
+   $Check = "local_health"
+   $Evidence = Read-Host "Short secret-free observed receipt"
+   python scripts/beta_release_acceptance.py --report $Report check --platform $Platform --name $Check --evidence $Evidence
+   ```
+
+   ```sh
+   CHECK=local_health
+   printf 'Short secret-free observed receipt: '; read -r EVIDENCE
+   python3 scripts/beta_release_acceptance.py --report "$REPORT" check --platform "$PLATFORM" --name "$CHECK" --evidence "$EVIDENCE"
+   ```
+
+   Repeat for `transparent_enrollment`, `first_operator`, `https_wss_roles`,
+   `restart_recovery`, `reboot_recovery`, and
+   `disable_reenable_provider_cleanup`; do not bulk-mark unchecked items.
+
+5. On the same disposable accounts, test a genuine earlier-to-latest update.
+   Select an earlier published compatible signed beta as FROM_TAG (not an
+   abandoned tag or retired-key build); confirm its release and assets with
+   `gh release view FROM_TAG --repo tage-ilot/stagepilot-beta --json tagName,isDraft,assets`.
+   Download and record the source installer (enter the reviewed source tag;
+   the target variables from step 2 remain unchanged):
+
+   ```powershell
+   $FromTag = Read-Host "Reviewed compatible earlier published beta tag"
+   $FromVersion = $FromTag -replace '^v', ''
+   $FromAsset = "StagePilot_${FromVersion}_x64-setup.exe"
+   gh release download $FromTag --repo $Repo --pattern $FromAsset --dir $Work
+   python scripts/beta_release_acceptance.py --report $Report installer --platform $Platform --version $FromVersion --file (Join-Path $Work $FromAsset)
+   ```
+
+   ```sh
+   printf 'Reviewed compatible earlier published beta tag: '; read -r FROM_TAG
+   FROM_VERSION=${FROM_TAG#v}
+   FROM_ASSET="StagePilot_${FROM_VERSION}_${ARCH}.dmg"
+   gh release download "$FROM_TAG" --repo "$REPO" --pattern "$FROM_ASSET" --dir "$WORK"
+   python3 scripts/beta_release_acceptance.py --report "$REPORT" installer --platform "$PLATFORM" --version "$FROM_VERSION" --file "$WORK/$FROM_ASSET"
+   ```
+
+   Manually install
+   the source build in this disposable environment, verify its version, keep
+   the settings channel BETA, then observe discovery of the frozen target.
+   Cancel once (no download), accept Update and Restart, and observe signature
+   verification, install, relaunch, window recovery, version read-back and
+   success message. Record `updater_discovery` and `updater_install_relaunch`
+   with the commands in step 4. If no compatible newer target exists, these
+   checks remain UNPROVEN; reinstalling latest is not an update test.
+
+6. Disable Remote in every disposable app first. Save the exact 32-hex
+   installation ID from this test's own receipts privately; never substitute
+   a production ID. Revoke each exact disposable ID from an authorized admin
+   shell. In PowerShell:
+
+   ```powershell
+   $DisposableId = Read-Host "Exact 32-hex ID from this disposable test"
+   if ($DisposableId -cnotmatch '^[a-f0-9]{32}$') { throw "Invalid installation ID" }
+   gh workflow run revoke-control-plane-live-installation.yml --repo tage-ilot/stagepilot-beta --ref main -f "installation=$DisposableId"
+   gh run list --repo tage-ilot/stagepilot-beta --workflow revoke-control-plane-live-installation.yml --limit 5
+   ```
+
+   In a POSIX shell:
+
+   ```sh
+   printf 'Exact 32-hex ID from this disposable test: '; read -r DISPOSABLE_ID
+   printf '%s' "$DISPOSABLE_ID" | python3 -c 'import re,sys; sys.exit(0 if re.fullmatch("[a-f0-9]{32}",sys.stdin.read()) else 2)' &&
+   gh workflow run revoke-control-plane-live-installation.yml --repo tage-ilot/stagepilot-beta --ref main -f "installation=$DISPOSABLE_ID"
+   gh run list --repo tage-ilot/stagepilot-beta --workflow revoke-control-plane-live-installation.yml --limit 5
+   ```
+
+   Identify the exact dispatch run, then `gh run watch RUN_ID --repo
+   tage-ilot/stagepilot-beta --exit-status` and `gh run view RUN_ID --repo
+   tage-ilot/stagepilot-beta --log`. Require its exact-ID disabled/revoked
+   read-back. Dispatch a report-only provider sweep:
+
+   ```sh
+   gh workflow run sweep-control-plane-residue.yml --repo tage-ilot/stagepilot-beta --ref main -f apply=report
+   gh run list --repo tage-ilot/stagepilot-beta --workflow sweep-control-plane-residue.yml --limit 5
+   gh run watch RUN_ID --repo tage-ilot/stagepilot-beta --exit-status
+   gh run view RUN_ID --repo tage-ilot/stagepilot-beta --log
+   ```
+
+   Replace RUN_ID with the exact new report run. Do not run `apply=apply`:
+   it has no exact-ID filter and is not safe generic hardware cleanup. If
+   residue remains, retain evidence and request scoped admin recovery, not
+   a global sweep. Queued cleanup is not successful cleanup; wait for separately
+   authorized runner recovery. Preserve the documented two stranded registry
+   entries as a historical limitation, not as proof of today's counters.
+   Remove only this disposable account's test sessions/users, local machine
+   identity/OS credential-store entries, app and installer files through the
+   app/OS uninstall interfaces. Never delete a shared data directory or revoke
+   production credentials. Inspect before removing private evidence under policy.
+   Record `final_cleanup` only after local cleanup and provider read-back.
+
+7. Reports land at `%USERPROFILE%\StagePilot-disposable-acceptance\native-acceptance.json`
+   on Windows and `$HOME/StagePilot-disposable-acceptance/native-acceptance.json`
+   on each Mac. They contain per-platform installers and observed checks, not
+   automatically verified hardware facts. On a private review machine, combine
+   the three `platforms` records into one schema-1 report, preserving exactly
+   the same source/target pair and only those two installer versions. Inspect
+   for secrets before any sharing. Run the final full-matrix gate:
+
+   ```sh
+   python3 scripts/beta_release_acceptance.py --report PRIVATE_COMBINED_REPORT verify --from-version FROM_VERSION --to-version TO_VERSION
+   ```
+
+   FROM_VERSION and TO_VERSION omit the leading `v`. `verify` requires both
+   installer receipts and all ten checks on all three platforms; it does not
+   record D8 or replace its separate observations. Missing hardware, reboot,
+   publisher-trust observation, or updater proof keeps acceptance UNPROVEN.
+
+## Step 5 — Rollback of a live public updater
+
+Only an authorized release operator may unpublish a bad release:
 
 ```sh
-node scripts/set-release-version.mjs 1.1.103-beta.6
-(cd backend && uv lock --check)   # must pass; see note below
-node scripts/validate_versions.mjs v1.1.103-beta.6
-node scripts/audit_beta_release.mjs source
-git add -A
-git commit -m "chore(release): StagePilot 1.1.103-beta.6"
-git push beta HEAD:refs/heads/main
-git tag -a v1.1.103-beta.6 -m "StagePilot 1.1.103-beta.6"
-git push beta v1.1.103-beta.6
+gh release edit BAD_TAG --repo tage-ilot/stagepilot-beta --draft
 ```
 
-> **Why `uv lock --check` is mandatory.** `uv` records the project version in
-> PEP 440 normalized form (`1.1.103b4`), not the semantic-version text
-> (`1.1.103-beta.6`). `v1.1.103-beta.3` was burned because the version bump
-> wrote the semver string into `backend/uv.lock`, leaving the lockfile stale, so
-> the `uv sync --locked` step failed in every native job *after* the expensive
-> toolchain install. `scripts/set-release-version.mjs` now normalizes correctly
-> and `scripts/validate_versions.mjs` fails fast on any drift, on the cheap
-> Linux `validate` job rather than on three native runners.
-
-The tag push triggers `release-macos.yml`. Watch it:
-
-```sh
-gh run watch "$(gh run list --repo tage-ilot/stagepilot-beta \
-  --workflow release-macos.yml --limit 1 --json databaseId -q '.[0].databaseId')"
-```
-
-Expected published assets on the release (standalone `.sig` files are staging
-inputs and are deliberately **not** published):
-
-- `StagePilot_1.1.103-beta.6_aarch64.dmg`
-- `StagePilot_1.1.103-beta.6_x64.dmg`
-- `StagePilot_1.1.103-beta.6_aarch64.app.tar.gz`
-- `StagePilot_1.1.103-beta.6_x64.app.tar.gz`
-- `StagePilot_1.1.103-beta.6_x64-setup.exe`
-- `latest.json`
-
-Read back:
-
-```sh
-gh release view v1.1.103-beta.6 --repo tage-ilot/stagepilot-beta \
-  --json tagName,isDraft,assets -q '{tag:.tagName,draft:.isDraft,assets:[.assets[].name]}'
-```
-
-The release must be non-draft and must carry exactly the six assets above.
-`latest.json` is generated for release-integrity purposes even though the
-broker is not deployed — do not skip its generation or validation, since it
-is the same artifact a future promoted release depends on. There is no
-broker to read it back from in the beta: distribution is the direct
-GitHub Release download, so users install straight from the release page.
-
-## Step 4 — Native acceptance for release 1
-
-On each of Windows x64, macOS arm64, and macOS x64, with a fresh account:
-
-```sh
-python scripts/beta_release_acceptance.py --report PRIVATE_REPORT installer \
-  --platform PLATFORM --version 1.1.103-beta.6 --file INSTALLER
-```
-
-Then record every check name, one command each:
-
-```sh
-python scripts/beta_release_acceptance.py --report PRIVATE_REPORT check \
-  --platform PLATFORM --name local_health --evidence "short local receipt"
-```
-
-Repeat for `transparent_enrollment`, `first_operator`, `https_wss_roles`,
-`restart_recovery`, `reboot_recovery`, `disable_reenable_provider_cleanup`,
-then `final_cleanup`. This clears D3–D7. Record a plain operator observation
-for Gatekeeper/SmartScreen behaviour to clear D8. `updater_discovery` and
-`updater_install_relaunch` are **not part of release 1** — they belong to the
-deferred update-acceptance path above and require a release 2 that will not
-be published for this beta. Do not run `beta_release_acceptance.py verify`
-for release 1: `verify` is a two-release update-acceptance gate
-(`--from-version`/`--to-version`) and is itself part of the deferred scope.
-
-Finish by revoking every disposable installation created during acceptance
-and confirming zero residue using the two commands in "Recovering a
-stranded disposable installation" above.
-
-## Step 5 — Rollback
-
-The beta ships as a direct GitHub Release download with no broker and no
-in-app updater, so rollback is a distribution-side action only — there is no
-broker variable to repoint or redeploy:
-
-- Keep the bad tag and release immutable. Never delete, move, or reuse a
-  version.
-- Unpublish the bad Release (`gh release edit v1.1.103-beta.6 --repo
-  tage-ilot/stagepilot-beta --draft` marks it a draft, hiding it from the
-  Releases page for download while preserving the tag and assets for audit).
-- Fix the problem, bump to the next version, and publish a new release
-  following Steps 3–4 again. Point any download instructions at the new tag.
+Keep the tag/assets for audit; never move/reuse the tag or replace signed
+payloads in place. Drafting removes it from eligible public latest releases,
+so `releases/latest/download/latest.json` resolves to the release GitHub now
+selects as latest (or fails if none is eligible). It does not downgrade already
+updated clients. Read back both `gh release view --repo tage-ilot/stagepilot-beta
+--json tagName,isDraft` and the anonymous manifest URL; never assume the
+previous release was selected. Fix forward with a higher signed version;
+manually install a safe build if in-app recovery is impossible. No broker
+variable/deploy is part of this rollback; Remote identities remain untouched.

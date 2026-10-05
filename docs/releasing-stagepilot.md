@@ -15,10 +15,11 @@ not require Apple Developer ID or notarization. See
 The beta ships from `tage-ilot/stagepilot-beta` only; never tag, push, or release
 `tage-ilot/stagepilot` for a beta.
 
-**Release 1 is published: `v1.1.103-beta.6`** —
-https://github.com/tage-ilot/stagepilot-beta/releases/tag/v1.1.103-beta.6 at
-commit `e7af35a7c2e9e0bd53cec90eacb77c0511699058`. The next available version is
-`v1.1.103-beta.7`.
+Latest published release at this refresh: `v1.1.104-beta.23`.
+Read current latest with `gh release view --repo tage-ilot/stagepilot-beta
+--json tagName,isDraft,assets` before selecting a new, unused version.
+Historical release 1 was `v1.1.103-beta.6` at
+`e7af35a7c2e9e0bd53cec90eacb77c0511699058`; it is not today's beta.
 
 Five earlier attempts burned immutable tags and are left in place, unmoved:
 `v1.1.103-beta.1` (bootstrap failure), `v1.1.103-beta.2` (cross-platform mypy
@@ -30,15 +31,14 @@ failed because the self-hosted runner has no `gh` CLI). Follow
 and the authoritative
 [native completion runbook](native-completion-runbook.md).
 
-In-app update is **off for this beta by operator decision**: the release broker
-is not deployed and no `STAGEPILOT_RELEASE_TOKEN` is issued. Distribution is the
-direct GitHub Release download. The beta Windows/macOS release overlays still
-point at the narrowly allowlisted control-plane broker endpoint and `latest.json`
-is still generated and signature-validated, so the path stays promotable, but
-nothing consumes it during the beta. The base/main configuration keeps the
-public main release endpoint, so a main build never follows beta metadata and a
-beta build never follows main releases. Never put a GitHub PAT in Tauri,
-frontend code, or an artifact.
+The repository stays public indefinitely and the updater is live through
+GitHub `releases/latest/download/latest.json`, not a control-plane broker.
+Base config and both release overlays in this beta repository select that
+endpoint. The retained STABLE/BETA settings switch selects the runtime channel.
+No `STAGEPILOT_RELEASE_TOKEN` or broker deployment is required. Never embed a
+GitHub PAT in Tauri, frontend code, or an artifact. Fresh hardware acceptance,
+including discovery/install/relaunch and Gatekeeper/SmartScreen, remains
+UNPROVEN; use the single operator checklist in the native completion runbook.
 
 ## One-time updater key setup
 
