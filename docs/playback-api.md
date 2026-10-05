@@ -25,7 +25,35 @@ Find closes the old listener and starts a fresh address search; it does not
 change the saved manual override. Disable/source switching and shutdown close
 the old transport, wait for its bounded thread work, and discard old queued
 observations before starting the next input. MIDI callbacks retain their existing
-connection-generation guards. Inputs are mutually exclusive.
+connection-generation guards. In Playback API mode, the saved native/network
+MIDI input stays open as an automatic fallback (missing native MIDI capability
+does not prevent the API listener from starting). Explicit `real` mode runs MIDI
+only; `simulated` runs neither live input.
+
+### One Playback connection and one action owner
+
+The unified connection is successful whenever either live input is connected.
+API health requires WebSocket up and a valid heartbeat less than five seconds
+old; MIDI uses its existing verified input-connected state. API-only owns
+immediately. With MIDI already connected, API takes over after three seconds of
+stable heartbeats (gaps over 1.5 seconds restart that stability interval). A
+disconnect or heartbeat expiry immediately permits MIDI actions; the status
+projection checks expiry/failback every 50 ms even without incoming events.
+MIDI loss does not delay an already healthy API. No suppressed event is replayed.
+
+Once API owns, every MIDI action is ignored and retained in the MIDI monitor as
+`ignored: Playback API active`. Song-order validity never changes ownership:
+healthy API with stale/unknown order remains connected and sole owner, blocks
+starts/restarts from both inputs, and allows API pause/stop outside discovery.
+Stale API order never gates MIDI actions when MIDI actually owns. Discovery
+suppresses both inputs until exit. Queued work rechecks current ownership and
+ownership generations; API events received while MIDI owns are monitor-only.
+
+A two-second cross-source dedupe window suppresses the same position start or
+restart, or timer-stop action across ownership changes. A legacy unpositioned
+`start_next` arriving after another source's start is also deduplicated in that
+window. Different explicit positions and same-source repeats retain their
+existing behavior. Rejected actions do not reserve a successful-action key.
 
 ## Discover Song Order: the sole control exception
 
@@ -89,6 +117,7 @@ Previous/Next routes. Keep controls inside the existing MIDI/Playback settings
 widget, with MIDI in the initially collapsed Advanced disclosure (frontend task).
 
 - `GET /status`: typed network/configuration/discovery snapshot below.
+- `GET /connection`: only the unified `{active_source, sources, connected, reason}`.
 - `GET /events`: `{events: [{event: PlaybackEvent, discovery: bool}], capacity: 100}`.
   Oldest-first bounded recent receive observations, including monitor-only ones.
   Poll while the configuration window is open; replace the list, do not append
@@ -116,7 +145,10 @@ Status fields:
 ```text
 selected: bool                 source is playback_api, independently of enable
  enabled: bool                 persisted/effective on/off setting
- connected: bool               heartbeat-verified current receive connection
+ connected: bool               either verified live input is connected
+ active_source: playback_api|midi|none
+ sources: {playback_api: {connected, reason}, midi: {connected, reason}}
+ reason: string                plain-language unified connection/action eligibility
  host: string|null             current/last attempted endpoint, not manual setting
  port: int
  source: manual|loopback|lan|null
@@ -136,18 +168,25 @@ Read full settings at `GET /api/v1/settings`; change
 `integration_modes.midi_source` through `PUT /api/v1/settings` to select
 `playback_api`, `real`, or `simulated`. Source-only/MIDI/Playback updates apply
 without restart and report `restart_required: false`; unrelated integration
-registration changes retain the existing restart requirement. MIDI selection,
-simulation and monitor routes are available only while MIDI is selected; no
-stopped/old controller can be used to bypass source exclusivity. Both settings
+registration changes retain the existing restart requirement. MIDI selection and
+monitor routes remain available for the fallback while API is selected; cue
+simulation still requires explicitly selecting MIDI. No stopped/old controller
+can bypass ownership checks. Both settings
 routes refuse order/capture edits; only completed discovery produces those fields.
 Settings writes/Find are serialized against discovery and cannot persist a
 configuration change after returning a discovery conflict. Other aspect-specific
 settings routes and unrelated generic settings writes do not re-install/rearm the
 Playback mapping.
 
-The legacy application `midi_status` readiness slot represents the selected live
-input; Playback publishes connection changes there. `/playback-api/status`
-distinguishes the actual input/source. Plugin health describes lifecycle-task
+The legacy application `midi_status` readiness slot represents the unified
+Playback connection; only the arbiter projects connection changes there. The
+dashboard state and unified status therefore cannot report one source's failure
+as a disconnected Playback while the other is connected. `/playback-api/status`
+exposes the active owner and both sources; use `sources.playback_api.connected`
+for API-only controls such as discovery, not top-level `connected`. Legacy fields
+remain available, but API endpoint/playing/order fields still describe the API,
+not MIDI. A disconnected non-owner's transport error does not become a top-level
+error on the healthy unified connection. Plugin health describes lifecycle-task
 health, not proof of connectivity. The input lifecycle is registered under
 `midi_playback` for initial real MIDI and `playback_api` otherwise; its managed
 name remains stable while switching source.

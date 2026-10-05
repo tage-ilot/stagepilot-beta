@@ -82,8 +82,21 @@ Reconnect revalidates its first snapshot rather than invalidating by itself.
 `PUT /api/v1/playback-api/settings` applies on/off and endpoint settings live;
 `GET /api/v1/playback-api/status`, `GET /events`, `POST /find`, and confirmed
 `POST /discover-song-order` support the existing configuration window. MIDI
-remains selected with `integration_modes.midi_source: real`; source switching
-closes old listeners and discards old queues before starting the alternative.
+remains explicitly selectable with `integration_modes.midi_source: real`. In
+default API mode, the saved MIDI input also stays open as automatic fallback.
+One unified Playback connection is successful if either source connects. Healthy
+API (WebSocket and heartbeat within five seconds) is the sole action owner after
+three seconds of stable heartbeats when taking over from MIDI. API disconnect or
+heartbeat expiry permits MIDI immediately; healthy API without valid song order
+still owns but suppresses starts/restarts, never silently switching to MIDI.
+Ignored MIDI actions remain visible as `ignored: Playback API active`. A
+two-second cross-source action dedupe and queued ownership checks prevent replay
+across failover/failback. `GET /api/v1/playback-api/status` adds `active_source`,
+`sources`, and `reason`; its `connected` and application `midi_status` both describe
+the unified connection. Use `sources.playback_api.connected` for API discovery
+eligibility. `GET /api/v1/playback-api/connection` returns the unified fields only.
+Explicit `real` mode disables the API; `simulated` disables both live listeners.
+Source switching closes old listeners and discards old queues before restart.
 See [Playback API](playback-api.md) for full route bodies, discovery limits,
 monitor fields, safety guarantees and protocol limitations.
 
@@ -175,14 +188,14 @@ sources. Simulation modes remain backend development overrides only.
 
 ## MIDI Playback variables
 
-Real Playback MIDI is disabled by default. Saving the dashboard MIDI settings
-enables it for the next launch. MIDI uses an operating-system input port and
+Playback API is preferred by default, with the configured real MIDI input kept
+as fallback. MIDI uses an operating-system input port and
 needs no client ID, API key, password, or other secret. The environment variable
 remains available as a higher-priority development override.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `STAGEPILOT_MIDI_SOURCE` | `simulated` | Set to `real` to register the MIDI Playback plugin. |
+| `STAGEPILOT_MIDI_SOURCE` | `playback_api` | API preferred with MIDI fallback; `real` selects MIDI only, `simulated` disables both live inputs. |
 | `STAGEPILOT_MIDI_INPUT_NAME` | unset | Exact, unique startup input-port name. An unset name starts disconnected and still allows discovery. |
 | `STAGEPILOT_MIDI_CHANNEL` | `1` | One-based MIDI channel to accept, from 1 through 16. |
 | `STAGEPILOT_MIDI_NOTE` | `112` (E7 in Playback) | Fixed note accepted for all StagePilot cues. |

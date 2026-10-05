@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from stagepilot.api.remote_retry import RemoteRetryRoute
 from stagepilot.core.config import PlaybackApiSettings
 from stagepilot.core.settings import SettingsFileError
+from stagepilot.plugins.playback_api.arbiter import PlaybackConnection, Source, SourceStatus
 from stagepilot.plugins.playback_api.client import ConnectionOptions
 from stagepilot.plugins.playback_api.normalizer import PlaybackEvent
 from stagepilot.plugins.playback_api.plugin import DiscoveryConflict, PlaybackInputPlugin
@@ -30,6 +31,9 @@ class PlaybackStatusResponse(BaseModel):
     selected: bool
     enabled: bool
     connected: bool
+    active_source: Source
+    sources: dict[str, SourceStatus]
+    reason: str
     host: str | None
     port: int
     source: Literal["manual", "loopback", "lan"] | None
@@ -66,14 +70,19 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
     status = controller.status
     config = controller.settings.playback_api
     heartbeat = status.heartbeat
+    connection = controller.connection
     return PlaybackStatusResponse(
         selected=controller.selected,
         enabled=config.enabled,
-        connected=status.connected,
+        connected=connection.connected,
+        active_source=connection.active_source,
+        sources=connection.sources,
+        reason=connection.reason,
         host=status.host,
         port=status.port,
         source=status.source,
-        last_error=controller.discovery_error or status.last_error,
+        last_error=controller.discovery_error
+        or (None if connection.connected else status.last_error),
         playing=heartbeat.playing if heartbeat else False,
         setlist_cloud_version=heartbeat.setlist_version if heartbeat else None,
         discovery=controller.discovery,
@@ -90,7 +99,15 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
 
 @router.get("/status", response_model=PlaybackStatusResponse)
 async def status(request: Request) -> PlaybackStatusResponse:
+    await _controller(request)._publish_connection()
     return status_response(_controller(request))
+
+
+@router.get("/connection", response_model=PlaybackConnection)
+async def connection(request: Request) -> PlaybackConnection:
+    controller = _controller(request)
+    await controller._publish_connection()
+    return controller.connection
 
 
 @router.get("/events", response_model=PlaybackEventsResponse)

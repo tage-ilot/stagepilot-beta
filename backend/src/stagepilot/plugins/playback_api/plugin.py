@@ -20,6 +20,11 @@ from stagepilot.core.settings import PersistentSettings, SettingsService
 from stagepilot.core.state import StateStore
 from stagepilot.models.state import ConnectionStatus, PluginHealth, PluginStatus
 from stagepilot.plugins.midi_playback import MidiPlaybackPlugin
+from stagepilot.plugins.playback_api.arbiter import (
+    ArbitratedDispatcher,
+    PlaybackConnection,
+    PlaybackSourceArbiter,
+)
 from stagepilot.plugins.playback_api.client import (
     ConnectionOptions,
     Observer,
@@ -76,9 +81,19 @@ class PlaybackInputPlugin(Plugin):
         self._midi_factory = midi_factory
         self._client_factory = client_factory
         self.midi: MidiPlaybackPlugin | None = None
-        if settings.integration_modes.midi_source is MidiSource.REAL and settings.midi.enabled:
+        if (
+            settings.integration_modes.midi_source is not MidiSource.SIMULATED
+            and settings.midi.enabled
+        ):
             self.midi = midi_factory(settings)
-        self.mapper = PlaybackMapper(dispatcher, state_store)
+        self.arbiter = PlaybackSourceArbiter()
+        self._dispatcher = ArbitratedDispatcher(self.arbiter, dispatcher, state_store)
+        self.mapper = PlaybackMapper(self._dispatcher, state_store)
+        self._dispatcher.suppressed = lambda: self.mapper.discovery
+        self._ticker: asyncio.Task[None] | None = None
+        self._published: tuple[bool, str] | None = None
+        self._ownership_revision = 0
+        self._wire_midi()
         saved = settings.playback_api
         if saved.song_order and saved.captured_version is not None:
             self.mapper.install_order(tuple(saved.song_order), saved.captured_version)
@@ -91,6 +106,7 @@ class PlaybackInputPlugin(Plugin):
         self._active = False
         self._lifecycle = asyncio.Lock()
         self._dispatch_lock = asyncio.Lock()
+        self._connection_lock = asyncio.Lock()
         self._discovery_task: asyncio.Task[object] | None = None
         self.discovery: Literal["idle", "running", "failed", "done"] = "idle"
         self.progress = 0
@@ -125,15 +141,90 @@ class PlaybackInputPlugin(Plugin):
             config.enabled and self.selected, config.host, config.port, config.auto_scan
         )
 
+    def _wire_midi(self) -> None:
+        if self.midi is not None:
+            self.midi._action_dispatcher = self._dispatcher
+            self.midi.action_guard = self._midi_guard
+            self.midi.ownership_revision = self._revision
+            self.midi.connection_observer = self._midi_connection
+
+    def _revision(self) -> int:
+        self.arbiter.snapshot()
+        return self.arbiter.revision
+
+    def _midi_guard(self) -> str | None:
+        if self.discovery == "running":
+            return "ignored: song order discovery active"
+        if self.arbiter.snapshot().active_source == "playback_api":
+            return "ignored: Playback API active"
+        return None
+
+    async def _midi_connection(self, status: ConnectionStatus) -> None:
+        self.arbiter.midi_connected = status is ConnectionStatus.CONNECTED
+        await self._publish_connection()
+
+    @property
+    def connection(self) -> PlaybackConnection:
+        result = self.arbiter.snapshot()
+        if result.active_source == "playback_api" and self.mapper.stale:
+            result.reason = (
+                "Connected via Playback API; song order stale/unknown — "
+                "discover song order before starts."
+            )
+        return result
+
+    async def _publish_connection(self) -> None:
+        async with self._connection_lock:
+            connection = self.connection
+            if self._ownership_revision != self.arbiter.revision:
+                self.mapper.discard_pending()
+                self._ownership_revision = self.arbiter.revision
+            key = (connection.connected, connection.reason)
+            if key == self._published:
+                return
+            await self.event_bus.publish(
+                new_event(
+                    EventType.CONNECTION_CHANGED,
+                    source="playback_connection",
+                    payload=ConnectionPayload(
+                        integration="midi",
+                        status=ConnectionStatus.CONNECTED
+                        if connection.connected
+                        else ConnectionStatus.DISCONNECTED,
+                        detail=connection.reason,
+                    ),
+                )
+            )
+            self._published = key
+
+    async def _tick(self) -> None:
+        while True:
+            await self._publish_connection()
+            await asyncio.sleep(0.05)
+
     async def start(self) -> None:
         async with self._lifecycle:
             if self._running:
                 return
             self._running = True
             self._consumer = asyncio.create_task(self._consume(), name="playback-input-consumer")
+            self._ticker = asyncio.create_task(self._tick(), name="playback-source-arbiter")
             await self._start_selected()
 
     async def _start_selected(self) -> None:
+        if (
+            self.settings.integration_modes.midi_source is not MidiSource.SIMULATED
+            and self.settings.midi.enabled
+        ):
+            if self.midi is None:
+                self.midi = self._midi_factory(self.settings)
+                self._wire_midi()
+            try:
+                await self.midi.start()
+            except RuntimeError:
+                # Missing native MIDI capability must not stop the API listener.
+                if not self.selected:
+                    raise
         if self.selected and self.settings.playback_api.enabled:
             self._active = True
             generation = self._generation
@@ -141,34 +232,25 @@ class PlaybackInputPlugin(Plugin):
                 self._options(), lambda status, events: self._observe(generation, status, events)
             )
             await self.client.start()
-        elif (
-            self.settings.integration_modes.midi_source is MidiSource.REAL
-            and self.settings.midi.enabled
-        ):
-            if self.midi is None:
-                self.midi = self._midi_factory(self.settings)
-            await self.midi.start()
 
-    async def _stop_selected(self) -> None:
+    async def _stop_selected(self, *, keep_midi: bool = False) -> None:
         self._active = False
         self._generation += 1
         self.mapper.discard_pending()
+        self.arbiter.observe_api(False, False)
+        await self._publish_connection()
         if self.client is not None:
             await self.client.stop()
-        if self.midi is not None:
+        if self.midi is not None and not keep_midi:
             await self.midi.stop()
         self._heartbeat = None
         self._connection = False
+        if not keep_midi:
+            self.arbiter.midi_connected = False
         self._changed.set()
         while not self._queue.empty():
             self._queue.get_nowait()
-        await self.event_bus.publish(
-            new_event(
-                EventType.CONNECTION_CHANGED,
-                source="playback_api",
-                payload=ConnectionPayload(integration="midi", status=ConnectionStatus.DISCONNECTED),
-            )
-        )
+        await self._publish_connection()
 
     async def stop(self) -> None:
         task = self._discovery_task
@@ -178,6 +260,11 @@ class PlaybackInputPlugin(Plugin):
                 await task
         async with self._lifecycle:
             self._running = False
+            if self._ticker is not None:
+                self._ticker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._ticker
+                self._ticker = None
             # Finish any action already in flight before releasing input resources.
             async with self._dispatch_lock:
                 await self._stop_selected()
@@ -252,6 +339,10 @@ class PlaybackInputPlugin(Plugin):
             self.mapper.discard_pending()
         if fresh or not status.connected:
             self._changed.set()
+        self.arbiter.observe_api(status.connected, fresh)
+        if self._ownership_revision != self.arbiter.revision:
+            self.mapper.discard_pending()
+            self._ownership_revision = self.arbiter.revision
         observations = self.mapper.observe(heartbeat if fresh else None, events)
         self._history.extend(MonitorEntry(item.event, item.discovery) for item in observations)
         if status.connected != self._connection:
@@ -274,7 +365,8 @@ class PlaybackInputPlugin(Plugin):
                 )
             )
         for item in observations:
-            self._put((generation, item))
+            if self.arbiter.allows("playback_api"):
+                self._put((generation, item))
 
     def _put(self, item: tuple[int, Observation | ConnectionPayload]) -> None:
         try:
@@ -292,12 +384,9 @@ class PlaybackInputPlugin(Plugin):
                         continue
                     payload = item[1]
                     if isinstance(payload, ConnectionPayload):
-                        await self.event_bus.publish(
-                            new_event(
-                                EventType.CONNECTION_CHANGED, source="playback_api", payload=payload
-                            )
-                        )
-                    elif self.status.connected:
+                        await self._publish_connection()
+                    elif self.arbiter.allows("playback_api"):
+                        await self._publish_connection()
                         await self.mapper.dispatch(payload)
             except Exception:
                 self.discovery_error = "Playback action processing failed."
@@ -307,13 +396,17 @@ class PlaybackInputPlugin(Plugin):
             return await self.midi.health()
         # Health describes the lifecycle supervisor, not external connectivity.
         status = PluginStatus.RUNNING if self._running else PluginStatus.STOPPED
-        if self._consumer is not None and self._consumer.done() and self._running:
+        if self._running and any(
+            task is not None and task.done() for task in (self._consumer, self._ticker)
+        ):
             status = PluginStatus.ERROR
         return PluginHealth(
             name=self.name,
             version=self.version,
             status=status,
-            last_error=self.discovery_error or self.status.last_error,
+            last_error=None
+            if self.connection.connected
+            else self.discovery_error or self.status.last_error,
         )
 
     async def find(self) -> PlaybackStatus:
@@ -325,13 +418,17 @@ class PlaybackInputPlugin(Plugin):
             # Restart the selected receive lifecycle: its finder validates heartbeat,
             # preserves manual override/local-first policy, and reconnects to the result.
             async with self._dispatch_lock:
-                await self._stop_selected()
+                await self._stop_selected(keep_midi=True)
                 await self._start_selected()
             return self.status
 
     def _check_discovery(self, version: int | None = None) -> Heartbeat:
         heartbeat = self._heartbeat
-        if not self._active or not self.status.connected or heartbeat is None:
+        if (
+            not self._active
+            or not self.arbiter.snapshot().sources["playback_api"].connected
+            or heartbeat is None
+        ):
             raise DiscoveryConflict(
                 "Playback is disconnected. Enable remote connections and connect first."
             )

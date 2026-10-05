@@ -94,8 +94,6 @@ def _runtime(request: Request) -> Runtime:
 def _midi_controller(runtime: Runtime) -> MidiController | None:
     inputs = runtime.playback_input
     if inputs is not None:
-        if inputs.settings.integration_modes.midi_source is not MidiSource.REAL:
-            return None
         return inputs.midi
     return runtime.midi_controller
 
@@ -264,6 +262,13 @@ async def _propresenter_status(
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
     runtime = _runtime(request)
+    playback_ready = True
+    if runtime.playback_input is not None:
+        await runtime.playback_input._publish_connection()
+        playback_ready = (
+            runtime.playback_input.settings.integration_modes.midi_source is MidiSource.SIMULATED
+            or runtime.playback_input.connection.connected
+        )
     state = await runtime.state_store.snapshot()
     plugins = await runtime.plugin_manager.health()
     service_ready = (
@@ -278,6 +283,7 @@ async def health(request: Request) -> HealthResponse:
         state.application_status is ApplicationStatus.RUNNING
         and all(plugin.status is PluginStatus.RUNNING for plugin in plugins)
         and service_ready
+        and playback_ready
     )
     return HealthResponse(
         status="healthy" if healthy else "degraded",
@@ -296,7 +302,10 @@ async def liveness() -> dict[str, str]:
 
 @router.get("/state", response_model=ApplicationState)
 async def state(request: Request) -> ApplicationState:
-    return await _runtime(request).state_store.snapshot()
+    runtime = _runtime(request)
+    if runtime.playback_input is not None:
+        await runtime.playback_input._publish_connection()
+    return await runtime.state_store.snapshot()
 
 
 @router.get("/settings", response_model=SettingsResponse)
@@ -679,6 +688,8 @@ async def simulate_midi_cue(
     request: Request,
 ) -> MidiCueSimulationResponse:
     runtime = _runtime(request)
+    if runtime.playback_input is not None and runtime.playback_input.selected:
+        raise HTTPException(status_code=409, detail="Select MIDI to simulate a cue.")
     controller = _midi_controller(runtime)
     if controller is None:
         raise HTTPException(status_code=409, detail="The MIDI Playback plugin is disabled.")

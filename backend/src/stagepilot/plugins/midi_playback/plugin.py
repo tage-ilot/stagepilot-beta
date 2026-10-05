@@ -62,6 +62,7 @@ class _QueuedMidiMessage:
     simulated: bool
     release_after: bool = False
     completion: asyncio.Future[ActionOutcome] | None = None
+    ownership_revision: int | None = None
 
 
 class MidiPlaybackPlugin(Plugin, MidiController):
@@ -122,6 +123,11 @@ class MidiPlaybackPlugin(Plugin, MidiController):
         self._stopping = False
         self._overflow_reported = False
         self._logger = get_logger(self.name)
+        self.action_guard: Callable[[], str | None] | None = None
+        self.ownership_revision: Callable[[], int] | None = None
+        self.connection_observer: Callable[[ConnectionStatus], Coroutine[Any, Any, None]] | None = (
+            None
+        )
 
     async def start(self) -> None:
         if self._status is not PluginStatus.STOPPED:
@@ -530,6 +536,16 @@ class MidiPlaybackPlugin(Plugin, MidiController):
         message = queued.message
         if queued.connection_id is not None and queued.connection_id != self._active_connection_id:
             return ActionOutcome(False, "A stale MIDI message was ignored.")
+        if (
+            message.type != "note_off"
+            and message.velocity != 0
+            and self.ownership_revision is not None
+            and queued.ownership_revision != self.ownership_revision()
+        ):
+            detail = self.action_guard() if self.action_guard is not None else None
+            detail = detail or "ignored: Playback source ownership changed"
+            self._record_message(queued, MidiMessageDisposition.ACTION_REJECTED, detail)
+            return ActionOutcome(False, detail)
 
         if message.type == "note_off" or message.velocity == 0:
             self._release_held_note(message.channel, message.note)
@@ -642,6 +658,13 @@ class MidiPlaybackPlugin(Plugin, MidiController):
 
         self._held_notes.add(trigger_key)
         self._last_triggered_at[trigger_key] = now
+        ignored = self.action_guard() if self.action_guard is not None else None
+        if ignored is not None:
+            outcome = ActionOutcome(False, ignored)
+            self._record_message(
+                queued, MidiMessageDisposition.ACTION_REJECTED, ignored, action=action
+            )
+            return outcome
         source = "midi.simulation" if queued.simulated else self.name
         if song_position is not None:
             outcome = await self._action_dispatcher.dispatch_song_position(
@@ -707,6 +730,8 @@ class MidiPlaybackPlugin(Plugin, MidiController):
                 "The MIDI input queue was full; this message was dropped.",
             )
             return False
+        if self.ownership_revision is not None:
+            queued.ownership_revision = self.ownership_revision()
         queue.put_nowait(queued)
         return True
 
@@ -770,6 +795,9 @@ class MidiPlaybackPlugin(Plugin, MidiController):
             return
         self._connection_status = status
         self._connection_detail = detail
+        if self.connection_observer is not None:
+            await self.connection_observer(status)
+            return
         await self.event_bus.publish(
             new_event(
                 EventType.CONNECTION_CHANGED,

@@ -193,7 +193,7 @@ class PersistentSettings(BaseModel):
                 request_timeout_seconds=planning_center.request_timeout_seconds,
             ),
             midi=self.midi.model_copy(
-                update={"enabled": self.integration_modes.midi_source is MidiSource.REAL}
+                update={"enabled": self.integration_modes.midi_source is not MidiSource.SIMULATED}
             ),
             lights=self.lights,
             playback_api=self.playback_api,

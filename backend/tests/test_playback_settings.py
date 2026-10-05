@@ -93,7 +93,7 @@ def test_explicit_v2_selection_and_playback_fields_survive_restart(
     service = SettingsService(store, MemoryCredentialStore(), environ={})
     runtime = service.load()
     assert runtime.integration_modes.midi_source is source
-    assert runtime.midi.enabled is (source is MidiSource.REAL)
+    assert runtime.midi.enabled is (source is not MidiSource.SIMULATED)
     assert runtime.playback_api == saved.playback_api
     assert runtime.network_midi == saved.network_midi
     assert service.snapshot() == saved
