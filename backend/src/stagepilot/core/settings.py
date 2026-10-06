@@ -116,7 +116,7 @@ class PersistentSettings(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_v1(cls, value: object) -> object:
-        """Switch legacy installs once, without altering their saved MIDI block."""
+        """Move untouched legacy installs to Playback; keep explicit MIDI choices."""
         if not isinstance(value, dict):
             return value
         version = value.get("schema_version", SETTINGS_SCHEMA_VERSION)
@@ -125,7 +125,16 @@ class PersistentSettings(BaseModel):
             modes = value.get("integration_modes", {})
             if not isinstance(modes, dict):
                 return value
-            migrated["integration_modes"] = {**modes, "midi_source": MidiSource.PLAYBACK_API}
+            midi = value.get("midi", {})
+            chose_midi = (
+                modes.get("midi_source") == MidiSource.REAL
+                and isinstance(midi, dict)
+                and bool(midi.get("input_name"))
+            )
+            # An install the user explicitly set up with a MIDI input keeps MIDI; the
+            # UI offers Scan Network to switch. Untouched old defaults move to Playback.
+            if not chose_midi:
+                migrated["integration_modes"] = {**modes, "midi_source": MidiSource.PLAYBACK_API}
             migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
             return migrated
         return value

@@ -4,18 +4,25 @@ import asyncio
 import base64
 import hashlib
 import json
+import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from stagepilot.core.config import MidiSettings, PlaybackApiSettings, Settings
+from stagepilot.core.config import (
+    IntegrationModes,
+    MidiSettings,
+    MidiSource,
+    PlaybackApiSettings,
+    Settings,
+)
 from stagepilot.core.events import ActionName
 from stagepilot.core.settings import (
     MemoryCredentialStore,
@@ -26,7 +33,7 @@ from stagepilot.core.settings import (
 from stagepilot.main import create_app
 from stagepilot.plugins.midi_playback.models import MidiMessage
 from stagepilot.plugins.playback_api.client import ConnectionOptions, Observer, PlaybackClient
-from stagepilot.plugins.playback_api.find import DiscoveryResult
+from stagepilot.plugins.playback_api.find import DiscoveryResult, ScanCandidate
 from stagepilot.plugins.playback_api.normalizer import Heartbeat, PlaybackEvent
 from stagepilot.plugins.playback_api.plugin import PlaybackInputPlugin
 from test_midi_config_api import FakeMidiBackend
@@ -455,7 +462,10 @@ async def test_default_status_remote_connections_diagnostic_and_disable() -> Non
         response = await client.put("/api/v1/playback-api/settings", json={"enabled": False})
         assert response.status_code == 200 and not response.json()["enabled"]
         assert not inputs.status.connected
-        assert (await client.post("/api/v1/playback-api/find")).status_code == 409
+        # Scan never needs prior setup: it turns Playback back on by itself.
+        inputs._scanner = lambda **_: []
+        assert (await client.post("/api/v1/playback-api/find")).status_code == 200
+        await wait_for(lambda: inputs.scan_state == "not_found")
 
 
 async def test_persistence_failure_leaves_live_configuration_untouched(
@@ -507,7 +517,7 @@ async def test_migrated_install_starts_playback_and_retains_midi_alternative(
                 "schema_version": 1,
                 "integration_modes": {
                     "service_source": "demo",
-                    "midi_source": "real",
+                    "midi_source": "simulated",
                     "timer_output": "simulated",
                 },
                 "midi": {
@@ -536,3 +546,122 @@ async def test_migrated_install_starts_playback_and_retains_midi_alternative(
         await wait_for(lambda: bool(midi.ports))
         assert controller(app).settings.midi.channel == 9
         assert controller(app).settings.midi.note == 110
+
+
+async def scan_done(client: httpx.AsyncClient, state: str) -> dict[str, Any]:
+    for _ in range(400):
+        data = (await client.get("/api/v1/playback-api/status")).json()
+        if data["scan"]["state"] == state:
+            return cast(dict[str, Any], data)
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"scan never reached {state}")
+
+
+async def test_scan_from_fresh_install_connects_with_one_click() -> None:
+    fake = FakePlayback()
+    app = create_app(Settings(), playback_client_factory=fake.client)
+    server = await asyncio.start_server(fake.accept, "127.0.0.1", 0)
+    fake.port = server.sockets[0].getsockname()[1]
+    try:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+            ) as client,
+        ):
+            inputs = controller(app)
+            inputs._scanner = lambda **_: [ScanCandidate("Example Mac", "127.0.0.1", "loopback")]
+            assert (await client.post("/api/v1/playback-api/find")).status_code == 200
+            data = await scan_done(client, "found")
+            await wait_for(lambda: inputs.status.connected)
+            data = (await client.get("/api/v1/playback-api/status")).json()
+            assert data["connected"] and data["active_source"] == "playback_api"
+            assert data["reason"].startswith("Connected to Playback")
+            assert data["settings"]["host"] == "127.0.0.1" and data["selected"]
+            assert data["scan"]["candidates"] == [{"name": "Example Mac", "host": "127.0.0.1"}]
+    finally:
+        server.close()
+        await server.wait_closed()
+        for writer in tuple(fake.writers):
+            writer.close()
+        await asyncio.gather(*fake.tasks, return_exceptions=True)
+
+
+async def test_scan_switches_explicit_midi_install_and_keeps_midi_settings() -> None:
+    settings = Settings(
+        integration_modes=IntegrationModes(midi_source=MidiSource.REAL),
+        midi=MidiSettings(enabled=True, input_name="Playback MIDI", channel=9),
+    )
+    midi = FakeMidiBackend(["Playback MIDI"])
+    fake = FakePlayback()
+    app = create_app(
+        settings, playback_client_factory=fake.client, midi_backend_factory=lambda: midi
+    )
+    server = await asyncio.start_server(fake.accept, "127.0.0.1", 0)
+    fake.port = server.sockets[0].getsockname()[1]
+    try:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+            ) as client,
+        ):
+            inputs = controller(app)
+            assert not inputs.selected
+            inputs._scanner = lambda **_: [ScanCandidate("Example Mac", "127.0.0.1", "loopback")]
+            assert (await client.post("/api/v1/playback-api/find")).status_code == 200
+            await scan_done(client, "found")
+            await wait_for(lambda: inputs.status.connected)
+            assert inputs.selected
+            saved = app.state.runtime.settings_service.snapshot()
+            assert saved.midi.channel == 9 and saved.midi.input_name == "Playback MIDI"
+    finally:
+        server.close()
+        await server.wait_closed()
+        for writer in tuple(fake.writers):
+            writer.close()
+        await asyncio.gather(*fake.tasks, return_exceptions=True)
+
+
+async def test_scan_not_found_wrong_host_multiple_cancel_and_validation() -> None:
+    app = create_app(Settings())
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        inputs = controller(app)
+        seen: list[dict[str, object]] = []
+
+        def none(**kwargs: Any) -> list[ScanCandidate]:
+            seen.append(kwargs)
+            return []
+
+        inputs._scanner = none
+        response = await client.post("/api/v1/playback-api/find", json={"host": "192.0.2.77"})
+        assert response.status_code == 200
+        data = await scan_done(client, "not_found")
+        assert seen[-1]["host_override"] == "192.0.2.77"
+        assert "Couldn't find Playback" in data["reason"] and not data["connected"]
+        assert data["settings"]["host"] is None  # nothing remembered on failure
+        two = [ScanCandidate("One", "192.0.2.1", "lan"), ScanCandidate("Two", "192.0.2.2", "lan")]
+        inputs._scanner = lambda **_: two
+        await client.post("/api/v1/playback-api/find")
+        data = await scan_done(client, "found")
+        assert [c["name"] for c in data["scan"]["candidates"]] == ["One", "Two"]
+        assert data["settings"]["host"] is None  # the user picks; nothing saved yet
+        started = threading.Event()
+
+        def slow(**kwargs: Any) -> list[ScanCandidate]:
+            started.set()
+            kwargs["cancel"].wait(5)
+            return []
+
+        inputs._scanner = slow
+        await client.post("/api/v1/playback-api/find")
+        await asyncio.to_thread(started.wait, 2)
+        data = (await client.post("/api/v1/playback-api/find/cancel")).json()
+        assert data["scan"]["state"] == "idle"
+        for bad in ({"host": "http://bad/"}, {"host": "a b"}, {"nope": 1}):
+            assert (await client.post("/api/v1/playback-api/find", json=bad)).status_code == 422

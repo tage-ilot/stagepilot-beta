@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -143,3 +145,60 @@ def find_playback(
                 if heartbeat:
                     return DiscoveryResult(host, port, "lan", heartbeat)
     return None
+
+
+@dataclass(frozen=True)
+class ScanCandidate:
+    name: str
+    host: str
+    source: DiscoverySource
+
+
+def computer_name(host: str) -> str:
+    """Best-effort friendly name; never raises and falls back to the address."""
+    if host == "127.0.0.1":
+        return "This computer"
+    try:
+        name = socket.gethostbyaddr(host)[0].split(".")[0]
+    except (OSError, UnicodeError):
+        return host
+    return name or host
+
+
+def scan_candidates(
+    *,
+    host_override: str | None = None,
+    port: int = 8080,
+    auto_scan: bool = True,
+    timeout: float = 3.0,
+    probe_endpoint: Probe = probe,
+    networks: Callable[[], tuple[ipaddress.IPv4Network, ...]] = local_networks,
+    cancel: threading.Event | None = None,
+    progress: Callable[[int, int], None] | None = None,
+    resolve_name: Callable[[str], str] = computer_name,
+) -> list[ScanCandidate]:
+    """Blocking: this computer first, then every Playback on the attached LAN."""
+    cancel = cancel or threading.Event()
+    if host_override is not None:
+        hit = probe_endpoint(host_override, port, timeout)
+        return [ScanCandidate(resolve_name(host_override), host_override, "manual")] if hit else []
+    if probe_endpoint("127.0.0.1", port, timeout):
+        return [ScanCandidate(resolve_name("127.0.0.1"), "127.0.0.1", "loopback")]
+    if not auto_scan or cancel.is_set():
+        return []
+    hosts = [str(h) for network in networks() for h in network.hosts()]
+    found: list[ScanCandidate] = []
+    chunk = 64
+    with ThreadPoolExecutor(max_workers=32, thread_name_prefix="playback-scan") as executor:
+        for start in range(0, len(hosts), chunk):
+            if cancel.is_set():
+                break
+            batch = hosts[start : start + chunk]
+            for host, hit in zip(
+                batch, executor.map(lambda h: probe_endpoint(h, port, timeout), batch), strict=True
+            ):
+                if hit:
+                    found.append(ScanCandidate(resolve_name(host), host, "lan"))
+            if progress:
+                progress(min(start + chunk, len(hosts)), len(hosts))
+    return found

@@ -292,7 +292,16 @@ export interface PlaybackConnection {
   sources: Record<"playback_api" | "midi", { connected: boolean; reason: string }>;
 }
 
+export interface PlaybackScanResult {
+  state: "idle" | "scanning" | "found" | "not_found";
+  candidates: { name: string; host: string }[];
+  reason: string | null;
+  current: number;
+  total: number;
+}
+
 export interface PlaybackStatusResponse extends PlaybackConnection {
+  scan: PlaybackScanResult;
   selected: boolean;
   enabled: boolean;
   host: string | null;
@@ -328,6 +337,7 @@ export interface PlaybackMonitorEntry {
     message_kind: string | null;
   };
   discovery: boolean;
+  at?: string;
 }
 
 export interface PlaybackEventsResponse {

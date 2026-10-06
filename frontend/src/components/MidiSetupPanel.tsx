@@ -11,7 +11,8 @@ import type {
 import { SetupPanelHeader } from "./SetupPanelHeader";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
 import { PlaybackApiPanel } from "./PlaybackApiPanel";
-import { playbackConnectionDetail, playbackMidiDetail } from "./playbackStatus";
+import { PlaybackSaveFooter, usePlaybackDraft } from "./PlaybackSaveFooter";
+import { playbackMidiNote } from "./playbackStatus";
 
 const cues: ReadonlyArray<readonly [MidiCueName, string]> = [
   ["start_next", "Start next"],
@@ -49,6 +50,7 @@ export function MidiSetupPanel({
   onSelect,
   onSimulate,
   onClose,
+  onDirtyChange,
   settings,
   pendingSettingsSave = false,
   settingsError = null,
@@ -67,6 +69,7 @@ export function MidiSetupPanel({
   onSelect: (inputId: string | null) => void;
   onSimulate: (cue: MidiCueName) => void;
   onClose?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
   settings: SettingsResponse | null;
   pendingSettingsSave?: boolean;
   settingsError?: string | null;
@@ -76,6 +79,7 @@ export function MidiSetupPanel({
   playback?: PlaybackController;
 }) {
   const [advanced, setAdvanced] = useState(false);
+  const draft = usePlaybackDraft(playback);
   const [candidateId, setCandidateId] = useState("");
   const [channel, setChannel] = useState("1");
   const [note, setNote] = useState("112");
@@ -129,6 +133,13 @@ export function MidiSetupPanel({
     };
   }, [channel, debounce, note, settings, velocities]);
 
+  const midiDirty = Boolean(settings) && advanced && (
+    channel !== String(settings!.settings.midi.channel)
+    || note !== String(settings!.settings.midi.note)
+    || debounce !== String(settings!.settings.midi.debounce_ms)
+    || cues.some(([cue]) => velocities[cue] !== String(settings!.settings.midi.mappings[cue] ?? ""))
+  );
+  useEffect(() => { onDirtyChange?.(draft.dirty); }, [draft.dirty, onDirtyChange]);
   const enabled = midi?.enabled ?? false;
   const selectedInput = midi?.inputs.find((input) => input.selected) ?? null;
   const connectedInput = midi?.inputs.find((input) => input.connected) ?? null;
@@ -152,18 +163,17 @@ export function MidiSetupPanel({
         title="Playback connection"
       />
 
-      {playback?.status && <p className="mt-3 text-sm text-slate-200" aria-live="polite">{playbackConnectionDetail(playback.status)}</p>}
-      <PlaybackApiPanel playback={playback} />
-      <button className="mt-4 min-h-11 rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5" aria-expanded={advanced} aria-controls="playback-advanced" onClick={() => setAdvanced((value) => !value)} type="button">{advanced ? "▾" : "▸"} Advanced</button>
+      <PlaybackApiPanel playback={playback} draft={draft} />
+      <button className="mt-4 min-h-11 max-w-full whitespace-normal break-words text-left rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5" aria-expanded={advanced} aria-controls="playback-advanced" onClick={() => setAdvanced((value) => !value)} type="button">{advanced ? "▾" : "▸"} Alternate connection: MIDI settings</button>
       {advanced && <div id="playback-advanced">
-        <label className="mt-3 block text-sm text-slate-300">Playback source
+        <label className="mt-3 block text-sm text-slate-300">Playback connection type
           <select className="ml-3 min-h-11 rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={settings?.settings.integration_modes.midi_source ?? "playback_api"} disabled={!playback || Boolean(playback.pending) || playback.status?.discovery === "running"} onChange={(event) => playback?.selectSource(event.target.value === "real" ? "real" : "playback_api")}>
-            <option value="playback_api">Playback API (default)</option>
+            <option value="playback_api">Playback connection (recommended)</option>
             <option value="real">MIDI</option>
             {settings?.settings.integration_modes.midi_source === "simulated" && <option value="simulated" disabled>Simulation (legacy)</option>}
           </select>
         </label>
-        {playback?.status && <p className="mt-2 text-sm text-slate-300">{playbackMidiDetail(playback.status)}</p>}
+        {playback?.status && <p className="mt-2 text-sm text-slate-300">{playbackMidiNote(playback.status)}</p>}
 
       <div className="mt-4 rounded-lg border border-fuchsia-400/15 bg-fuchsia-400/[0.05] p-3">
         <div className="mb-4 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.07] p-3">
@@ -438,6 +448,7 @@ export function MidiSetupPanel({
         )}
       </div>
       </div>}
+      <PlaybackSaveFooter draft={draft} playback={playback} midiDirty={midiDirty} />
     </section>
   );
 }

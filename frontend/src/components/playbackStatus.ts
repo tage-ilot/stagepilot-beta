@@ -17,10 +17,29 @@ export function validPlaybackHost(host: string): boolean {
 
 // Shared wording: connection health is not song-order/action readiness.
 export const playbackConnectionDetail = (status: PlaybackConnection) => status.reason;
-export const playbackMidiDetail = (status: PlaybackConnection) =>
-  status.sources.midi.connected && status.active_source === "playback_api"
-    ? "MIDI connected - standing by (Playback API is in use)"
-    : status.sources.midi.reason;
 export const playbackOrderNotice = (status: PlaybackStatusResponse) =>
-  status.stale ? "Song order stale — rediscover before starts."
-    : status.song_order.length === 0 ? "Song order unknown — discover song order before starts." : null;
+  status.stale && status.song_order.length > 0 ? "Your Playback setlist changed. Set up song order again."
+    : status.song_order.length === 0 ? "Song order isn't set up yet." : null;
+
+export type BannerTone = "connected" | "searching" | "backup" | "idle";
+// The sentence always comes from the backend `reason`; only the colour is chosen here.
+export const playbackBannerTone = (status: PlaybackConnection & { scan?: { state: string } }): BannerTone =>
+  status.scan?.state === "scanning" ? "searching"
+    : status.active_source === "playback_api" ? "connected"
+      : status.active_source === "midi" ? "backup" : "idle";
+
+export const playbackMidiNote = (status: PlaybackConnection) =>
+  status.sources.midi.connected
+    ? status.active_source === "playback_api" ? "MIDI is connected and standing by." : "MIDI is connected."
+    : status.sources.midi.reason;
+
+const EVENT_TEXT: Record<string, string> = {
+  "song.started": "started", "song.resumed": "resumed", "song.paused": "Paused", "song.stopped": "Stopped",
+  "song.ended": "ended", "song.selected": "selected", "song.changed": "changed",
+};
+export function playbackActivityText(type: string, position: number): string {
+  const verb = EVENT_TEXT[type] ?? type;
+  const generic = verb === "Paused" || verb === "Stopped";
+  if (generic) return verb;
+  return position < 0 ? `A song ${verb}` : `Song ${position + 1} ${verb}`;
+}

@@ -71,9 +71,9 @@ class PlaybackSourceArbiter:
             self.owner = owner
             self.revision += 1
         reason = {
-            "playback_api": "Connected via Playback API.",
-            "midi": "Connected via MIDI.",
-            "none": "Playback disconnected; connect Playback API or MIDI.",
+            "playback_api": "Connected to Playback.",
+            "midi": "Connected through MIDI (backup). Find Playback for full control.",
+            "none": "Not connected.",
         }[owner]
         return PlaybackConnection(
             active_source=owner,
@@ -82,15 +82,13 @@ class PlaybackSourceArbiter:
             sources={
                 "playback_api": SourceStatus(
                     connected=api,
-                    reason="Playback API heartbeat healthy."
-                    if api
-                    else "Playback API disconnected or heartbeat expired.",
+                    reason="Playback is connected." if api else "Playback is not connected.",
                 ),
                 "midi": SourceStatus(
                     connected=self.midi_connected,
-                    reason="MIDI input connected."
+                    reason="MIDI is connected."
                     if self.midi_connected
-                    else "MIDI input disconnected.",
+                    else "MIDI is not connected.",
                 ),
             },
         )

@@ -1,177 +1,360 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PlaybackController } from "../hooks/usePlaybackInput";
 import { playbackSettings, playbackState, playbackStatus } from "../test/playbackFixtures";
 import { MidiSetupPanel } from "./MidiSetupPanel";
 import { PlaybackApiPanel } from "./PlaybackApiPanel";
+import { PlaybackSaveFooter, usePlaybackDraft } from "./PlaybackSaveFooter";
 import { validPlaybackHost } from "./playbackStatus";
 import { SetupChecklist } from "./SetupChecklist";
 import { buildConnectionCardViews, buildReadinessChecks } from "./dashboard/dashboardReadiness";
 
+const scanOf = (state: "idle" | "scanning" | "found" | "not_found", extra = {}) => ({ state, candidates: [], reason: null, current: 0, total: 0, ...extra });
+const none = (overrides = {}) => playbackStatus({
+  connected: false, active_source: "none", reason: "Not connected. Choose Scan Network to find Playback.",
+  sources: { playback_api: { connected: false, reason: "Playback is not connected." }, midi: { connected: false, reason: "MIDI is not connected." } },
+  ...overrides,
+});
 const controller = (overrides: Partial<PlaybackController> = {}): PlaybackController => ({
   status: playbackStatus(), events: [], error: null, message: null, pending: null,
-  save: vi.fn(), selectSource: vi.fn(), scan: vi.fn(), discover: vi.fn(), ...overrides,
+  save: vi.fn().mockResolvedValue(true), selectSource: vi.fn(), scan: vi.fn(), cancelScan: vi.fn(), discover: vi.fn(), ...overrides,
 });
-const panel = (playback = controller()) => render(<MidiSetupPanel
+const panel = (playback = controller(), extra: { onDirtyChange?: (dirty: boolean) => void } = {}) => render(<MidiSetupPanel
   playback={playback} midi={null} messages={[]} error={null} message={null}
   pendingOperation={null} pendingCue={null} onRefresh={vi.fn()} onSelect={vi.fn()} onSimulate={vi.fn()}
-  settings={playbackSettings} onSaveSettings={vi.fn()}
+  settings={playbackSettings} onSaveSettings={vi.fn()} {...extra}
 />);
 
-describe("Playback configuration", () => {
-  it("defaults to API, starts Advanced collapsed, expands/switches source and collapses again", async () => {
-    const playback = controller();
-    const user = userEvent.setup();
-    const view = panel(playback);
-    expect(screen.getByText("Playback API")).toBeVisible();
-    expect(screen.queryByLabelText("Playback source")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("MIDI channel")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Advanced/ })).toHaveAttribute("aria-expanded", "false");
-    await user.click(screen.getByRole("button", { name: /Advanced/ }));
-    expect(screen.getByLabelText("Playback source")).toHaveValue("playback_api");
-    expect(screen.getByLabelText("MIDI channel")).toBeVisible();
-    await user.selectOptions(screen.getByLabelText("Playback source"), "real");
-    expect(playback.selectSource).toHaveBeenCalledWith("real");
-    await user.selectOptions(screen.getByLabelText("Playback source"), "playback_api");
-    expect(playback.selectSource).toHaveBeenLastCalledWith("playback_api");
-    view.unmount();
+describe("Scan Network is always first and never dead", () => {
+  it.each([
+    ["fresh install, nothing configured", none({ selected: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true } })],
+    ["MIDI-selected install", none({ selected: false, enabled: false, active_source: "midi", connected: true, reason: "Connected through MIDI (backup). Find Playback for full control.", settings: { enabled: false, host: null, port: 8080, auto_scan: true } })],
+    ["Playback switched off", none({ enabled: false, settings: { enabled: false, host: null, port: 8080, auto_scan: true } })],
+  ])("%s", (_name, status) => {
+    const playback = controller({ status });
     panel(playback);
-    expect(screen.queryByLabelText("Playback source")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Start next" })).not.toBeInTheDocument();
+    const scan = screen.getByRole("button", { name: "Scan Network" });
+    expect(scan).toBeEnabled();
+    const primary = screen.getAllByRole("button").find((b) => !/Close|Alternate connection: MIDI settings/.test(b.textContent ?? "") && !/Close/.test(b.getAttribute("aria-label") ?? ""));
+    expect(primary).toBe(scan);
+    fireEvent.click(scan);
+    expect(playback.scan).toHaveBeenCalledWith();
   });
 
-  it("shows scan pending/result and respects saved manual override", async () => {
-    const playback = controller();
+  it("shows scanning with progress and a working cancel, then returns to Scan again", () => {
+    const playback = controller({ status: none({ scan: scanOf("scanning", { current: 64, total: 254 }), reason: "Looking for Playback…" }), pending: "scan" });
     const view = render(<PlaybackApiPanel playback={playback} />);
-    fireEvent.click(screen.getByRole("button", { name: "Find / Scan" }));
-    expect(playback.scan).toHaveBeenCalledOnce();
-    view.rerender(<PlaybackApiPanel playback={controller({ pending: "scan" })} />);
-    expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
-    view.rerender(<PlaybackApiPanel playback={controller({ message: "Found Playback at 192.0.2.10:8080." })} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Found Playback");
-    const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Manual address"), "192.0.2.10");
-    expect(screen.getByRole("button", { name: "Find / Scan" })).toBeDisabled();
-    view.rerender(<PlaybackApiPanel playback={playback} />);
-    fireEvent.click(screen.getByRole("button", { name: "Save address" }));
-    expect(playback.save).toHaveBeenCalledWith({ enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true });
-    fireEvent.change(screen.getByLabelText("Manual address"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save address" }));
-    expect(playback.save).toHaveBeenLastCalledWith({ enabled: true, host: null, port: 8080, auto_scan: true });
-    fireEvent.click(screen.getByLabelText("Playback API on"));
-    expect(playback.save).toHaveBeenLastCalledWith({ enabled: false, host: null, port: 8080, auto_scan: true });
+    expect(screen.getByTestId("playback-banner")).toHaveTextContent("Looking for Playback…");
+    expect(screen.getByText("Checked 64 of 254 addresses")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Scanning… (cancel)" }));
+    expect(playback.cancelScan).toHaveBeenCalledOnce();
+    view.rerender(<PlaybackApiPanel playback={controller({ status: none({ scan: scanOf("not_found", { reason: "x" }), reason: "Couldn't find Playback." }) })} />);
+    expect(screen.queryByText(/Scanning/)).not.toBeInTheDocument();
   });
 
-  it.each(["http://192.0.2.10", "192.0.2.10:8080", "bad host", "999.0.2.10", "a/b"])('rejects invalid manual address %s', (value) => {
-    const playback = controller();
+  it("not found: plain checklist, Scan again and Enter address instead; never a stuck spinner", async () => {
+    const playback = controller({ status: none({ scan: scanOf("not_found"), reason: "Couldn't find Playback. Check things." }) });
     render(<PlaybackApiPanel playback={playback} />);
-    fireEvent.change(screen.getByLabelText("Manual address"), { target: { value } });
-    expect(screen.getByRole("alert")).toHaveTextContent("without a URL");
-    expect(screen.getByRole("button", { name: "Save address" })).toBeDisabled();
-    expect(playback.save).not.toHaveBeenCalled();
+    expect(screen.getByText("Couldn't find Playback")).toBeVisible();
+    expect(screen.getByText("Remote Connections is turned on in Playback")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Scan again" }));
+    expect(playback.scan).toHaveBeenCalledWith();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Enter address instead" }));
+    expect(screen.getByLabelText("Computer name or address")).toBeVisible();
+  });
+
+  it("several found: pick one by computer name", () => {
+    const playback = controller({ status: none({ scan: scanOf("found", { candidates: [{ name: "Example Mac", host: "192.0.2.1" }, { name: "Other PC", host: "192.0.2.2" }] }) }) });
+    render(<PlaybackApiPanel playback={playback} />);
+    const group = screen.getByRole("group", { name: "Choose which Playback" });
+    fireEvent.click(within(group).getByRole("button", { name: /Other PC/ }));
+    expect(playback.scan).toHaveBeenCalledWith("192.0.2.2");
+  });
+});
+
+describe("Connect to a specific computer", () => {
+  it("Enter connects in one action without a separate save; blank and invalid cannot connect", async () => {
+    const playback = controller({ status: none() });
+    const user = userEvent.setup();
+    render(<PlaybackApiPanel playback={playback} />);
+    await user.click(screen.getByRole("button", { name: /Connect a specific computer/ }));
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(screen.getByText("Type an address to connect.")).toBeVisible();
+    await user.type(screen.getByLabelText("Computer name or address"), "192.0.2.10{Enter}");
+    expect(playback.scan).toHaveBeenCalledWith("192.0.2.10");
+    expect(screen.queryByText(/Save address|Find \/ Scan|override/)).not.toBeInTheDocument();
+  });
+
+  it.each(["http://192.0.2.10", "192.0.2.10:8080", "bad host", "999.0.2.10", "a/b"])("rejects invalid address %s inline", async (value) => {
+    const playback = controller({ status: none() });
+    const user = userEvent.setup();
+    render(<PlaybackApiPanel playback={playback} />);
+    await user.click(screen.getByRole("button", { name: /Connect a specific computer/ }));
+    fireEvent.change(screen.getByLabelText("Computer name or address"), { target: { value } });
+    expect(screen.getByRole("alert")).toHaveTextContent("no http://");
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    fireEvent.submit(screen.getByLabelText("Computer name or address").closest("form")!);
+    expect(playback.scan).not.toHaveBeenCalled();
   });
   it.each(["", "192.0.2.10", "playback.local", "127.0.0.1", "::1"])("accepts bare host %s", (host) => expect(validPlaybackHost(host)).toBe(true));
+});
 
-  it("requires confirmation, supports Cancel, sends only the discovery operation", async () => {
-    const playback = controller();
+describe("Song order card", () => {
+  it("not connected: explanation instead of a dead button", () => {
+    render(<PlaybackApiPanel playback={controller({ status: none() })} />);
+    expect(screen.getByText("Connect to Playback first.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /song order/i })).not.toBeInTheDocument();
+  });
+
+  it("connected without order: one button, confirmation dialog, then discover", async () => {
+    const playback = controller({ status: playbackStatus({ song_order: [], stale: true, captured_version: null }) });
     const user = userEvent.setup();
     render(<PlaybackApiPanel playback={playback} />);
-    await user.click(screen.getByRole("button", { name: "Discover Song Order" }));
+    expect(screen.getByText(/steps through your Playback songs once/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Set up song order" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("Next/Previous");
-    expect(dialog).toHaveTextContent("2 seconds per song");
-    expect(dialog).toHaveTextContent("must be stopped");
+    expect(dialog).toHaveTextContent("must stay stopped");
     expect(playback.discover).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Discover Song Order" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Discover Song Order" }));
+    await user.click(screen.getByRole("button", { name: "Set up song order" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Set up song order" }));
     expect(playback.discover).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { status: playbackStatus({ sources: { playback_api: { connected: false, reason: "Offline" }, midi: { connected: true, reason: "Connected" } }, active_source: "midi" }), reason: "Connect Playback API first." },
-    { status: playbackStatus({ playing: true }), reason: "Stop Playback first." },
-    { status: playbackStatus({ selected: false }), reason: "Select and enable Playback API first." },
-  ])("disables discovery with API-only reason $reason", ({ status, reason }) => {
-    render(<PlaybackApiPanel playback={controller({ status })} />);
-    expect(screen.getByRole("button", { name: "Discover Song Order" })).toBeDisabled();
-    expect(screen.getByText(reason)).toBeVisible();
+  it("works with nothing typed or saved: no address and no save needed", () => {
+    render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ song_order: [], stale: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true } }) })} />);
+    expect(screen.getByRole("button", { name: "Set up song order" })).toBeEnabled();
   });
 
-  it("rechecks playing state while the confirmation dialog is open", () => {
-    const view = render(<PlaybackApiPanel playback={controller()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Discover Song Order" }));
-    view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ playing: true }) })} />);
-    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Discover Song Order" })).toBeDisabled();
+  it("playing: replaced by an explanation, not a dead control; an open dialog closes", () => {
+    const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ song_order: [], stale: true }) })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Set up song order" }));
+    view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ playing: true, song_order: [], stale: true }) })} />);
+    expect(screen.getByText("Stop Playback to set up song order.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /song order/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("renders progress, result, stale order and clear failure", () => {
-    const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 4 }) })} />);
-    expect(screen.getByRole("status")).toHaveTextContent("4 steps");
+  it("stale: amber message with the same one button; saved: confirmation count", () => {
+    const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ stale: true }) })} />);
+    expect(screen.getByText("Your Playback setlist changed. Set up song order again.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Set up song order" })).toBeEnabled();
     view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus() })} />);
-    expect(screen.getByRole("list", { name: "Discovered song order" })).toHaveTextContent("1 → ID 101");
-    view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ stale: true, discovery: "failed", last_error: "Playback disconnected during discovery." }) })} />);
-    expect(screen.getByText(/Song order stale/)).toBeVisible();
-    expect(screen.getByRole("alert")).toHaveTextContent("disconnected during discovery");
+    expect(screen.getByText("Song order saved (2 songs)")).toBeVisible();
   });
 
-  it("renders typed recent events with song numbers and discovery tags, never invents unknown numbers", () => {
-    const event = { type: "song.started", timestamp: 123.4, song_id: 202, position: 0, previous_song_id: null, continues_playing: false, playing: true, pad: false, setlist_version: 1, previous_version: null, section_id: null, active: null, reason: null, message_kind: null };
-    render(<PlaybackApiPanel playback={controller({ events: [{ event, discovery: false }, { event: { ...event, type: "song.selected", song_id: 999 }, discovery: true }] })} />);
-    const rows = screen.getAllByRole("row");
-    expect(rows[1]).toHaveTextContent("song.selected (discovery)");
-    expect(rows[1]).toHaveTextContent("Unknown");
-    expect(rows[2]).toHaveTextContent("123.4song.started2");
+  it("progress and failure are plain", () => {
+    const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 3 }) })} />);
+    expect(screen.getByText(/Checking your songs/)).toBeVisible();
+    view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "failed", last_error: "Playback went away." }) })} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Playback went away.");
+  });
+});
+
+describe("Recent activity", () => {
+  const event = { type: "song.started", timestamp: 123.4, song_id: 202, position: 0, previous_song_id: null, continues_playing: false, playing: true, pad: false, setlist_version: 1, previous_version: null, section_id: null, active: null, reason: null, message_kind: null };
+  it("uses plain rows and wall-clock time, no monotonic wording; unknown songs are never numbered", () => {
+    render(<PlaybackApiPanel playback={controller({ events: [
+      { event, discovery: false, at: "2026-01-01T10:00:00Z" },
+      { event: { ...event, type: "song.paused", song_id: 999 }, discovery: false, at: "2026-01-01T10:01:00Z" },
+      { event: { ...event, type: "song.stopped" }, discovery: false, at: "2026-01-01T10:02:00Z" },
+    ] })} />);
+    const list = screen.getByRole("list", { name: "Recent activity", hidden: true });
+    expect(list).toHaveTextContent("Song 2 started");
+    expect(list).toHaveTextContent("Paused");
+    expect(list).toHaveTextContent("Stopped");
+    expect(document.body.textContent).not.toMatch(/monotonic|velocit/i);
+  });
+});
+
+describe("Main view has no jargon", () => {
+  it("avoids API, monotonic, velocity, manual address", () => {
+    panel(controller());
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/monotonic|manual address|Playback API|velocities/i);
+  });
+});
+
+describe("Alternate connection: MIDI settings and MIDI", () => {
+  it("collapsed by default; one labelled choice; MIDI controls unchanged", async () => {
+    const playback = controller();
+    const user = userEvent.setup();
+    panel(playback);
+    expect(screen.queryByLabelText("MIDI channel")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
+    expect(screen.getByLabelText("Playback connection type")).toHaveValue("playback_api");
+    expect(screen.getByRole("option", { name: "Playback connection (recommended)" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Playback connection type"), "real");
+    expect(playback.selectSource).toHaveBeenCalledWith("real");
+    expect(screen.getByLabelText("MIDI channel")).toBeVisible();
   });
 });
 
 const scenarios = [
-  { name: "API only", api: true, midi: false, active: "playback_api" as const },
-  { name: "MIDI only", api: false, midi: true, active: "midi" as const },
-  { name: "both", api: true, midi: true, active: "playback_api" as const },
-  { name: "neither", api: false, midi: false, active: "none" as const },
+  { name: "API only", api: true, midi: false, active: "playback_api" as const, reason: "Connected to Playback on 192.0.2.10." },
+  { name: "MIDI only", api: false, midi: true, active: "midi" as const, reason: "Connected through MIDI (backup). Find Playback for full control." },
+  { name: "both", api: true, midi: true, active: "playback_api" as const, reason: "Connected to Playback on 192.0.2.10." },
+  { name: "neither", api: false, midi: false, active: "none" as const, reason: "Not connected. Choose Scan Network to find Playback." },
+  { name: "scanning", api: false, midi: false, active: "none" as const, reason: "Looking for Playback…", scanning: true },
 ];
-describe("Unified Playback wording", () => {
-  it.each(scenarios)("agrees across panel, dashboard and checklist: $name", ({ api, midi, active }) => {
+describe("Banner, panel, dashboard, checklist and Alternate connection: MIDI settings never contradict", () => {
+  it.each(scenarios)("$name", async ({ api, midi, active, reason, scanning }) => {
     const connected = api || midi;
-    const reason = active === "playback_api" ? "Connected via Playback API." : active === "midi" ? "Connected via MIDI." : "Playback disconnected; connect Playback API or MIDI.";
-    const status = playbackStatus({ connected, active_source: active, reason, sources: {
-      playback_api: { connected: api, reason: api ? "API healthy" : "API disconnected" },
-      midi: { connected: midi, reason: midi ? "MIDI connected" : "MIDI disconnected" },
-    } });
+    const status = playbackStatus({
+      connected, active_source: active, reason, scan: scanOf(scanning ? "scanning" : "idle"),
+      sources: { playback_api: { connected: api, reason: api ? "Playback is connected." : "Playback is not connected." }, midi: { connected: midi, reason: midi ? "MIDI is connected." : "MIDI is not connected." } },
+    });
     panel(controller({ status }));
-    expect(screen.getByText(reason)).toBeVisible();
-    if (!api) expect(screen.getByText("Playback API not connected")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
-    if (api && midi) expect(screen.getByText("MIDI connected - standing by (Playback API is in use)")).toBeVisible();
+    // One banner, one sentence: exactly the backend text.
+    expect(screen.getByTestId("playback-banner")).toHaveTextContent(reason);
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    await userEvent.setup().click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
+    // MIDI detail in the alternate connection section never says the opposite of the banner.
+    const advanced = document.getElementById("playback-advanced") as HTMLElement;
+    if (midi) expect(advanced).toHaveTextContent(/MIDI is connected/);
+    else expect(advanced).not.toHaveTextContent(/MIDI is connected|MIDI input connected/);
+    expect(advanced).not.toHaveTextContent(/disconnected for this session/);
     const views = buildConnectionCardViews({ state: playbackState, settings: playbackSettings, playback: status, midi: null, propresenter: null, lights: null });
     expect(views.midi.status).toBe(connected ? "connected" : "disconnected");
     expect(views.midi.detail).toBe(reason);
     const checks = buildReadinessChecks({ state: playbackState, settings: playbackSettings, propresenter: null, live: true, views });
     expect(checks.find((check) => check.id === "midi")).toMatchObject({ passed: connected, detail: reason });
     render(<SetupChecklist state={playbackState} settings={playbackSettings} playback={status} midi={null} propresenter={null} live onOpen={vi.fn()} />);
-    expect(screen.getAllByText(reason)).toHaveLength(2);
+    expect(screen.getAllByText(reason).length).toBeGreaterThanOrEqual(2);
   });
 
-  it.each([{ stale: true, song_order: [101, 202] }, { stale: false, song_order: [] }])("keeps connection green and action readiness separate for invalid API order %o", (mapping) => {
+  it.each([{ stale: true, song_order: [101, 202] }, { stale: false, song_order: [] }])("keeps connection green and action readiness separate for invalid order %o", (mapping) => {
     const status = playbackStatus(mapping);
     const views = buildConnectionCardViews({ state: playbackState, settings: playbackSettings, playback: status, midi: null, propresenter: null, lights: null });
     const checks = buildReadinessChecks({ state: playbackState, settings: playbackSettings, live: true, propresenter: null, views });
     expect(views.midi.status).toBe("connected");
     expect(checks.find((check) => check.id === "midi")?.passed).toBe(true);
     expect(checks.find((check) => check.id === "playback-order")?.passed).toBe(false);
+  });
+});
+
+describe("No dead primary button without a visible fix", () => {
+  const states = [
+    ["not connected", none()],
+    ["scanning", none({ scan: scanOf("scanning") })],
+    ["not found", none({ scan: scanOf("not_found") })],
+    ["connected, no order", playbackStatus({ song_order: [], stale: true })],
+    ["playing", playbackStatus({ playing: true })],
+    ["stale", playbackStatus({ stale: true })],
+    ["discovering", playbackStatus({ discovery: "running" })],
+  ] as const;
+  it.each(states)("%s", (_name, status) => {
     panel(controller({ status }));
-    expect(screen.getByText("Connected via Playback API.")).toBeVisible();
-    render(<SetupChecklist state={playbackState} settings={playbackSettings} playback={status} midi={null} propresenter={null} live onOpen={vi.fn()} />);
-    expect(screen.getAllByText(/Song order (stale|unknown)/)).toHaveLength(2);
+    const footer = screen.getByTestId("playback-save-footer");
+    const disabled = screen.getAllByRole("button").filter((button) => (button as HTMLButtonElement).disabled && !footer.contains(button));
+    expect(disabled.map((b) => b.textContent)).toEqual([]);
+    expect(screen.getAllByRole("button").some((b) => /Scan Network|Scanning|Scan again/.test(b.textContent ?? "") && !(b as HTMLButtonElement).disabled)).toBe(true);
+  });
+});
+
+// A stateful harness: the controller's status follows save(), like the real hook.
+function Harness({ save, onDirty }: { save: PlaybackController["save"]; onDirty?: (dirty: boolean) => void }) {
+  const [status, setStatus] = useState(playbackStatus());
+  const playback = controller({
+    status,
+    save: async (input) => {
+      const ok = await save(input);
+      if (ok) setStatus((current) => ({ ...current, enabled: input.enabled, settings: input }));
+      return ok;
+    },
+  });
+  const draft = usePlaybackDraft(playback);
+  onDirty?.(draft.dirty);
+  return <><PlaybackApiPanel playback={playback} draft={draft} /><PlaybackSaveFooter draft={draft} playback={playback} /></>;
+}
+
+describe("Save settings footer", () => {
+  afterEach(() => vi.useRealTimers());
+  const toggle = () => screen.getByLabelText("Connect to Playback automatically");
+  const saveButton = () => screen.getByRole("button", { name: /Save settings|Saving…/ });
+
+  it("clean: disabled with 'No changes to save'", () => {
+    render(<Harness save={vi.fn().mockResolvedValue(true)} />);
+    expect(saveButton()).toBeDisabled();
+    expect(screen.getByText("No changes to save")).toBeVisible();
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
   });
 
-  it("does not gate MIDI action readiness on invalid API order", () => {
-    const status = playbackStatus({ stale: true, active_source: "midi", reason: "Connected via MIDI." });
-    const views = buildConnectionCardViews({ state: playbackState, settings: playbackSettings, playback: status, midi: null, propresenter: null, lights: null });
-    expect(views.midi.actionNotice).toBeNull();
+  it("dirty: enabled, 'Unsaved changes' hint and a Discard link; Discard restores clean", () => {
+    render(<Harness save={vi.fn().mockResolvedValue(true)} />);
+    fireEvent.click(toggle());
+    expect(saveButton()).toBeEnabled();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(toggle()).toBeChecked();
+    expect(saveButton()).toBeDisabled();
+  });
+
+  it("saving then saved: sends every visible setting once, shows Saving…, then Saved, then returns to disabled", async () => {
+    vi.useFakeTimers();
+    let finish!: (ok: boolean) => void;
+    const save = vi.fn().mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+    render(<Harness save={save} />);
+    fireEvent.click(toggle());
+    fireEvent.click(saveButton());
+    expect(save).toHaveBeenCalledWith({ enabled: false, host: null, port: 8080, auto_scan: true });
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+    await act(async () => finish(true));
+    expect(screen.getByText("Saved")).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("error: plain reason, button stays enabled, changes kept", async () => {
+    render(<Harness save={vi.fn().mockResolvedValue(false)} />);
+    fireEvent.click(toggle());
+    await act(async () => { fireEvent.click(saveButton()); });
+    expect(screen.getByRole("alert")).toHaveTextContent("not saved");
+    expect(saveButton()).toBeEnabled();
+    expect(toggle()).not.toBeChecked();
+  });
+
+  it("covers every editable field in the visible panel (auto-scan too)", async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    render(<Harness save={save} />);
+    fireEvent.click(screen.getByLabelText(/Look for Playback on the network/));
+    await act(async () => { fireEvent.click(saveButton()); });
+    expect(save).toHaveBeenCalledWith({ enabled: true, host: null, port: 8080, auto_scan: false });
+  });
+
+  it("Scan Network and Connect are never gated by unsaved edits", async () => {
+    const playback = controller();
+    const Gate = () => { const draft = usePlaybackDraft(playback); return <><PlaybackApiPanel playback={playback} draft={draft} /><PlaybackSaveFooter draft={draft} playback={playback} /></>; };
+    render(<Gate />);
+    fireEvent.click(toggle());
+    expect(screen.getByRole("button", { name: "Scan Network" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Scan Network" }));
+    expect(playback.scan).toHaveBeenCalledWith();
+  });
+
+  it("names dirty MIDI fields instead of ignoring them", async () => {
+    const user = userEvent.setup();
+    panel();
+    await user.click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
+    fireEvent.change(screen.getByLabelText("MIDI channel"), { target: { value: "5" } });
+    expect(screen.getByTestId("playback-save-footer")).toHaveTextContent(/unsaved MIDI changes in Alternate connection: MIDI settings/);
+  });
+
+  it("reports dirtiness upward so leaving can ask first", () => {
+    const onDirtyChange = vi.fn();
+    panel(controller(), { onDirtyChange });
+    fireEvent.click(screen.getByLabelText("Connect to Playback automatically"));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("footer is sticky at the bottom of the card (visible without scrolling)", () => {
+    panel();
+    expect(screen.getByTestId("playback-save-footer").className).toMatch(/sticky bottom-0/);
   });
 });

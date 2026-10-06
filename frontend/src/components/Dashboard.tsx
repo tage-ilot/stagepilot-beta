@@ -39,6 +39,7 @@ import { latestActiveError } from "./dashboard/dashboardActiveError";
 import {
   buildConnectionCardViews,
   buildReadinessChecks,
+  readinessErrorCauses,
   readinessHasError,
   readinessPassed,
 } from "./dashboard/dashboardReadiness";
@@ -768,11 +769,18 @@ export function Dashboard({
     0,
     timerDuration - Math.ceil(elapsedMilliseconds / 1_000),
   );
+  const [playbackDirty, setPlaybackDirty] = useState(false);
+  const [leaveTarget, setLeaveTarget] = useState<ConnectionPanel | null | undefined>(undefined);
+  // Leaving the Playback panel with unsaved changes asks first; everything else is immediate.
+  const goTo = (target: ConnectionPanel | null) => {
+    if (activeConnection === "midi" && target !== "midi" && playbackDirty) { setLeaveTarget(target); return; }
+    setActiveConnection(target);
+  };
   const toggleConnection = (connection: ConnectionPanel) => {
     if (!canConfigure) return;
-    setActiveConnection((current) => current === connection ? null : connection);
+    goTo(activeConnection === connection ? null : connection);
   };
-  const closeConnection = () => setActiveConnection(null);
+  const closeConnection = () => goTo(null);
   const servicePlanEntries = [
     ...(plan?.songs.map((song) => ({
       kind: "song" as const,
@@ -819,12 +827,13 @@ export function Dashboard({
         >
           <button
             aria-describedby="system-readiness-popover"
+            title={systemError ? `Error: ${readinessErrorCauses(checks).map((check) => check.detail ?? check.label).join("; ")}` : undefined}
             aria-expanded={readinessHover.open}
             className={`flex shrink-0 cursor-help items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition hover:brightness-125 hover:ring-1 hover:ring-white/25 hover:shadow-[0_0_18px_rgba(255,255,255,0.12)] ${ready ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : systemError ? "border-rose-400/30 bg-rose-400/10 text-rose-300" : "border-amber-400/30 bg-amber-400/10 text-amber-300"}`}
             type="button"
           >
             <span className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-400" : systemError ? "bg-rose-400" : "bg-amber-400"}`} />
-            {!canConfigure ? "Live status" : ready ? "Ready" : systemError ? "Error" : "Check system"}
+            {!canConfigure ? "Live status" : ready ? "Ready" : systemError ? `Error: ${readinessErrorCauses(checks)[0]?.label}` : "Check system"}
           </button>
           <div
             className={`absolute right-0 top-full w-[min(22rem,calc(100vw-2rem))] pt-2 transition ${readinessHover.open ? "visible translate-y-0 opacity-100" : "pointer-events-none invisible translate-y-1 opacity-0"}`}
@@ -876,7 +885,7 @@ export function Dashboard({
           live={live}
           midi={midi}
           planningCenterStatus={planningCenterStatus}
-          onOpen={setActiveConnection}
+          onOpen={(connection) => goTo(connection)}
           propresenter={propresenter}
           settings={settings}
           state={state}
@@ -1005,6 +1014,7 @@ export function Dashboard({
           midi={midi}
           messages={midiMessages}
           onClose={closeConnection}
+          onDirtyChange={setPlaybackDirty}
           onRefresh={refreshMidi}
           onSelect={selectMidi}
           onSimulate={simulateMidi}
@@ -1017,6 +1027,18 @@ export function Dashboard({
           settingsMessage={settingsMessage}
           songs={state?.plan?.songs ?? []}
         />
+      )}
+
+      {leaveTarget !== undefined && (
+        <div role="alertdialog" aria-modal="true" aria-label="Discard unsaved changes?" className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
+          <div className="max-w-sm space-y-4 rounded-xl border border-white/10 bg-slate-950 p-5 shadow-2xl">
+            <p className="text-base font-semibold text-white">Discard unsaved changes?</p>
+            <div className="flex flex-wrap gap-3">
+              <button className="min-h-11 rounded-lg border border-rose-300/40 bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-100" type="button" autoFocus onClick={() => { setPlaybackDirty(false); setActiveConnection(leaveTarget); setLeaveTarget(undefined); }}>Discard</button>
+              <button className="min-h-11 rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200" type="button" onClick={() => setLeaveTarget(undefined)}>Keep editing</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {canConfigure && activeConnection === "propresenter" && (

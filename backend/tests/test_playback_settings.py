@@ -56,7 +56,9 @@ def test_v1_migration_preserves_values_and_is_idempotent(
     store = SettingsFileStore(path)
     migrated = store.load()
     assert migrated is not None
-    assert migrated.integration_modes.midi_source is MidiSource.PLAYBACK_API
+    # An explicit MIDI choice (real + chosen input) stays; the old default moves.
+    expected = MidiSource.REAL if source == "real" else MidiSource.PLAYBACK_API
+    assert migrated.integration_modes.midi_source is expected
     assert migrated.midi.model_dump(mode="json") == original["midi"]
     for key in ("lights", "planning_center", "timezone", "propresenter", "onboarding"):
         assert migrated.model_dump(mode="json")[key] == original[key]
@@ -143,3 +145,37 @@ def test_unversioned_file_migrates(tmp_path: Path) -> None:
 def test_invalid_discovered_order_rejected(order: list[object]) -> None:
     with pytest.raises(ValidationError):
         PlaybackApiSettings.model_validate({"song_order": order})
+
+
+def test_old_format_file_untouched_default_moves_and_explicit_midi_stays(tmp_path: Path) -> None:
+    """Real old-format (schema 1, no playback_api block) settings files."""
+    old_default = {"schema_version": 1, "integration_modes": {"midi_source": "simulated"}}
+    real_no_input = {
+        "schema_version": 1,
+        "integration_modes": {"midi_source": "real"},
+        "midi": {"enabled": True},
+    }
+    explicit = {
+        "schema_version": 1,
+        "integration_modes": {"midi_source": "real"},
+        "midi": {"enabled": True, "input_name": "Example MIDI"},
+    }
+    expected = {
+        "old_default": MidiSource.PLAYBACK_API,
+        "real_no_input": MidiSource.PLAYBACK_API,
+        "explicit": MidiSource.REAL,
+    }
+    for name, payload in {
+        "old_default": old_default,
+        "real_no_input": real_no_input,
+        "explicit": explicit,
+    }.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        loaded = SettingsFileStore(path).load()
+        assert loaded is not None
+        assert loaded.integration_modes.midi_source is expected[name], name
+        # Persisted as v2, so the choice is never re-migrated on the next start.
+        assert json.loads(path.read_text())["schema_version"] == 2
+        reloaded = SettingsFileStore(path).load()
+        assert reloaded is not None and reloaded == loaded

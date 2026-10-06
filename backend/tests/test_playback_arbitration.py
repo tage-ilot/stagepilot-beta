@@ -155,7 +155,7 @@ async def test_both_sources_invalid_order_keeps_api_owner_stops_and_monitor() ->
         status = (await client.get("/api/v1/playback-api/status")).json()
         state = (await client.get("/api/v1/state")).json()
         assert status["connected"] and status["active_source"] == "playback_api"
-        assert status["stale"] and "song order stale/unknown" in status["reason"]
+        assert status["stale"] and status["reason"].startswith("Connected to Playback")
         assert state["midi_status"] == "connected"
         assert (await client.get("/api/v1/playback-api/connection")).json()[
             "active_source"
@@ -211,10 +211,11 @@ async def test_health_uses_unified_connection_and_find_keeps_midi_open() -> None
         assert (await client.get("/api/v1/health")).json()["status"] == "healthy"
         port = midi.ports[-1]
         assert (await client.post("/api/v1/playback-api/find")).status_code == 200
+        await wait_for(lambda: inputs.scan_state != "scanning")
         assert not port.closed and inputs.arbiter.midi_connected
         assert (await client.get("/api/v1/health")).json()["status"] == "healthy"
         assert inputs.client is not None
-        await inputs.client.stop()
+        await inputs._stop_selected(keep_midi=True)
         assert (await client.get("/api/v1/health")).json()["status"] == "healthy"
         assert inputs.midi is not None
         await inputs.midi.stop()

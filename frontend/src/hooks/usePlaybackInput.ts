@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { discoverPlaybackSongOrder, findPlayback, getPlaybackEvents, getPlaybackStatus, getSettings, updatePlaybackSettings, updateSettings } from "../api";
+import { cancelPlaybackScan, discoverPlaybackSongOrder, findPlayback, getPlaybackEvents, getPlaybackStatus, getSettings, updatePlaybackSettings, updateSettings } from "../api";
 import type { PlaybackMonitorEntry, PlaybackSettingsInput, PlaybackStatusResponse, SettingsResponse } from "../types";
 
 export type PlaybackOperation = "save" | "source" | "scan" | "discover" | null;
@@ -10,9 +10,10 @@ export interface PlaybackController {
   error: string | null;
   message: string | null;
   pending: PlaybackOperation;
-  save: (settings: PlaybackSettingsInput) => void;
+  save: (settings: PlaybackSettingsInput) => Promise<boolean>;
   selectSource: (source: "playback_api" | "real") => void;
-  scan: () => void;
+  scan: (host?: string) => void;
+  cancelScan: () => void;
   discover: () => void;
 }
 
@@ -49,14 +50,11 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
         setStatus(next);
         setStatusError(null);
         if (scanStarted.current !== null) {
-          const elapsed = Date.now() - scanStarted.current;
-          if (next.sources.playback_api.connected || next.last_error || elapsed >= 60_000) {
+          // The backend owns scan progress; a time bound only guards a lost backend.
+          if (next.scan.state !== "scanning" || Date.now() - scanStarted.current >= 120_000) {
             scanStarted.current = null;
             operation.current = null;
             setPending(null);
-            setMessage(next.sources.playback_api.connected
-              ? `Found Playback at ${next.host}:${next.port}.`
-              : "Playback not found yet. Reconnection continues; Playback remote connections may be off.");
           }
         }
         try {
@@ -86,8 +84,8 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
     };
   }, [canConfigure]);
 
-  const run = useCallback(async (kind: Exclude<PlaybackOperation, null>, action: () => Promise<void>) => {
-    if (!canConfigure || operation.current !== null) return;
+  const run = useCallback(async (kind: Exclude<PlaybackOperation, null>, action: () => Promise<void>): Promise<boolean> => {
+    if (!canConfigure || operation.current !== null) return false;
     const current = generation.current;
     operation.current = kind;
     ++statusRevision.current;
@@ -96,11 +94,13 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
     setMessage(null);
     try {
       await action();
+      return generation.current === current;
     } catch (cause) {
       if (generation.current === current) {
         scanStarted.current = null;
         setError(cause instanceof Error ? cause.message : "Playback operation failed.");
       }
+      return false;
     } finally {
       if (generation.current === current && scanStarted.current === null) {
         operation.current = null;
@@ -109,9 +109,9 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
     }
   }, [canConfigure]);
 
-  const save = useCallback((input: PlaybackSettingsInput) => {
+  const save = useCallback((input: PlaybackSettingsInput): Promise<boolean> => {
     const current = generation.current;
-    void run("save", async () => {
+    return run("save", async () => {
       const next = await updatePlaybackSettings(input);
       if (generation.current !== current) return;
       ++statusRevision.current;
@@ -119,7 +119,7 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
       const saved = await getSettings();
       if (generation.current !== current) return;
       onSettings(saved);
-      setMessage("Playback connection settings saved.");
+      setMessage("Settings saved.");
     });
   }, [onSettings, run]);
 
@@ -138,20 +138,40 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
       if (generation.current !== current) return;
       ++statusRevision.current;
       setStatus(connection);
-      setMessage("Playback source saved.");
+      setMessage("Connection type saved.");
     });
   }, [onSettings, run]);
 
-  const scan = useCallback(() => {
+  const scan = useCallback((host?: string) => {
     const current = generation.current;
     void run("scan", async () => {
-      const next = await findPlayback();
+      const next = await findPlayback(host);
       if (generation.current !== current) return;
       ++statusRevision.current;
       setStatus(next);
       scanStarted.current = Date.now();
     });
   }, [run]);
+
+  const cancelScan = useCallback(() => {
+    const current = generation.current;
+    void (async () => {
+      try {
+        const next = await cancelPlaybackScan();
+        if (generation.current !== current) return;
+        ++statusRevision.current;
+        setStatus(next);
+      } catch (cause) {
+        if (generation.current === current) setError(cause instanceof Error ? cause.message : "Could not cancel the scan.");
+      } finally {
+        if (generation.current === current) {
+          scanStarted.current = null;
+          operation.current = null;
+          setPending(null);
+        }
+      }
+    })();
+  }, []);
 
   const discover = useCallback(() => {
     const current = generation.current;
@@ -164,9 +184,9 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
       const saved = await getSettings();
       if (generation.current !== current) return;
       onSettings(saved);
-      setMessage("Song order discovered. Playback returned to its original selection.");
+      setMessage("Song order saved.");
     });
   }, [onSettings, run]);
 
-  return { status, events, error: error ?? statusError, message, pending, save, selectSource, scan, discover };
+  return { status, events, error: error ?? statusError, message, pending, save, selectSource, scan, cancelScan, discover };
 }
