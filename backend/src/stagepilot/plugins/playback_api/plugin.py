@@ -8,7 +8,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -63,6 +63,7 @@ class DiscoveryConflict(ValueError):
 class MonitorEntry:
     event: PlaybackEvent
     discovery: bool
+    at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class PlaybackInputPlugin(Plugin):

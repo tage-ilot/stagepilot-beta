@@ -11,6 +11,8 @@ import type {
   ProPresenterStatusResponse,
 } from "../types";
 import type { UpdaterController } from "../hooks/useUpdater";
+import type { PlaybackController } from "../hooks/usePlaybackInput";
+import { playbackStatus } from "../test/playbackFixtures";
 import { Dashboard } from "./Dashboard";
 
 const loadedPlan: ServicePlan = {
@@ -215,6 +217,7 @@ function renderDashboard(
     state = applicationState(serviceLoad),
     settings = productionSettings,
     updater,
+    playback,
   }: {
     actionMessage?: string | null;
     error?: string | null;
@@ -223,6 +226,7 @@ function renderDashboard(
     state?: ApplicationState;
     settings?: SettingsResponse | null;
     updater?: UpdaterController;
+    playback?: PlaybackController;
   } = {},
 ) {
   return render(
@@ -248,6 +252,7 @@ function renderDashboard(
       simulateMidi={vi.fn()}
       state={state}
       updater={updater}
+      playback={playback}
     />,
   );
 }
@@ -593,6 +598,49 @@ describe("Dashboard Planning Center plan states", () => {
     await user.click(screen.getByRole("button", { name: /^MIDI \/ Playback connected/ }));
 
     expect(screen.getByRole("heading", { name: "Playback connection" })).toBeInTheDocument();
+  });
+
+  describe("leaving Playback with unsaved changes", () => {
+    const playback = (): PlaybackController => ({
+      status: playbackStatus(), events: [], error: null, message: null, pending: null,
+      save: vi.fn().mockResolvedValue(true), selectSource: vi.fn(), scan: vi.fn(), cancelScan: vi.fn(), discover: vi.fn(),
+    });
+    const openPlayback = async () => {
+      const user = userEvent.setup();
+      renderDashboard(loadedServiceState, { playback: playback() });
+      await user.click(screen.getByRole("button", { name: /^MIDI \/ Playback/ }));
+      return user;
+    };
+
+    it("asks 'Discard unsaved changes?' when closing a dirty panel; Keep editing stays, Discard closes", async () => {
+      const user = await openPlayback();
+      await user.click(screen.getByLabelText("Connect to Playback automatically"));
+      await user.click(screen.getByRole("button", { name: "Close MIDI / Playback configuration" }));
+      expect(screen.getByRole("alertdialog", { name: "Discard unsaved changes?" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Keep editing" }));
+      expect(screen.getByRole("heading", { name: "Playback connection" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Close MIDI / Playback configuration" }));
+      await user.click(screen.getByRole("button", { name: "Discard" }));
+      expect(screen.queryByRole("heading", { name: "Playback connection" })).not.toBeInTheDocument();
+    });
+
+    it("also asks when switching to another tab, and never asks when nothing changed", async () => {
+      const user = await openPlayback();
+      await user.click(screen.getByRole("button", { name: "Close MIDI / Playback configuration" }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^MIDI \/ Playback/ }));
+      await user.click(screen.getByLabelText("Connect to Playback automatically"));
+      await user.click(screen.getByRole("button", { name: /^ProPresenter/ }));
+      expect(screen.getByRole("alertdialog", { name: "Discard unsaved changes?" })).toBeVisible();
+    });
+  });
+
+  it("names the cause on the Error pill and ignores non-blocking subsystems", () => {
+    const state = applicationState(loadedServiceState, { midi_status: "connected", propresenter_status: "error" });
+    renderDashboard(loadedServiceState, { state });
+    const pill = screen.getByRole("button", { name: /^Error/ });
+    expect(pill).toHaveTextContent(/Error: .+/);
+    expect(pill.getAttribute("title")).toMatch(/^Error: .+/);
   });
 
   it("uses clear failure labels for readiness checks", () => {

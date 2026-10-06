@@ -7,7 +7,7 @@ import { usePlaybackInput } from "./usePlaybackInput";
 
 vi.mock("../api", () => ({
   getPlaybackStatus: vi.fn(), getPlaybackEvents: vi.fn(), getSettings: vi.fn(),
-  updateSettings: vi.fn(), updatePlaybackSettings: vi.fn(), findPlayback: vi.fn(), discoverPlaybackSongOrder: vi.fn(),
+  updateSettings: vi.fn(), updatePlaybackSettings: vi.fn(), findPlayback: vi.fn(), cancelPlaybackScan: vi.fn(), discoverPlaybackSongOrder: vi.fn(),
 }));
 const tick = async (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 const deferred = <T,>() => {
@@ -64,7 +64,7 @@ describe("usePlaybackInput", () => {
     const { result } = renderHook(() => usePlaybackInput(true, onSettings));
     await tick();
     const input = { enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true };
-    act(() => result.current.save(input));
+    act(() => { void result.current.save(input); });
     await tick();
     expect(api.updatePlaybackSettings).toHaveBeenCalledWith(input);
     expect(onSettings).toHaveBeenCalledWith(playbackSettings);
@@ -75,25 +75,47 @@ describe("usePlaybackInput", () => {
     });
   });
 
-  it("holds asynchronous scan pending until API result, not MIDI fallback; bounds it to 60 seconds", async () => {
-    const fallback = playbackStatus({ active_source: "midi", sources: { playback_api: { connected: false, reason: "Offline" }, midi: { connected: true, reason: "Connected" } } });
-    vi.mocked(api.getPlaybackStatus).mockResolvedValue(fallback);
+  it("holds the scan pending until the backend says it finished, not on MIDI fallback; a lost backend is bounded", async () => {
+    const scanning = playbackStatus({ active_source: "midi", scan: { state: "scanning", candidates: [], reason: null, current: 1, total: 4 } });
+    vi.mocked(api.getPlaybackStatus).mockResolvedValue(scanning);
     const { result } = renderHook(() => usePlaybackInput(true, vi.fn()));
     await tick();
     act(() => result.current.scan());
     await tick();
+    expect(api.findPlayback).toHaveBeenCalledWith(undefined);
     expect(result.current.pending).toBe("scan");
     await tick(750);
     expect(result.current.pending).toBe("scan");
-    await tick(60_000);
-    expect(result.current.pending).toBeNull();
-    expect(result.current.message).toContain("Reconnection continues");
-    act(() => result.current.scan());
-    await tick();
     vi.mocked(api.getPlaybackStatus).mockResolvedValue(playbackStatus());
     await tick(750);
     expect(result.current.pending).toBeNull();
-    expect(result.current.message).toBe("Found Playback at 192.0.2.10:8080.");
+  });
+
+  it("scan accepts a host so Connect needs no separate save, and cancel releases the pending state", async () => {
+    vi.mocked(api.getPlaybackStatus).mockResolvedValue(playbackStatus({ scan: { state: "scanning", candidates: [], reason: null, current: 0, total: 0 } }));
+    vi.mocked(api.cancelPlaybackScan).mockResolvedValue(playbackStatus());
+    const { result } = renderHook(() => usePlaybackInput(true, vi.fn()));
+    await tick();
+    act(() => result.current.scan("192.0.2.10"));
+    await tick();
+    expect(api.findPlayback).toHaveBeenCalledWith("192.0.2.10");
+    expect(result.current.pending).toBe("scan");
+    act(() => result.current.cancelScan());
+    await tick();
+    expect(api.cancelPlaybackScan).toHaveBeenCalledOnce();
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("save resolves true on success and false with a visible error on failure", async () => {
+    const { result } = renderHook(() => usePlaybackInput(true, vi.fn()));
+    await tick();
+    let ok: boolean | undefined;
+    await act(async () => { ok = await result.current.save({ enabled: false, host: null, port: 8080, auto_scan: true }); });
+    expect(ok).toBe(true);
+    vi.mocked(api.updatePlaybackSettings).mockRejectedValue(new Error("Could not write settings."));
+    await act(async () => { ok = await result.current.save({ enabled: true, host: null, port: 8080, auto_scan: true }); });
+    expect(ok).toBe(false);
+    expect(result.current.error).toBe("Could not write settings.");
   });
 
   it("polls progress while discovery HTTP call waits; rejects concurrent operations and failed 200 responses", async () => {
@@ -147,13 +169,13 @@ describe("usePlaybackInput", () => {
     vi.mocked(api.getPlaybackStatus).mockReturnValueOnce(oldPoll.promise);
     const onSettings = vi.fn();
     const { result, rerender } = renderHook(({ can }) => usePlaybackInput(can, onSettings), { initialProps: { can: true } });
-    act(() => result.current.save(playbackStatus().settings));
+    act(() => { void result.current.save(playbackStatus().settings); });
     await tick();
     await act(async () => oldPoll.resolve(playbackStatus({ connected: false })));
     expect(result.current.status?.connected).toBe(true);
     const save = deferred<ReturnType<typeof playbackStatus>>();
     vi.mocked(api.updatePlaybackSettings).mockReturnValueOnce(save.promise);
-    act(() => result.current.save(playbackStatus().settings));
+    act(() => { void result.current.save(playbackStatus().settings); });
     onSettings.mockClear();
     rerender({ can: false });
     await act(async () => save.resolve(playbackStatus()));

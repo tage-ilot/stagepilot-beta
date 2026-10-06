@@ -349,5 +349,8 @@ export function buildReadinessChecks({
 export const readinessPassed = (checks: ReadinessCheck[]) =>
   checks.filter((check) => check.required).every((check) => check.passed);
 
-export const readinessHasError = (checks: ReadinessCheck[]) =>
-  checks.some((check) => check.required && check.status === "error");
+// Only a blocking subsystem in an error state turns the pill red; optional/non-blocking ones never do.
+export const readinessErrorCauses = (checks: ReadinessCheck[]) =>
+  checks.filter((check) => check.required && check.severity === "blocking" && check.status === "error");
+
+export const readinessHasError = (checks: ReadinessCheck[]) => readinessErrorCauses(checks).length > 0;

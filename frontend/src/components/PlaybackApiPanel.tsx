@@ -1,84 +1,132 @@
 import { useEffect, useState } from "react";
 
 import type { PlaybackController } from "../hooks/usePlaybackInput";
-import type { PlaybackSettingsInput } from "../types";
-import { playbackOrderNotice, validPlaybackHost } from "./playbackStatus";
+import type { PlaybackDraft } from "./PlaybackSaveFooter";
+import { playbackActivityText, playbackBannerTone, playbackOrderNotice, validPlaybackHost } from "./playbackStatus";
 
-const button = "min-h-11 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3.5 py-2.5 text-sm font-semibold text-sky-200 hover:bg-sky-400/20 disabled:opacity-40";
+const button = "min-h-11 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3.5 py-2.5 text-sm font-semibold text-sky-200 hover:bg-sky-400/20";
+const big = "min-h-12 w-full rounded-xl border border-sky-300/40 bg-sky-500 px-5 py-3 text-base font-bold text-white hover:bg-sky-400 sm:w-auto";
+const toneClass = {
+  connected: "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
+  backup: "border-amber-400/30 bg-amber-400/10 text-amber-100",
+  searching: "border-amber-400/30 bg-amber-400/10 text-amber-100",
+  idle: "border-white/10 bg-white/5 text-slate-200",
+} as const;
+const CHECKLIST = ["Playback is open on a computer", "Remote Connections is turned on in Playback", "Both computers are on the same network"];
 
-
-export function PlaybackApiPanel({ playback }: { playback?: PlaybackController }) {
+export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackController; draft?: PlaybackDraft }) {
   const status = playback?.status;
   const [host, setHost] = useState("");
+  const [specific, setSpecific] = useState(false);
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setHost(status?.settings.host ?? ""), [status?.settings.host]);
-  const valid = validPlaybackHost(host);
+
+  const scan = status?.scan;
+  const scanning = scan?.state === "scanning" || playback?.pending === "scan";
   const running = status?.discovery === "running" || playback?.pending === "discover";
-  const busy = Boolean(playback?.pending) || running;
   const apiConnected = status?.sources.playback_api.connected ?? false;
-  const discoverReason = !status?.selected || !status.enabled ? "Select and enable Playback API first."
-    : !apiConnected ? "Connect Playback API first."
-      : status.playing ? "Stop Playback first." : running ? "Discovery is running." : null;
+  const trimmed = host.trim();
+  const hostOk = validPlaybackHost(trimmed);
+  const orderSaved = Boolean(status?.song_order.length) && !status?.stale;
   const notice = status ? playbackOrderNotice(status) : null;
-  const save = (enabled = status?.settings.enabled ?? true) => {
-    if (!status || !valid) return;
-    const input: PlaybackSettingsInput = { ...status.settings, enabled, host: host || null };
-    playback?.save(input);
-  };
+  // A dialog never outlives the state that allowed it (e.g. Playback started playing).
+  const canDiscover = apiConnected && !status?.playing && !running;
+  useEffect(() => { if (!canDiscover) setConfirm(false); }, [canDiscover]);
+
+  const connect = () => { if (trimmed && hostOk) playback?.scan(trimmed); };
+  const tone = status ? playbackBannerTone(status) : "idle";
+  const apiOn = draft?.enabled ?? status?.enabled ?? true;
 
   return (
-    <div className="mt-4 space-y-3 rounded-xl border border-sky-400/20 bg-sky-400/[0.05] p-4">
-      <h3 className="font-bold text-white">Playback API</h3>
-      <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
-        <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || busy || !valid} onChange={(event) => save(event.target.checked)} />
-        Playback API on
-      </label>
-      <p className="text-sm text-slate-300" aria-live="polite">
-        {apiConnected ? `Playback API connected to ${status?.host}:${status?.port}` : "Playback API not connected"}
-      </p>
-      {status?.selected && status.enabled && !apiConnected && <p className="text-sm text-amber-200">Playback remote connections may be off. Enable them in Playback; StagePilot will keep reconnecting.</p>}
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="w-full min-w-0 flex-none text-sm text-slate-300 sm:min-w-48 sm:flex-1">
-          Manual address
-          <input className="mt-1 block min-h-11 w-full rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={host} placeholder="Automatic (this computer, then LAN)" disabled={!status || busy} onChange={(event) => setHost(event.target.value)} aria-invalid={!valid} />
-        </label>
-        <button className={button} disabled={!status || busy || !valid} onClick={() => save()} type="button">Save address</button>
-        <button className={button} disabled={!status?.selected || !status.enabled || busy || host !== (status.settings.host ?? "")} onClick={playback?.scan} type="button">{playback?.pending === "scan" ? "Scanning…" : "Find / Scan"}</button>
+    <div className="mt-4 space-y-4">
+      <div className={`rounded-xl border p-4 ${toneClass[tone]}`} role="status" aria-live="polite" data-testid="playback-banner">
+        <p className="text-base font-semibold">{status ? status.reason : playback?.error ?? "Checking Playback…"}</p>
+        {status?.scan.state === "scanning" && status.scan.total > 0 && <p className="mt-1 text-sm opacity-80">Checked {status.scan.current} of {status.scan.total} addresses</p>}
       </div>
-      <p className="text-xs text-slate-400">A manual address overrides discovery. Leave blank to check this computer (127.0.0.1:8080), then the attached LAN. Save changes before scanning.</p>
-      {!valid && <p role="alert" className="text-sm text-rose-200">Enter a host name or IP address, without a URL, port, or spaces.</p>}
-      {(playback?.error || status?.last_error) && <p role="alert" className="text-sm text-rose-200">{playback?.error ?? status?.last_error}</p>}
-      {playback?.message && <p role="status" className="text-sm text-sky-200">{playback.message}</p>}
-      <div className="space-y-2 border-t border-white/10 pt-3">
-        <button className={button} disabled={Boolean(discoverReason) || busy} onClick={() => setConfirm(true)} type="button">Discover Song Order</button>
-        {discoverReason && <p className="text-xs text-slate-400">{discoverReason}</p>}
-        {running && <p role="status" className="text-sm text-sky-200">Discovering song order… {status?.progress ?? 0} steps. StagePilot ignores Playback events while this runs.</p>}
-        {notice && <p className="text-sm text-amber-200">{notice}</p>}
-        {status?.song_order.length ? <ol className="max-h-40 overflow-auto text-sm text-slate-300" aria-label="Discovered song order">{status.song_order.map((id, index) => <li key={id}>{index + 1} → ID {id}</li>)}</ol> : null}
-        <p className="text-xs text-slate-400">Rediscover after changing the setlist or its order, even if Playback reports the same version.</p>
+
+      <div className="space-y-3">
+        {scanning
+          ? <button className={big} type="button" onClick={playback?.cancelScan}>Scanning… (cancel)</button>
+          : <button className={big} type="button" onClick={() => playback?.scan()}>{scan?.state === "not_found" ? "Scan again" : "Scan Network"}</button>}
+        {scan?.state === "not_found" && !scanning && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-slate-200">
+            <p className="font-semibold">Couldn't find Playback</p>
+            <ul className="mt-1 list-disc pl-5 text-slate-300">{CHECKLIST.map((line) => <li key={line}>{line}</li>)}</ul>
+            <button className="mt-2 min-h-11 text-sky-200 underline" type="button" onClick={() => setSpecific(true)}>Enter address instead</button>
+          </div>
+        )}
+        {scan?.state === "found" && scan.candidates.length > 1 && !scanning && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3" role="group" aria-label="Choose which Playback">
+            <p className="text-sm font-semibold text-slate-100">Choose which Playback</p>
+            <ul className="mt-2 grid gap-2">{scan.candidates.map((candidate) => (
+              <li key={candidate.host}><button className={`${button} w-full text-left`} type="button" onClick={() => playback?.scan(candidate.host)}>{candidate.name} <span className="text-xs text-slate-400">{candidate.host}</span></button></li>
+            ))}</ul>
+          </div>
+        )}
+        {playback?.error && <p role="alert" className="text-sm text-rose-200">{playback.error}</p>}
+        {playback?.message && <p role="status" className="text-sm text-sky-200">{playback.message}</p>}
       </div>
+
+      {status && (
+        <section className="space-y-2 rounded-xl border border-sky-400/20 bg-sky-400/[0.05] p-4" aria-labelledby="song-order-heading">
+          <h3 id="song-order-heading" className="font-bold text-white">Song order</h3>
+          {!apiConnected ? <p className="text-sm text-slate-300">Connect to Playback first.</p>
+            : running ? <p role="status" className="text-sm text-sky-200">Checking your songs… step {status.progress}. Please wait.</p>
+              : status.playing ? <p className="text-sm text-amber-200">Stop Playback to set up song order.</p>
+                : <>
+                  {orderSaved ? <p className="text-sm text-emerald-200">Song order saved ({status.song_order.length} songs)</p>
+                    : <>{notice && <p className="text-sm text-amber-200">{notice}</p>}
+                      <p className="text-sm text-slate-300">StagePilot steps through your Playback songs once to learn the order. Playback must be stopped.</p></>}
+                  <button className={orderSaved ? button : big} type="button" onClick={() => setConfirm(true)}>{orderSaved ? "Set up again" : "Set up song order"}</button>
+                </>}
+          {status.discovery === "failed" && status.last_error && <p role="alert" className="text-sm text-rose-200">{status.last_error}</p>}
+        </section>
+      )}
       {confirm && <div role="dialog" aria-modal="true" aria-labelledby="discover-confirm-heading" className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
         <div className="max-w-lg space-y-4 rounded-xl border border-sky-400/30 bg-slate-950 p-5 shadow-2xl">
-          <h3 id="discover-confirm-heading" className="text-lg font-bold text-white">Discover Song Order?</h3>
-          <p className="text-sm text-slate-200">This will move through the Playback setlist with Next/Previous, then return to the song that was selected. Playback must be stopped; discovery will not run while a song is playing. StagePilot ignores Playback events while it runs. It takes about 2 seconds per song.</p>
-          {discoverReason && <p className="text-sm text-amber-200">{discoverReason}</p>}
+          <h3 id="discover-confirm-heading" className="text-lg font-bold text-white">Set up song order?</h3>
+          <p className="text-sm text-slate-200">StagePilot will step through the songs in Playback, then go back to the song that was selected. Playback must stay stopped. It takes about 2 seconds per song.</p>
           <div className="flex flex-wrap gap-3">
-            <button className={button} disabled={Boolean(discoverReason) || busy} onClick={() => { setConfirm(false); playback?.discover(); }} type="button">Discover Song Order</button>
+            <button className={button} autoFocus onClick={() => { setConfirm(false); playback?.discover(); }} type="button">Set up song order</button>
             <button className={button} onClick={() => setConfirm(false)} type="button">Cancel</button>
           </div>
         </div>
       </div>}
-      <div className="border-t border-white/10 pt-3">
-        <h3 className="text-sm font-semibold text-slate-200">Recent Playback events</h3>
-        <p className="text-xs text-slate-400">Time is seconds on the backend's monotonic clock, not wall-clock time. Song numbers follow the discovered order.</p>
-        {!playback?.events.length ? <p className="mt-2 text-sm text-slate-400">No Playback events received yet.</p> : <div className="mt-2 max-h-56 overflow-auto"><table className="w-full text-left text-sm text-slate-300">
-          <thead><tr><th className="pr-3">Time (s)</th><th className="pr-3">Event</th><th>Song</th></tr></thead>
-          <tbody>{[...playback.events].reverse().map(({ event, discovery }, index) => {
-            const position = event.song_id === null ? -1 : status?.song_order.indexOf(event.song_id) ?? -1;
-            return <tr key={`${event.timestamp}-${index}`}><td className="whitespace-nowrap pr-3">{event.timestamp.toFixed(1)}</td><td className="pr-3">{event.type}{discovery ? " (discovery)" : ""}</td><td>{status?.stale || position < 0 ? "Unknown" : position + 1}</td></tr>;
-          })}</tbody>
-        </table></div>}
+
+      <div className="space-y-3 rounded-xl border border-white/10 p-4">
+        <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+          <input type="checkbox" checked={apiOn} disabled={!status || !draft} onChange={(event) => draft?.setEnabled(event.target.checked)} />
+          Connect to Playback automatically
+        </label>
+        <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+          <input type="checkbox" checked={draft?.autoScan ?? true} disabled={!status || !draft} onChange={(event) => draft?.setAutoScan(event.target.checked)} />
+          Look for Playback on the network if it isn't on this computer
+        </label>
       </div>
+
+      <div>
+        <button className="min-h-11 text-sm font-semibold text-slate-200" type="button" aria-expanded={specific} aria-controls="playback-specific" onClick={() => setSpecific((value) => !value)}>{specific ? "▾" : "▸"} Connect a specific computer</button>
+        {specific && <form id="playback-specific" className="mt-2 flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); connect(); }}>
+          <label className="w-full min-w-0 flex-none text-sm text-slate-300 sm:min-w-48 sm:flex-1">
+            Computer name or address
+            <input className="mt-1 block min-h-11 w-full rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={host} placeholder="192.0.2.10" onChange={(event) => setHost(event.target.value)} aria-invalid={!hostOk} />
+          </label>
+          <button className={button} type="submit" disabled={!trimmed || !hostOk || scanning}>Connect</button>
+          {!trimmed && <p className="w-full text-xs text-slate-400">Type an address to connect.</p>}
+          {!hostOk && <p role="alert" className="w-full text-sm text-rose-200">Enter a computer name or address like 192.0.2.10 (no http://, port or spaces).</p>}
+        </form>}
+      </div>
+
+      <details className="border-t border-white/10 pt-3">
+        <summary className="min-h-11 cursor-pointer text-sm font-semibold text-slate-200">Recent activity</summary>
+        {!playback?.events.length ? <p className="mt-2 text-sm text-slate-400">Nothing yet.</p> : <ul className="mt-2 max-h-56 overflow-auto text-sm text-slate-300" aria-label="Recent activity">
+          {[...playback.events].reverse().map(({ event, discovery, at }, index) => {
+            const position = event.song_id === null ? -1 : status?.song_order.indexOf(event.song_id) ?? -1;
+            const known = !status?.stale && position >= 0 ? position : -1;
+            return <li key={`${event.timestamp}-${index}`} className="flex gap-3 py-0.5"><span className="whitespace-nowrap text-slate-400">{at ? new Date(at).toLocaleTimeString() : ""}</span><span>{playbackActivityText(event.type, known)}{discovery ? " (while setting up song order)" : ""}</span></li>;
+          })}
+        </ul>}
+      </details>
     </div>
   );
 }

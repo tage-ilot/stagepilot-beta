@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from stagepilot.api.remote_retry import RemoteRetryRoute
-from stagepilot.core.config import PlaybackApiSettings
+from stagepilot.core.config import MidiSource, PlaybackApiSettings
 from stagepilot.core.settings import SettingsFileError
 from stagepilot.plugins.playback_api.arbiter import PlaybackConnection, Source, SourceStatus
 from stagepilot.plugins.playback_api.client import ConnectionOptions
@@ -71,6 +71,7 @@ class PlaybackStatusResponse(BaseModel):
 class PlaybackMonitorEntry(BaseModel):
     event: PlaybackEvent
     discovery: bool
+    at: datetime
 
 
 class PlaybackEventsResponse(BaseModel):
@@ -142,7 +143,7 @@ async def connection(request: Request) -> PlaybackConnection:
 async def events(request: Request) -> PlaybackEventsResponse:
     return PlaybackEventsResponse(
         events=[
-            PlaybackMonitorEntry(event=item.event, discovery=item.discovery)
+            PlaybackMonitorEntry(event=item.event, discovery=item.discovery, at=item.at)
             for item in _controller(request).events
         ]
     )
@@ -186,9 +187,15 @@ async def settings(payload: PlaybackSettingsRequest, request: Request) -> Playba
     updated = PlaybackApiSettings.model_validate(
         {**previous.playback_api.model_dump(), **payload.model_dump()}
     )
+    # Turning Playback on is choosing it: one switch, no hidden second source setting.
+    modes = previous.integration_modes
+    if payload.enabled and modes.midi_source is not MidiSource.PLAYBACK_API:
+        modes = modes.model_copy(update={"midi_source": MidiSource.PLAYBACK_API})
     try:
         await controller.save_settings(
-            previous.model_copy(update={"playback_api": updated}, deep=True)
+            previous.model_copy(
+                update={"playback_api": updated, "integration_modes": modes}, deep=True
+            )
         )
     except SettingsFileError as exc:
         raise HTTPException(503, str(exc)) from exc

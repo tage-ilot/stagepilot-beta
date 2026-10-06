@@ -240,7 +240,12 @@ export const disconnectPlanningCenterOAuth = () =>
 export const getMidiInputs = () => requestJson<MidiInputsResponse>("/api/v1/midi/inputs");
 export const getPlaybackStatus = () => requestJson<PlaybackStatusResponse>("/api/v1/playback-api/status");
 export const getPlaybackEvents = () => requestJson<PlaybackEventsResponse>("/api/v1/playback-api/events");
-export const findPlayback = () => requestJson<PlaybackStatusResponse>("/api/v1/playback-api/find", { method: "POST" });
+export const findPlayback = (host?: string) =>
+  requestJson<PlaybackStatusResponse>("/api/v1/playback-api/find", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(host ? { host } : {}),
+  });
+export const cancelPlaybackScan = () =>
+  requestJson<PlaybackStatusResponse>("/api/v1/playback-api/find/cancel", { method: "POST" });
 export const updatePlaybackSettings = (settings: PlaybackSettingsInput) =>
   requestJson<PlaybackStatusResponse>("/api/v1/playback-api/settings", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings),
