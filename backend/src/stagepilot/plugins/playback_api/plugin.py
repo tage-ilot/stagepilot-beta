@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -16,7 +17,7 @@ from stagepilot.core.config import MidiSource, Settings
 from stagepilot.core.event_bus import EventBus
 from stagepilot.core.events import ConnectionPayload, EventType, new_event
 from stagepilot.core.plugin import Plugin
-from stagepilot.core.settings import PersistentSettings, SettingsService
+from stagepilot.core.settings import PersistentSettings, SettingsFileError, SettingsService
 from stagepilot.core.state import StateStore
 from stagepilot.models.state import ConnectionStatus, PluginHealth, PluginStatus
 from stagepilot.plugins.midi_playback import MidiPlaybackPlugin
@@ -31,11 +32,23 @@ from stagepilot.plugins.playback_api.client import (
     PlaybackClient,
     PlaybackStatus,
 )
+from stagepilot.plugins.playback_api.find import ScanCandidate, scan_candidates
 from stagepilot.plugins.playback_api.mapping import Observation, PlaybackMapper
 from stagepilot.plugins.playback_api.normalizer import Heartbeat, PlaybackEvent
 
 ClientFactory = Callable[[ConnectionOptions, Observer], PlaybackClient]
 MidiFactory = Callable[[Settings], MidiPlaybackPlugin]
+Scanner = Callable[..., list[ScanCandidate]]
+
+NOT_FOUND_REASON = (
+    "Couldn't find Playback. Check that Playback is open, Remote Connections is on, "
+    "and both computers are on the same network."
+)
+UNREACHABLE_REASON = "Playback isn't reachable. In Playback, turn on Remote Connections."
+
+
+def default_scanner(**kwargs: object) -> list[ScanCandidate]:
+    return scan_candidates(**kwargs)  # type: ignore[arg-type]
 
 
 def default_client(options: ConnectionOptions, observer: Observer) -> PlaybackClient:
@@ -65,6 +78,7 @@ class PlaybackInputPlugin(Plugin):
         midi_factory: MidiFactory,
         *,
         client_factory: ClientFactory = default_client,
+        scanner: Scanner = default_scanner,
         step_timeout: float = 5.0,
         max_steps: int = 200,
     ) -> None:
@@ -80,6 +94,14 @@ class PlaybackInputPlugin(Plugin):
         self._service = settings_service
         self._midi_factory = midi_factory
         self._client_factory = client_factory
+        self._scanner = scanner
+        self.scan_state: Literal["idle", "scanning", "found", "not_found"] = "idle"
+        self.scan_candidates: list[ScanCandidate] = []
+        self.scan_reason: str | None = None
+        self.scan_current = 0
+        self.scan_total = 0
+        self._scan_task: asyncio.Task[None] | None = None
+        self._scan_cancel = threading.Event()
         self.midi: MidiPlaybackPlugin | None = None
         if (
             settings.integration_modes.midi_source is not MidiSource.SIMULATED
@@ -167,11 +189,26 @@ class PlaybackInputPlugin(Plugin):
     @property
     def connection(self) -> PlaybackConnection:
         result = self.arbiter.snapshot()
-        if result.active_source == "playback_api" and self.mapper.stale:
+        # One plain sentence, owned here; the frontend never composes its own.
+        if self.scan_state == "scanning":
+            result.reason = "Looking for Playback…"
+        elif result.active_source == "playback_api":
+            host = self.status.host
+            name = "this computer" if host == "127.0.0.1" else host
             result.reason = (
-                "Connected via Playback API; song order stale/unknown — "
-                "discover song order before starts."
+                f"Connected to Playback on {name}." if name else "Connected to Playback."
             )
+        elif result.active_source == "none":
+            if self.scan_state == "not_found":
+                result.reason = NOT_FOUND_REASON
+            elif self.selected and self.settings.playback_api.enabled:
+                result.reason = (
+                    f"Not connected. {UNREACHABLE_REASON}"
+                    if self.status.last_error
+                    else "Not connected. Looking for Playback…"
+                )
+            else:
+                result.reason = "Not connected. Choose Scan Network to find Playback."
         return result
 
     async def _publish_connection(self) -> None:
@@ -254,6 +291,7 @@ class PlaybackInputPlugin(Plugin):
         await self._publish_connection()
 
     async def stop(self) -> None:
+        await self._cancel_scan()
         task = self._discovery_task
         if task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -410,18 +448,86 @@ class PlaybackInputPlugin(Plugin):
             else self.discovery_error or self.status.last_error,
         )
 
-    async def find(self) -> PlaybackStatus:
+    async def find(self, host: str | None = None) -> PlaybackStatus:
+        """Start a scan. Turns Playback on and selects it first if needed."""
+        if host is not None:
+            host = host.strip() or None
+            ConnectionOptions(True, host, self.settings.playback_api.port)
+        if self.discovery == "running":
+            raise DiscoveryConflict("Wait for Discover Song Order before scanning.")
+        # Cancel before taking the lifecycle lock: the old scan may be waiting on it.
+        await self._cancel_scan()
         async with self._lifecycle:
-            if self.discovery == "running":
-                raise DiscoveryConflict("Wait for Discover Song Order before scanning.")
-            if not self.selected or not self.settings.playback_api.enabled:
-                raise DiscoveryConflict("Select and enable Playback API before scanning.")
-            # Restart the selected receive lifecycle: its finder validates heartbeat,
-            # preserves manual override/local-first policy, and reconnects to the result.
-            async with self._dispatch_lock:
-                await self._stop_selected(keep_midi=True)
-                await self._start_selected()
-            return self.status
+            self._scan_cancel = threading.Event()
+            self.scan_state = "scanning"
+            self.scan_candidates = []
+            self.scan_reason = None
+            self.scan_current = self.scan_total = 0
+            self._scan_task = asyncio.create_task(self._scan(host), name="playback-scan")
+        return self.status
+
+    async def cancel_scan(self) -> None:
+        await self._cancel_scan()
+        if self.scan_state == "scanning":
+            self.scan_state = "idle"
+            self.scan_reason = "Scan cancelled."
+
+    async def _cancel_scan(self) -> None:
+        task = self._scan_task
+        self._scan_cancel.set()
+        if task is not None and task is not asyncio.current_task():
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        self._scan_task = None
+
+    async def _adopt(self, host: str | None) -> None:
+        """Select Playback, turn it on, and remember the address (one save)."""
+        saved = self._service.snapshot()
+        playback = saved.playback_api.model_copy(update={"enabled": True, "host": host})
+        modes = saved.integration_modes.model_copy(update={"midi_source": MidiSource.PLAYBACK_API})
+        # The caller holds the lifecycle lock, so use the lock-free internals.
+        self._service.save(
+            saved.model_copy(
+                update={"playback_api": playback, "integration_modes": modes}, deep=True
+            )
+        )
+        await self._reconfigure(self._service.effective_runtime_settings())
+
+    async def _scan(self, host: str | None) -> None:
+        cancel = self._scan_cancel
+        config = self.settings.playback_api
+
+        def progress(current: int, total: int) -> None:
+            self.scan_current, self.scan_total = current, total
+
+        try:
+            found = await asyncio.to_thread(
+                self._scanner,
+                host_override=host,
+                port=config.port,
+                auto_scan=True,
+                cancel=cancel,
+                progress=progress,
+            )
+            if cancel.is_set():
+                return
+            self.scan_candidates = list(found)
+            if not found:
+                self.scan_state = "not_found"
+                self.scan_reason = NOT_FOUND_REASON
+                return
+            if len(found) == 1:
+                async with self._lifecycle:
+                    if cancel.is_set() or self.discovery == "running":
+                        return
+                    await self._adopt(found[0].host)
+            self.scan_state = "found"
+        except SettingsFileError:
+            self.scan_state = "not_found"
+            self.scan_reason = "Found Playback but could not save the address."
+        except Exception:
+            self.scan_state = "not_found"
+            self.scan_reason = NOT_FOUND_REASON
 
     def _check_discovery(self, version: int | None = None) -> Heartbeat:
         heartbeat = self._heartbeat

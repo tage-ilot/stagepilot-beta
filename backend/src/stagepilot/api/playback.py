@@ -27,7 +27,26 @@ class PlaybackSettingsRequest(BaseModel):
     auto_scan: bool = True
 
 
+class ScanCandidateModel(BaseModel):
+    name: str
+    host: str
+
+
+class ScanResult(BaseModel):
+    state: Literal["idle", "scanning", "found", "not_found"]
+    candidates: list[ScanCandidateModel]
+    reason: str | None
+    current: int
+    total: int
+
+
+class FindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str | None = Field(default=None, max_length=255)
+
+
 class PlaybackStatusResponse(BaseModel):
+    scan: ScanResult
     selected: bool
     enabled: bool
     connected: bool
@@ -72,6 +91,15 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
     heartbeat = status.heartbeat
     connection = controller.connection
     return PlaybackStatusResponse(
+        scan=ScanResult(
+            state=controller.scan_state,
+            candidates=[
+                ScanCandidateModel(name=c.name, host=c.host) for c in controller.scan_candidates
+            ],
+            reason=controller.scan_reason,
+            current=controller.scan_current,
+            total=controller.scan_total,
+        ),
         selected=controller.selected,
         enabled=config.enabled,
         connected=connection.connected,
@@ -121,12 +149,26 @@ async def events(request: Request) -> PlaybackEventsResponse:
 
 
 @router.post("/find", response_model=PlaybackStatusResponse)
-async def find(request: Request) -> PlaybackStatusResponse:
+async def find(request: Request, payload: object = Body(default=None)) -> PlaybackStatusResponse:
+    """Scan, no setup needed: turns Playback on and selects it, then looks for it."""
     controller = _controller(request)
     try:
-        await controller.find()
+        body = FindRequest.model_validate(payload or {})
+    except ValueError as exc:
+        raise HTTPException(422, "Enter a host name or IP address.") from exc
+    try:
+        await controller.find(body.host)
     except DiscoveryConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return status_response(controller)
+
+
+@router.post("/find/cancel", response_model=PlaybackStatusResponse)
+async def cancel_find(request: Request) -> PlaybackStatusResponse:
+    controller = _controller(request)
+    await controller.cancel_scan()
     return status_response(controller)
 
 
