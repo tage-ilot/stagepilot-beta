@@ -82,6 +82,7 @@ Reconnect revalidates its first snapshot rather than invalidating by itself.
 `PUT /api/v1/playback-api/settings` applies on/off and endpoint settings live;
 `GET /api/v1/playback-api/status`, `GET /events`, `POST /find`, and confirmed
 `POST /discover-song-order` support the existing configuration window. MIDI
+(shown in the collapsed "Alternate connection: MIDI settings" section of the Playback panel)
 remains explicitly selectable with `integration_modes.midi_source: real`. In
 default API mode, the saved MIDI input also stays open as automatic fallback.
 One unified Playback connection is successful if either source connects. Healthy

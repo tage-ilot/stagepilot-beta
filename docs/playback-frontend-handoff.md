@@ -6,7 +6,7 @@ Implements the existing Playback configuration window on top of backend arbitrat
 
 - Default panel: Playback API on/off, API-specific connected address, saved manual host override (blank restores automatic local-first/LAN discovery), Find / Scan, recent normalized events.
 - One header connection light and backend `reason` for overall Playback. API-only controls use `sources.playback_api.connected`, never overall `connected`. MIDI fallback remains connected overall while API is offline. Connected MIDI with API ownership says `MIDI connected - standing by (Playback API is in use)`.
-- Advanced starts collapsed on every mount; source selector and all prior MIDI mapping/input/simulation/monitor controls stay there. MIDI handlers and backend behavior unchanged.
+- "Alternate connection: MIDI settings" starts collapsed on every mount; source selector and all prior MIDI mapping/input/simulation/monitor controls stay there. MIDI handlers and backend behavior unchanged.
 - Discover Song Order requires the plain-language confirmation dialog. Disconnected/playing/running states disable it and explain why. Only the exact backend `POST /discover-song-order` with `{confirm:true}` is available; no individual transport controls. Status polling continues during this long request; failed HTTP 200 results show `last_error`.
 - Connection health remains green with stale/unknown API order. Separate start-readiness warning/check requires discovery; invalid API order does not block readiness when MIDI actually owns.
 - All calls use existing authenticated API request helper. Configuration polling is disabled for Viewers, serialized at 750 ms, and stops on unmount/access removal. Generation/revision guards reject stale results; mutations serialize. Source changes read fresh settings first to preserve MIDI values and discovered order.
@@ -31,7 +31,7 @@ Backend (unchanged from base), frozen dev sync passed:
 - Strict mypy: 139 source files passed.
 - `git diff --check`: passed.
 
-Regression coverage includes default/collapsed/expanded Advanced, source switch, scan pending/result/timeout, host validation, enable/disable, confirmation/cancel/recheck of playing state, discovery progress/order/stale/failure, recent events, API-only/MIDI-only/both/neither shared panel/dashboard/checklist status, invalid order vs connection readiness, polling failover/cleanup/access removal/stale responses, serialized operations, failed discovery 200/conflicts, exact routes/confirmation payload and fresh settings preservation.
+Regression coverage includes default/collapsed/expanded "Alternate connection: MIDI settings", source switch, scan pending/result/timeout, host validation, enable/disable, confirmation/cancel/recheck of playing state, discovery progress/order/stale/failure, recent events, API-only/MIDI-only/both/neither shared panel/dashboard/checklist status, invalid order vs connection readiness, polling failover/cleanup/access removal/stale responses, serialized operations, failed discovery 200/conflicts, exact routes/confirmation payload and fresh settings preservation.
 
 No real Playback or operator-network probe, no merge/tag/release/deploy. Browser/device/mobile visual QA and full combined-stack/release acceptance belong to existing downstream `t_9ad0892e`. `npm ci` reported 14 audit findings in the unchanged dependency lock (4 moderate, 10 high); dependency changes were out of scope.
 

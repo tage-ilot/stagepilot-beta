@@ -114,7 +114,7 @@ function renderPanel({
       songs={songs}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
 }
 
 describe("MidiSetupPanel", () => {

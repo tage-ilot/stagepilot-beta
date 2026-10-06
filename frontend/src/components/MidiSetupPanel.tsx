@@ -164,7 +164,7 @@ export function MidiSetupPanel({
       />
 
       <PlaybackApiPanel playback={playback} draft={draft} />
-      <button className="mt-4 min-h-11 rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5" aria-expanded={advanced} aria-controls="playback-advanced" onClick={() => setAdvanced((value) => !value)} type="button">{advanced ? "▾" : "▸"} Advanced</button>
+      <button className="mt-4 min-h-11 max-w-full whitespace-normal break-words text-left rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5" aria-expanded={advanced} aria-controls="playback-advanced" onClick={() => setAdvanced((value) => !value)} type="button">{advanced ? "▾" : "▸"} Alternate connection: MIDI settings</button>
       {advanced && <div id="playback-advanced">
         <label className="mt-3 block text-sm text-slate-300">Playback connection type
           <select className="ml-3 min-h-11 rounded-lg border border-white/10 bg-slate-950 px-3 text-white" value={settings?.settings.integration_modes.midi_source ?? "playback_api"} disabled={!playback || Boolean(playback.pending) || playback.status?.discovery === "running"} onChange={(event) => playback?.selectSource(event.target.value === "real" ? "real" : "playback_api")}>

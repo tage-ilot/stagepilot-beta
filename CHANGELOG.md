@@ -7,7 +7,7 @@
 ### Changed
 
 - Playback API is now the default Playback connection (settings schema 2).
-  MIDI (native, network, gateway) moved under a collapsed Advanced section and
+  MIDI (native, network, gateway) moved under a collapsed "Alternate connection: MIDI settings" section and
   is unchanged as the alternative. Unified status/readiness is consistent across
   the config panel, dashboard and checklist; when both are connected the
   Playback API wins and MIDI is used only when the API is not connected.

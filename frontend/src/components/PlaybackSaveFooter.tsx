@@ -77,7 +77,7 @@ export function PlaybackSaveFooter({ draft, playback, midiDirty = false }: {
   return (
     <div className="sticky bottom-0 z-10 -mx-5 mt-5 space-y-2 rounded-b-2xl border-t border-white/10 bg-slate-950/95 px-5 py-3 backdrop-blur" data-testid="playback-save-footer">
       {reason && <p role="alert" className="text-sm text-rose-200">{reason}</p>}
-      {midiDirty && <p className="text-sm text-amber-200">You also have unsaved MIDI changes in Advanced. They are saved with Save MIDI settings, not here.</p>}
+      {midiDirty && <p className="text-sm text-amber-200">You also have unsaved MIDI changes in Alternate connection: MIDI settings. They are saved with Save MIDI settings, not here.</p>}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <button className={primary} type="button" disabled={!draft.dirty || draft.saving || !playback?.status} onClick={() => void draft.save()}>
           {draft.saving ? "Saving…" : "Save settings"}

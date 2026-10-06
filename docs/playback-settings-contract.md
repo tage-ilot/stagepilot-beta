@@ -35,7 +35,7 @@ The existing settings snapshot serialization carries this block and selected
 source. Source-specific routes/UI wiring are integration work, not this settings
 slice. The frontend should render Playback in the existing MIDI/Playback settings
 window as the primary panel and keep MIDI controls in an initially collapsed
-Advanced disclosure, not a new page. Collapsed UI state is not persisted here.
+"Alternate connection: MIDI settings" disclosure, not a new page. Collapsed UI state is not persisted here.
 
 ## Discovery handoff
 

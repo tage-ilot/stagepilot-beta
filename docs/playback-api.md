@@ -114,7 +114,7 @@ use the existing StateService pipeline, outside receive-worker threads.
 All routes use the existing dashboard authentication/remote retry boundary under
 `/api/v1/playback-api`. There are no play, pause, select, seek or individual
 Previous/Next routes. Keep controls inside the existing MIDI/Playback settings
-widget, with MIDI in the initially collapsed Advanced disclosure (frontend task).
+widget, with MIDI in the initially collapsed "Alternate connection: MIDI settings" disclosure (frontend task).
 
 - `GET /status`: typed network/configuration/discovery snapshot below.
 - `GET /connection`: only the unified `{active_source, sources, connected, reason}`.

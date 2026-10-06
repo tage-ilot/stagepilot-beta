@@ -38,7 +38,7 @@ describe("Scan Network is always first and never dead", () => {
     panel(playback);
     const scan = screen.getByRole("button", { name: "Scan Network" });
     expect(scan).toBeEnabled();
-    const primary = screen.getAllByRole("button").find((b) => !/Close|Advanced/.test(b.textContent ?? "") && !/Close/.test(b.getAttribute("aria-label") ?? ""));
+    const primary = screen.getAllByRole("button").find((b) => !/Close|Alternate connection: MIDI settings/.test(b.textContent ?? "") && !/Close/.test(b.getAttribute("aria-label") ?? ""));
     expect(primary).toBe(scan);
     fireEvent.click(scan);
     expect(playback.scan).toHaveBeenCalledWith();
@@ -179,13 +179,13 @@ describe("Main view has no jargon", () => {
   });
 });
 
-describe("Advanced and MIDI", () => {
+describe("Alternate connection: MIDI settings and MIDI", () => {
   it("collapsed by default; one labelled choice; MIDI controls unchanged", async () => {
     const playback = controller();
     const user = userEvent.setup();
     panel(playback);
     expect(screen.queryByLabelText("MIDI channel")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
     expect(screen.getByLabelText("Playback connection type")).toHaveValue("playback_api");
     expect(screen.getByRole("option", { name: "Playback connection (recommended)" })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Playback connection type"), "real");
@@ -201,7 +201,7 @@ const scenarios = [
   { name: "neither", api: false, midi: false, active: "none" as const, reason: "Not connected. Choose Scan Network to find Playback." },
   { name: "scanning", api: false, midi: false, active: "none" as const, reason: "Looking for Playback…", scanning: true },
 ];
-describe("Banner, panel, dashboard, checklist and Advanced never contradict", () => {
+describe("Banner, panel, dashboard, checklist and Alternate connection: MIDI settings never contradict", () => {
   it.each(scenarios)("$name", async ({ api, midi, active, reason, scanning }) => {
     const connected = api || midi;
     const status = playbackStatus({
@@ -212,8 +212,8 @@ describe("Banner, panel, dashboard, checklist and Advanced never contradict", ()
     // One banner, one sentence: exactly the backend text.
     expect(screen.getByTestId("playback-banner")).toHaveTextContent(reason);
     expect(screen.getAllByText(reason)).toHaveLength(1);
-    await userEvent.setup().click(screen.getByRole("button", { name: /Advanced/ }));
-    // MIDI detail in Advanced never says the opposite of the banner.
+    await userEvent.setup().click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
+    // MIDI detail in the alternate connection section never says the opposite of the banner.
     const advanced = document.getElementById("playback-advanced") as HTMLElement;
     if (midi) expect(advanced).toHaveTextContent(/MIDI is connected/);
     else expect(advanced).not.toHaveTextContent(/MIDI is connected|MIDI input connected/);
@@ -341,9 +341,9 @@ describe("Save settings footer", () => {
   it("names dirty MIDI fields instead of ignoring them", async () => {
     const user = userEvent.setup();
     panel();
-    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(screen.getByRole("button", { name: /Alternate connection: MIDI settings/ }));
     fireEvent.change(screen.getByLabelText("MIDI channel"), { target: { value: "5" } });
-    expect(screen.getByTestId("playback-save-footer")).toHaveTextContent(/unsaved MIDI changes in Advanced/);
+    expect(screen.getByTestId("playback-save-footer")).toHaveTextContent(/unsaved MIDI changes in Alternate connection: MIDI settings/);
   });
 
   it("reports dirtiness upward so leaving can ask first", () => {
