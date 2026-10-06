@@ -2,12 +2,32 @@
 
 ## [Unreleased]
 
+## [1.1.104-beta.27] - 2026-10-06
+
+### Changed
+
+- Playback connection window redesigned: one-click Scan Network, a single unified
+  connection status banner, a song-order card, and a Save settings footer with
+  a discard confirmation. Defaults for a fresh install now start on the Playback
+  connection.
+- The collapsed MIDI section is now labelled "Alternate connection: MIDI
+  settings" (previously "Advanced"); it still starts collapsed and is not
+  persisted open. Docs and tests updated to the new name.
+
+### Fixed
+
+- Settings migration: existing settings files are upgraded once and
+  idempotently, keeping all saved MIDI values (fix carried in this release's
+  Playback UX work, PR #85).
+- beta.24 and beta.25 were tagged but never published, and beta.26 is the
+  latest published release; this is the next unused number.
+
 ## [1.1.104-beta.26] - 2026-10-05
 
 ### Changed
 
 - Playback API is now the default Playback connection (settings schema 2).
-  MIDI (native, network, gateway) moved under a collapsed "Alternate connection: MIDI settings" section and
+  MIDI (native, network, gateway) moved under a collapsed Advanced section and
   is unchanged as the alternative. Unified status/readiness is consistent across
   the config panel, dashboard and checklist; when both are connected the
   Playback API wins and MIDI is used only when the API is not connected.
