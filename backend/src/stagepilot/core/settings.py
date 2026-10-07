@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from collections.abc import Callable, Mapping
@@ -136,6 +137,13 @@ class PersistentSettings(BaseModel):
             if not chose_midi:
                 migrated["integration_modes"] = {**modes, "midi_source": MidiSource.PLAYBACK_API}
             migrated["schema_version"] = SETTINGS_SCHEMA_VERSION
+            logging.getLogger(__name__).warning(
+                "settings_migration schema=1->2 chose_midi=%s midi_source=%s",
+                chose_midi,
+                migrated["integration_modes"].get("midi_source")
+                if isinstance(migrated.get("integration_modes"), dict)
+                else None,
+            )
             return migrated
         return value
 
@@ -286,26 +294,37 @@ class KeyringCredentialStore:
 
     def __init__(self, account: str = KEYRING_ACCOUNT) -> None:
         self._account = account
+        # Each Keychain read can raise a macOS password prompt, so read at most once
+        # per launch and keep the (in-memory only) result current across our own writes.
+        self._cached = False
+        self._value: str | None = None
 
     def get_secret(self) -> str | None:
+        if self._cached:
+            return self._value
         try:
-            return keyring.get_password(KEYRING_SERVICE, self._account)
+            self._value = keyring.get_password(KEYRING_SERVICE, self._account)
         except KeyringError:
             raise CredentialStoreError("The secure credential store is unavailable.") from None
+        self._cached = True
+        return self._value
 
     def set_secret(self, secret: str) -> None:
         try:
             keyring.set_password(KEYRING_SERVICE, self._account, secret)
         except KeyringError:
             raise CredentialStoreError("The secure credential could not be saved.") from None
+        self._cached, self._value = True, secret
 
     def remove_secret(self) -> None:
         try:
             keyring.delete_password(KEYRING_SERVICE, self._account)
         except PasswordDeleteError:
+            self._cached, self._value = True, None
             return
         except KeyringError:
             raise CredentialStoreError("The secure credential could not be removed.") from None
+        self._cached, self._value = True, None
 
 
 def default_oauth_credential_store() -> CredentialStore:
@@ -598,11 +617,15 @@ class SettingsService:
             warnings.append(str(exc))
         self._persistent = saved or PersistentSettings()
 
-        try:
-            secret = self._credentials.get_secret()
-        except CredentialStoreError as exc:
-            secret = None
-            warnings.append(str(exc))
+        secret: str | None = None
+        planning_center = self._persistent.planning_center
+        # No Planning Center App ID means nothing usable is configured: do not touch the
+        # Keychain at all (every Keychain read can prompt for the login password).
+        if planning_center.app_id is not None or planning_center.connection_method == "oauth":
+            try:
+                secret = self._credentials.get_secret()
+            except CredentialStoreError as exc:
+                warnings.append(str(exc))
         self._secret = secret
         self.credential_saved = secret is not None
 

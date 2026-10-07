@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,7 +16,11 @@ from stagepilot.core.settings import SettingsFileError
 from stagepilot.plugins.playback_api.arbiter import PlaybackConnection, Source, SourceStatus
 from stagepilot.plugins.playback_api.client import ConnectionOptions
 from stagepilot.plugins.playback_api.normalizer import PlaybackEvent
-from stagepilot.plugins.playback_api.plugin import DiscoveryConflict, PlaybackInputPlugin
+from stagepilot.plugins.playback_api.plugin import (
+    LOCAL_NETWORK_SETTINGS_URL,
+    DiscoveryConflict,
+    PlaybackInputPlugin,
+)
 
 router = APIRouter(prefix="/api/v1/playback-api", route_class=RemoteRetryRoute)
 
@@ -38,6 +44,15 @@ class ScanResult(BaseModel):
     reason: str | None
     current: int
     total: int
+    phase: str | None = None
+    error_class: str | None = None
+    typed: bool = False
+    elapsed: float = 0.0
+    networks: list[str] = Field(default_factory=list)
+    hosts_probed: int = 0
+    hosts_total: int = 0
+    details: str | None = None
+    settings_url: str | None = None
 
 
 class FindRequest(BaseModel):
@@ -86,6 +101,25 @@ def _controller(request: Request) -> PlaybackInputPlugin:
     return controller
 
 
+def scan_extras(controller: PlaybackInputPlugin) -> dict[str, Any]:
+    last = controller.last_scan or {}
+    elapsed = controller.scan_elapsed
+    if controller.scan_state == "scanning" and controller.scan_started_at is not None:
+        elapsed = time.monotonic() - controller.scan_started_at
+    blocked = controller.scan_error_class == "permission_denied"
+    return {
+        "phase": controller.scan_phase if controller.scan_state == "scanning" else None,
+        "error_class": controller.scan_error_class,
+        "typed": controller.scan_typed,
+        "elapsed": round(elapsed, 1),
+        "networks": [str(n) for n in last.get("networks", [])],  # type: ignore[attr-defined]
+        "hosts_probed": int(last.get("hosts_probed", 0)),  # type: ignore[call-overload]
+        "hosts_total": int(last.get("hosts_total", 0)),  # type: ignore[call-overload]
+        "details": json.dumps(last, default=str, sort_keys=True) if last else None,
+        "settings_url": LOCAL_NETWORK_SETTINGS_URL if blocked else None,
+    }
+
+
 def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
     status = controller.status
     config = controller.settings.playback_api
@@ -100,6 +134,7 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
             reason=controller.scan_reason,
             current=controller.scan_current,
             total=controller.scan_total,
+            **scan_extras(controller),
         ),
         selected=controller.selected,
         enabled=config.enabled,

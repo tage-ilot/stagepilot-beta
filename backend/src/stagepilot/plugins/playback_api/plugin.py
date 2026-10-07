@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from collections import deque
@@ -16,6 +17,7 @@ from stagepilot.core.actions import ActionDispatcher
 from stagepilot.core.config import MidiSource, Settings
 from stagepilot.core.event_bus import EventBus
 from stagepilot.core.events import ConnectionPayload, EventType, new_event
+from stagepilot.core.logging import _redact, get_logger
 from stagepilot.core.plugin import Plugin
 from stagepilot.core.settings import PersistentSettings, SettingsFileError, SettingsService
 from stagepilot.core.state import StateStore
@@ -32,13 +34,13 @@ from stagepilot.plugins.playback_api.client import (
     PlaybackClient,
     PlaybackStatus,
 )
-from stagepilot.plugins.playback_api.find import ScanCandidate, scan_candidates
+from stagepilot.plugins.playback_api.find import ScanCandidate, ScanReport, scan_network
 from stagepilot.plugins.playback_api.mapping import Observation, PlaybackMapper
 from stagepilot.plugins.playback_api.normalizer import Heartbeat, PlaybackEvent
 
 ClientFactory = Callable[[ConnectionOptions, Observer], PlaybackClient]
 MidiFactory = Callable[[Settings], MidiPlaybackPlugin]
-Scanner = Callable[..., list[ScanCandidate]]
+Scanner = Callable[..., list[ScanCandidate] | ScanReport]
 
 NOT_FOUND_REASON = (
     "Couldn't find Playback. Check that Playback is open, Remote Connections is on, "
@@ -47,8 +49,56 @@ NOT_FOUND_REASON = (
 UNREACHABLE_REASON = "Playback isn't reachable. In Playback, turn on Remote Connections."
 
 
-def default_scanner(**kwargs: object) -> list[ScanCandidate]:
-    return scan_candidates(**kwargs)  # type: ignore[arg-type]
+def default_scanner(**kwargs: object) -> list[ScanCandidate] | ScanReport:
+    return scan_network(**kwargs)  # type: ignore[arg-type]
+
+
+# Plain-language message and ONE concrete next step per failure class.
+SCAN_MESSAGES: dict[str, str] = {
+    "permission_denied": (
+        "macOS blocked StagePilot from reaching other computers on your network. "
+        "Open System Settings > Privacy & Security > Local Network, turn on StagePilot, "
+        "then quit and reopen StagePilot and scan again."
+    ),
+    "no_route": (
+        "This computer has no route to that address. Check that it is on the same Wi-Fi or "
+        "network as Playback."
+    ),
+    "refused": (
+        "That computer answered, but Playback isn't accepting connections. In Playback, "
+        "turn on Remote Connections."
+    ),
+    "timed_out": (
+        "Nothing answered in time. Check the address and that Playback is open on that computer."
+    ),
+    "not_playback": (
+        "Something answered, but it didn't behave like Playback. Check the address, and that "
+        "Remote Connections is on in Playback."
+    ),
+    "invalid_address": (
+        "That isn't a valid address. Enter a computer name or an address like 192.0.2.10."
+    ),
+    "unexpected_error": (
+        "Something unexpected went wrong while scanning. Copy the diagnostic details."
+    ),
+}
+
+# Opens the macOS Local Network privacy pane (verified present in the Privacy & Security
+# extension on macOS 15; older systems fall back to the Privacy pane).
+LOCAL_NETWORK_SETTINGS_URL = (
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork"
+)
+
+_LOG = get_logger("playback")
+RECENT_LOG: deque[str] = deque(maxlen=200)
+
+
+def playback_log(event: str, **fields: object) -> None:
+    """INFO log + bounded in-memory copy for the diagnostics bundle. Secrets are redacted."""
+    safe = _redact({"event": event, **fields})
+    assert isinstance(safe, dict)
+    RECENT_LOG.append(json.dumps(safe, default=str, sort_keys=True))
+    _LOG.info(event, **{k: v for k, v in safe.items() if k != "event"})
 
 
 def default_client(options: ConnectionOptions, observer: Observer) -> PlaybackClient:
@@ -101,6 +151,12 @@ class PlaybackInputPlugin(Plugin):
         self.scan_reason: str | None = None
         self.scan_current = 0
         self.scan_total = 0
+        self.scan_phase: str | None = None
+        self.scan_error_class: str | None = None
+        self.scan_typed = False
+        self.scan_started_at: float | None = None
+        self.scan_elapsed = 0.0
+        self.last_scan: dict[str, object] | None = None
         self._scan_task: asyncio.Task[None] | None = None
         self._scan_cancel = threading.Event()
         self.midi: MidiPlaybackPlugin | None = None
@@ -464,6 +520,11 @@ class PlaybackInputPlugin(Plugin):
             self.scan_candidates = []
             self.scan_reason = None
             self.scan_current = self.scan_total = 0
+            self.scan_error_class = None
+            self.scan_typed = host is not None
+            self.scan_phase = f"Connecting to {host}…" if host else "This computer"
+            self.scan_started_at = time.monotonic()
+            self.scan_elapsed = 0.0
             self._scan_task = asyncio.create_task(self._scan(host), name="playback-scan")
         return self.status
 
@@ -494,41 +555,93 @@ class PlaybackInputPlugin(Plugin):
         )
         await self._reconfigure(self._service.effective_runtime_settings())
 
+    def _finish_scan(
+        self, state: Literal["idle", "found", "not_found"], reason: str | None
+    ) -> None:
+        if self.scan_started_at is not None:
+            self.scan_elapsed = time.monotonic() - self.scan_started_at
+        self.scan_state = state
+        self.scan_reason = reason
+
     async def _scan(self, host: str | None) -> None:
         cancel = self._scan_cancel
         config = self.settings.playback_api
+        started = time.monotonic()
+        playback_log(
+            "playback_scan_start", trigger="typed_host" if host else "scan_button", typed_host=host
+        )
 
         def progress(current: int, total: int) -> None:
             self.scan_current, self.scan_total = current, total
+            if self.scan_started_at is not None:
+                self.scan_elapsed = time.monotonic() - self.scan_started_at
+
+        def on_phase(name: str, current: int, total: int) -> None:
+            self.scan_phase = f"Connecting to {host}…" if host else name
+            self.scan_current, self.scan_total = current, total
 
         try:
-            found = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._scanner,
                 host_override=host,
                 port=config.port,
                 auto_scan=True,
                 cancel=cancel,
                 progress=progress,
+                on_phase=on_phase,
             )
             if cancel.is_set():
                 return
-            self.scan_candidates = list(found)
+            report = result if isinstance(result, ScanReport) else None
+            found = list(result.candidates) if isinstance(result, ScanReport) else list(result)
+            if report is not None:
+                self.last_scan = report.summary()
+                playback_log(
+                    "playback_scan_result",
+                    outcome=report.outcome,
+                    error_class=report.error_class,
+                    networks=report.networks,
+                    interfaces=report.interfaces,
+                    hosts_probed=report.hosts_probed,
+                    hosts_total=report.hosts_total,
+                    errors=report.error_counts,
+                    sample_errors=report.sample_errors,
+                    loopback_ok=report.loopback_ok,
+                    lan_check=report.lan_check,
+                    found=len(found),
+                    duration_s=round(time.monotonic() - started, 2),
+                )
+            self.scan_candidates = found
+            if report is not None and report.outcome == "error" and not found:
+                self.scan_error_class = report.error_class
+                self._finish_scan(
+                    "not_found",
+                    SCAN_MESSAGES.get(report.error_class or "", SCAN_MESSAGES["unexpected_error"]),
+                )
+                return
             if not found:
-                self.scan_state = "not_found"
-                self.scan_reason = NOT_FOUND_REASON
+                self._finish_scan("not_found", NOT_FOUND_REASON)
                 return
             if len(found) == 1:
                 async with self._lifecycle:
                     if cancel.is_set() or self.discovery == "running":
                         return
                     await self._adopt(found[0].host)
-            self.scan_state = "found"
-        except SettingsFileError:
-            self.scan_state = "not_found"
-            self.scan_reason = "Found Playback but could not save the address."
-        except Exception:
-            self.scan_state = "not_found"
-            self.scan_reason = NOT_FOUND_REASON
+            self._finish_scan("found", None)
+        except SettingsFileError as exc:
+            playback_log("playback_scan_save_failed", error_type=type(exc).__name__)
+            self._finish_scan("not_found", "Found Playback but could not save the address.")
+        except Exception as exc:
+            self.scan_error_class = "unexpected_error"
+            self.last_scan = {
+                "outcome": "error",
+                "error_class": "unexpected_error",
+                "sample_errors": [f"{type(exc).__name__}: {exc}"],
+                "typed_host": host,
+                "duration_s": round(time.monotonic() - started, 2),
+            }
+            playback_log("playback_scan_exception", error_type=type(exc).__name__, error=str(exc))
+            self._finish_scan("not_found", SCAN_MESSAGES["unexpected_error"])
 
     def _check_discovery(self, version: int | None = None) -> Heartbeat:
         heartbeat = self._heartbeat

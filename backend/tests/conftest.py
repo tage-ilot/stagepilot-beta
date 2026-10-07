@@ -2,6 +2,8 @@
 
 import pytest
 
+from stagepilot.plugins.playback_api.find import ScanReport
+
 
 @pytest.fixture(autouse=True)
 def no_live_playback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -9,4 +11,6 @@ def no_live_playback(monkeypatch: pytest.MonkeyPatch) -> None:
     # The default app finder otherwise scans the production LAN after migration.
     monkeypatch.setattr("stagepilot.plugins.playback_api.client.find_playback", lambda **_: None)
     # Scan Network must never probe a real loopback/LAN either.
-    monkeypatch.setattr("stagepilot.plugins.playback_api.plugin.scan_candidates", lambda **_: [])
+    monkeypatch.setattr(
+        "stagepilot.plugins.playback_api.plugin.scan_network", lambda **_: ScanReport()
+    )

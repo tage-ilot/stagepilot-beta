@@ -18,12 +18,14 @@ this route is a direct user action, not a background alert.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from stagepilot.plugins.playback_api.plugin import RECENT_LOG
 from stagepilot.remote_bootstrap import DesktopBootstrapStore
 
 router = APIRouter(prefix="/api/v1/diagnostics")
@@ -44,6 +46,27 @@ class DiagnosticsSendRequest(BaseModel):
 class DiagnosticsSendResponse(BaseModel):
     ok: bool
     message: str
+
+
+def with_playback_section(bundle: str, request: Request) -> str:
+    """Add the last scan result and recent (already redacted) playback log lines."""
+    runtime = getattr(request.app.state, "runtime", None)
+    controller = getattr(runtime, "playback_input", None)
+    section = {
+        "last_scan": getattr(controller, "last_scan", None),
+        "recent_log": list(RECENT_LOG),
+    }
+    try:
+        parsed = json.loads(bundle)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        parsed["playback"] = section
+        combined = json.dumps(parsed, default=str)
+    else:
+        combined = bundle + "\n--- playback ---\n" + json.dumps(section, default=str)
+    # Never push an in-limit bundle over the control-plane cap.
+    return combined if len(combined.encode("utf-8")) <= MAX_BUNDLE_BYTES else bundle
 
 
 def _bootstrap(request: Request) -> DesktopBootstrapStore | None:
@@ -97,7 +120,7 @@ async def send_diagnostics(
                     "authorization": f"Bearer {credential}",
                     "content-type": "application/octet-stream",
                 },
-                content=payload.bundle.encode("utf-8"),
+                content=with_playback_section(payload.bundle, request).encode("utf-8"),
             )
         if response.status_code == 429:
             raise HTTPException(

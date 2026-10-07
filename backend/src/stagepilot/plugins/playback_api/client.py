@@ -11,9 +11,13 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Literal
 
-from .find import DiscoveryResult, DiscoverySource, find_playback
+from stagepilot.core.logging import get_logger
+
+from .find import DiscoveryResult, DiscoverySource, classify_exception, find_playback
 from .normalizer import Heartbeat, Normalizer, PlaybackEvent
 from .ws import WebSocket, WSClosed
+
+_LOG = get_logger("playback")
 
 
 @dataclass(frozen=True)
@@ -197,8 +201,18 @@ class PlaybackClient:
                         ),
                         events,
                     )
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
                 if not self._stopping.is_set():
+                    error_class, _detail, step = classify_exception(exc)
+                    _LOG.info(
+                        "playback_connect_failed",
+                        error_class=error_class,
+                        error_type=type(exc).__name__,
+                        step=step,
+                        attempt=attempt + 1,
+                        source=endpoint.source if endpoint else None,
+                        configured_host=bool(self.options.host_override),
+                    )
                     self._publish(
                         PlaybackStatus(
                             host=endpoint.host if endpoint else self.options.host_override,
