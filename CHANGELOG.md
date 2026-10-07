@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.104-beta.28] - 2026-10-07
+
 ### Fixed
 
 - Scan Network no longer reports every failure as "Couldn't find Playback". Scan
@@ -24,6 +26,17 @@
   startup. "Copy diagnostic details" on a failed scan, and the last scan plus
   recent Playback log lines in "Send logs to developer".
 - "Open Local Network settings" link when macOS blocks LAN access.
+
+### One-time prompts after this update
+
+macOS may ask for your login password once for each StagePilot Keychain item
+(Planning Center) and may re-ask for Local Network access, because each update is
+a new ad-hoc-signed program. Click **Always Allow**. If Scan Network says macOS
+blocked StagePilot, turn on every StagePilot entry in System Settings > Privacy &
+Security > Local Network and reopen StagePilot. These prompts cannot be removed
+without a paid Apple Developer ID; this release removes every avoidable Keychain
+read. The signing identifier is unchanged, so in-app updates from beta.27 are
+unaffected.
 
 ### Known issue
 
