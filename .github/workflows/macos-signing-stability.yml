@@ -1,0 +1,21 @@
+name: macOS signing stability
+
+on:
+  pull_request:
+    paths:
+      - scripts/sign_macos_bundle.sh
+      - scripts/macos_signing_stability.sh
+      - .github/workflows/macos-signing-stability.yml
+      - .github/workflows/release-macos.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stability:
+    name: Designated requirement is identical across builds
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - run: bash scripts/macos_signing_stability.sh

@@ -311,6 +311,7 @@ def scan_candidates(
 # ---------------------------------------------------------------------------
 
 MAX_LOGGED_ERRORS = 5
+SCAN_BLOCK_DETAIL = "macOS is blocking StagePilot's local-network access"
 ProgressDetail = Callable[[str, int, int], None]
 
 
@@ -333,6 +334,8 @@ class ScanReport:
     lan_check: Literal["ok", "blocked", "unknown", "skipped"] = "skipped"
     duration: float = 0.0
     phases: list[dict[str, object]] = field(default_factory=list)
+    classification: str | None = None
+    classification_inputs: dict[str, object] = field(default_factory=dict)
 
     def summary(self) -> dict[str, object]:
         """Privacy-safe dict: addresses only for the typed host the operator entered."""
@@ -351,6 +354,8 @@ class ScanReport:
             "lan_check": self.lan_check,
             "duration_s": round(self.duration, 2),
             "phases": list(self.phases),
+            "classification": self.classification,
+            "classification_inputs": dict(self.classification_inputs),
         }
 
 
@@ -443,6 +448,32 @@ def _tally(report: ScanReport, error_class: ErrorClass, detail: str) -> None:
         report.sample_errors.append(f"{error_class}: {detail}")
 
 
+# A blocked path fails in milliseconds; a genuinely unreachable host takes seconds to time out.
+BLOCKED_MIN_SHARE = 0.95
+FAST_FAIL_SECONDS = 1.0
+
+
+def classify_scan_block(
+    non_self_counts: dict[str, int], *, loopback_ok: bool | None
+) -> tuple[bool, dict[str, object]]:
+    """macOS Local Network block signature: loopback works and every other private
+    address fails at once with no_route/permission_denied (none timed out). This
+    computer's own addresses must already be excluded from `non_self_counts`."""
+    total = sum(non_self_counts.values())
+    denied = non_self_counts.get("permission_denied", 0) + non_self_counts.get("no_route", 0)
+    timed_out = non_self_counts.get("timed_out", 0)
+    share = round(denied / total, 3) if total else 0.0
+    inputs: dict[str, object] = {
+        "loopback_ok": loopback_ok,
+        "others_total": total,
+        "others_denied": denied,
+        "others_timed_out": timed_out,
+        "denied_share": share,
+    }
+    blocked = bool(loopback_ok) and total > 0 and timed_out == 0 and share >= BLOCKED_MIN_SHARE
+    return blocked, inputs
+
+
 def valid_typed_host(host: str) -> bool:
     return bool(host) and len(host) <= 253 and not any(c in host for c in "\r\n /?#\\")
 
@@ -496,8 +527,27 @@ def scan_network(
             report.outcome = "found"
         else:
             assert error_class is not None
+            elapsed = time.monotonic() - started
             if error_class in ("permission_denied", "no_route") and selftest_loopback():
                 report.loopback_ok = True
+                gate = gateway()
+                other_blocked = False
+                if gate and gate != host_override:
+                    report.lan_check = selftest_connect(gate, 80, 1.0)
+                    other_blocked = report.lan_check == "blocked"
+                fast = elapsed <= FAST_FAIL_SECONDS
+                report.classification_inputs = {
+                    "loopback_ok": True,
+                    "typed_error": error_class,
+                    "typed_elapsed_s": round(elapsed, 2),
+                    "second_address_blocked": other_blocked,
+                    "gateway_known": bool(gate),
+                }
+                if error_class == "permission_denied" or (fast and other_blocked):
+                    error_class = "permission_denied"
+                    detail = SCAN_BLOCK_DETAIL
+                    step = None
+                    report.classification = "permission_denied"
             report.outcome, report.error_class = "error", error_class
             report.message = detail + (f" (step: {step})" if step else "")
             _tally(report, error_class, detail)
@@ -543,6 +593,8 @@ def scan_network(
     lan_found = 0
     per_network: dict[str, int] = {str(n): 0 for n in nets}
     owner = {str(h): str(n) for n in nets for h in n.hosts()}
+    self_ips = set(names)
+    non_self_counts: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=32, thread_name_prefix="playback-scan") as executor:
         for start in range(0, len(hosts), chunk):
             if cancel.is_set():
@@ -560,6 +612,8 @@ def scan_network(
                     report.candidates.append(ScanCandidate(resolve_name(host), host, "lan"))
                 elif e_class is not None:
                     _tally(report, e_class, e_detail)
+                    if host not in self_ips:
+                        non_self_counts[e_class] = non_self_counts.get(e_class, 0) + 1
             done = min(start + chunk, len(hosts))
             if progress:
                 progress(done, len(hosts))
@@ -576,20 +630,15 @@ def scan_network(
         report.outcome = "found"
         return finish()
     counts = report.error_counts
-    lan_errors = {
-        k: v for k, v in counts.items() if k not in ("timed_out", "refused", "not_playback")
-    }
-    blocked_all = (
-        bool(hosts)
-        and sum(lan_errors.get(k, 0) for k in ("permission_denied", "no_route")) >= len(hosts) // 2
-        and counts.get("timed_out", 0) + counts.get("refused", 0) + counts.get("not_playback", 0)
-        == 0
+    block_signature, report.classification_inputs = classify_scan_block(
+        non_self_counts, loopback_ok=report.loopback_ok
     )
-    if report.loopback_ok and (report.lan_check == "blocked" or blocked_all):
+    report.classification_inputs["self_addresses_excluded"] = len(self_ips)
+    report.classification_inputs["lan_check"] = report.lan_check
+    if report.loopback_ok and (report.lan_check == "blocked" or block_signature):
         report.outcome, report.error_class = "error", "permission_denied"
-        report.message = (
-            "This app was blocked from opening connections to other computers on the network."
-        )
+        report.classification = "permission_denied"
+        report.message = SCAN_BLOCK_DETAIL
     elif not nets:
         report.outcome, report.error_class = "error", "no_route"
         report.message = "No usable network was found on this computer."
@@ -599,3 +648,16 @@ def scan_network(
     else:
         report.outcome = "not_found"
     return finish()
+
+
+def saved_address_blocked(
+    *,
+    selftest_loopback: Callable[[], bool] = loopback_selftest,
+    gateway: Callable[[], str | None] = default_gateway,
+    selftest_connect: Callable[[str, int, float], Literal["ok", "blocked", "unknown"]] = tcp_check,
+) -> bool:
+    """A saved address just failed immediately: is the OS blocking all local-network use?"""
+    if not selftest_loopback():
+        return False
+    gate = gateway()
+    return bool(gate) and selftest_connect(str(gate), 80, 1.0) == "blocked"

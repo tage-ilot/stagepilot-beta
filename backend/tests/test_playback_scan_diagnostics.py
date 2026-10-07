@@ -283,3 +283,102 @@ def test_scan_messages_cover_every_class_with_one_next_step() -> None:
     assert expected <= set(plugin_module.SCAN_MESSAGES)
     assert "Privacy & Security > Local Network" in plugin_module.SCAN_MESSAGES["permission_denied"]
     assert plugin_module.LOCAL_NETWORK_SETTINGS_URL.endswith("Privacy_LocalNetwork")
+
+
+# --- macOS Local Network block classification (beta.29 real numbers) -------------------
+
+BIG = (ipaddress.IPv4Network("192.0.2.0/24"), ipaddress.IPv4Network("198.51.100.0/24"))
+
+
+def _beta29_probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+    if host == "127.0.0.1":
+        return None
+    last = int(host.rsplit(".", 1)[1])
+    if host in ("192.0.2.5", "192.0.2.6", "198.51.100.5"):
+        raise ConnectionRefusedError()  # this Mac's own addresses
+    if host == "192.0.2.9":
+        raise WSHandshakeError("not playback")
+    raise oserror(errno.EHOSTUNREACH if last else errno.EPERM)
+
+
+def test_beta29_numbers_are_permission_denied_even_with_lan_check_unknown() -> None:
+    report = make_scan(
+        _beta29_probe,
+        networks=lambda: BIG,
+        selftest_connect=lambda *_: "unknown",
+        gateway=lambda: None,
+        interface_lookup=lambda: {
+            "192.0.2.5": "en0",
+            "192.0.2.6": "en1",
+            "198.51.100.5": "en2",
+        },
+    )
+    assert report.error_counts["no_route"] == 504
+    assert report.error_counts["refused"] == 3
+    assert report.outcome == "error" and report.error_class == "permission_denied"
+    assert report.classification == "permission_denied"
+    assert report.classification_inputs["others_timed_out"] == 0
+
+
+def test_real_miss_with_timeouts_stays_not_found() -> None:
+    report = make_scan(lambda *_: None, networks=lambda: BIG)
+    assert (report.outcome, report.error_class) == ("not_found", None)
+    assert report.classification is None
+
+
+def test_mixed_timeouts_and_no_route_is_not_a_block() -> None:
+    def probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+        if host.endswith(".7"):
+            return None  # timeout
+        if host == "127.0.0.1":
+            return None
+        raise oserror(errno.EHOSTUNREACH)
+
+    report = make_scan(probe, networks=lambda: BIG, interface_lookup=lambda: {})
+    assert report.error_class is None and report.outcome == "not_found"
+
+
+def test_refused_only_is_not_a_block() -> None:
+    def probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+        if host == "127.0.0.1":
+            return None
+        raise ConnectionRefusedError()
+
+    report = make_scan(probe)
+    assert report.outcome == "not_found" and report.classification is None
+
+
+def test_typed_host_with_gateway_also_failing_is_permission_denied() -> None:
+    def probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+        raise oserror(errno.EHOSTUNREACH)
+
+    report = make_scan(probe, host_override="192.0.2.50", selftest_connect=lambda *_: "blocked")
+    assert (report.outcome, report.error_class) == ("error", "permission_denied")
+    assert report.classification == "permission_denied"
+    assert report.lan_check == "blocked"
+    assert "macOS is blocking StagePilot's local-network access" in (report.message or "")
+
+
+def test_typed_host_no_route_but_gateway_fine_stays_no_route() -> None:
+    def probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+        raise oserror(errno.EHOSTUNREACH)
+
+    report = make_scan(probe, host_override="192.0.2.50", selftest_connect=lambda *_: "ok")
+    assert report.error_class == "no_route" and report.classification is None
+
+
+def test_typed_host_timed_out_is_timed_out() -> None:
+    def probe(host: str, port: int, timeout: float) -> Heartbeat | None:
+        raise TimeoutError()
+
+    report = make_scan(probe, host_override="192.0.2.50", selftest_connect=lambda *_: "blocked")
+    assert report.error_class == "timed_out" and report.classification is None
+
+
+def test_summary_records_classification_inputs_without_addresses() -> None:
+    report = make_scan(
+        _beta29_probe, networks=lambda: BIG, interface_lookup=lambda: {"192.0.2.5": "en0"}
+    )
+    summary = report.summary()
+    assert summary["classification"] == "permission_denied"
+    assert "192.0.2" not in json.dumps(summary["classification_inputs"])

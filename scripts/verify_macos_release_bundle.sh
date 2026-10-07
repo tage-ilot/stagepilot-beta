@@ -89,6 +89,23 @@ file "$SIDECAR"
 file "$MAIN" | grep -q "$EXPECTED_ARCH" || { echo "Application is not $EXPECTED_ARCH." >&2; exit 1; }
 file "$SIDECAR" | grep -q "$EXPECTED_ARCH" || { echo "Backend is not $EXPECTED_ARCH." >&2; exit 1; }
 codesign --verify --deep --strict --verbose=4 "$APP"
+# Stable identity: fixed identifiers and a designated requirement pinned to the StagePilot
+# signing certificate (public cert: docs/stagepilot-signing-cert.pem), never a per-build cdhash.
+if [[ "${STAGEPILOT_EXPECT_STABLE_SIGNING:-}" == "1" ]]; then
+  PINNED_LEAF="78e4f3fad152196a9dc358629f7f36c5c4b57b74"
+  check_dr() {
+    local item="$1" id="$2" dr
+    dr="$(codesign -d -r- "$item" 2>&1 | sed -n 's/^designated => //p')"
+    echo "designated ($id): $dr"
+    # A self-signed certificate is its own root, so macOS writes "certificate root = H...".
+    [[ "$dr" == "identifier \"$id\" and certificate root = H\"$PINNED_LEAF\"" ]] || {
+      echo "Unexpected designated requirement for $item: $dr" >&2
+      exit 1
+    }
+  }
+  check_dr "$APP" "org.stagepilot.desktop"
+  check_dr "$SIDECAR" "org.stagepilot.backend"
+fi
 SIGNATURE="$(codesign -d --verbose=4 "$SIDECAR" 2>&1)"
 printf '%s\n' "$SIGNATURE"
 codesign -d --entitlements :- "$SIDECAR" 2>/dev/null || true

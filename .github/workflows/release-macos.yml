@@ -127,6 +127,15 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: bash scripts/test_macos_uninstaller.sh
+      - name: Require macOS signing identity
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          P12: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+        run: |
+          test -n "$P12" || { echo "::error::MACOS_SIGNING_P12_BASE64 is not configured; refusing an ad-hoc release."; exit 1; }
+          test -n "$P12_PASSWORD" || { echo "::error::MACOS_SIGNING_P12_PASSWORD is not configured."; exit 1; }
       - name: Verify Planning Center OAuth client ID is resolved
         shell: bash
         env:
@@ -143,10 +152,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           STAGEPILOT_PCO_CLIENT_ID: ${{ secrets.PLANNING_CENTER_CLIENT_ID }}
           STAGEPILOT_RELEASE_BUILD: "1"
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
         run: npm --prefix desktop run ${{ matrix.command }}
       - name: Verify final macOS application, DMG, and updater archive
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          STAGEPILOT_EXPECT_STABLE_SIGNING: "1"
         run: |
           if [[ "${{ matrix.platform }}" == "darwin-aarch64" ]]; then
             EXPECTED_ARCH="arm64"

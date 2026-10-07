@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Scan Network, a typed address and a saved address now say plainly "macOS is blocking
+  StagePilot's local-network access" (numbered steps, Open Local Network settings, Copy
+  diagnostic details) when every other address fails instantly while loopback works.
+
+### Changed
+
+- macOS builds are signed with a stable StagePilot identity so Local Network and Keychain
+  approvals survive updates. After this update macOS asks once more: click Allow (Local
+  Network), Always Allow (Keychain), and approve any App Management prompt. See
+  docs/macos-adhoc-signing.md. This is not Apple notarization.
+
 ## [1.1.104-beta.29] - 2026-10-07
 
 beta.28 was tagged but never published (its Windows build failed one test that
