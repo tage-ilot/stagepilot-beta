@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
-## [1.1.104-beta.28] - 2026-10-07
+## [1.1.104-beta.29] - 2026-10-07
+
+beta.28 was tagged but never published (its Windows build failed one test that
+was fixed in #87); this is the next unused number with identical product changes.
 
 ### Fixed
 
