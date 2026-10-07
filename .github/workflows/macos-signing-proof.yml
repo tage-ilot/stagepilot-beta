@@ -23,7 +23,6 @@ jobs:
             suffix: aarch64
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    environment: stagepilot-control-plane
     env:
       MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
