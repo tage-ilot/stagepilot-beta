@@ -13,6 +13,9 @@
       "allow": [
         {
           "url": "https://api.planningcenteronline.com/personal_access_tokens"
+        },
+        {
+          "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork"
         }
       ]
     },

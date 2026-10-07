@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
+import { openExternalUrl } from "../desktop";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
+import type { PlaybackScanResult } from "../types";
 import type { PlaybackDraft } from "./PlaybackSaveFooter";
 import { playbackActivityText, playbackBannerTone, playbackOrderNotice, validPlaybackHost } from "./playbackStatus";
 
@@ -13,6 +15,22 @@ const toneClass = {
   idle: "border-white/10 bg-white/5 text-slate-200",
 } as const;
 const CHECKLIST = ["Playback is open on a computer", "Remote Connections is turned on in Playback", "Both computers are on the same network"];
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+export function scanProgressText(scan: PlaybackScanResult): string {
+  const seconds = Math.max(0, Math.floor(scan.elapsed ?? 0));
+  const phase = scan.phase ?? (scan.typed ? "Connecting…" : "Looking for Playback…");
+  const counts = scan.total > 1 ? ` Checked ${scan.current} of ${scan.total} addresses` : "";
+  return `${phase}${counts ? " —" + counts : ""} (${seconds}s)`;
+}
+
+export function scanSummary(scan: PlaybackScanResult): string {
+  const seconds = (scan.elapsed ?? 0).toFixed(1);
+  if (scan.typed) return `Tried one address in ${seconds}s.`;
+  const nets = scan.networks?.length ? `${plural(scan.networks.length, "network")} (${scan.networks.join(", ")})` : "no network";
+  return `Checked ${scan.hosts_probed ?? 0} of ${scan.hosts_total ?? 0} addresses on ${nets} in ${seconds}s.`;
+}
 
 export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackController; draft?: PlaybackDraft }) {
   const status = playback?.status;
@@ -33,6 +51,10 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
   const canDiscover = apiConnected && !status?.playing && !running;
   useEffect(() => { if (!canDiscover) setConfirm(false); }, [canDiscover]);
 
+  const [copied, setCopied] = useState(false);
+  const copyDetails = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); } catch { setCopied(false); }
+  };
   const connect = () => { if (trimmed && hostOk) playback?.scan(trimmed); };
   const tone = status ? playbackBannerTone(status) : "idle";
   const apiOn = draft?.enabled ?? status?.enabled ?? true;
@@ -41,20 +63,34 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
     <div className="mt-4 space-y-4">
       <div className={`rounded-xl border p-4 ${toneClass[tone]}`} role="status" aria-live="polite" data-testid="playback-banner">
         <p className="text-base font-semibold">{status ? status.reason : playback?.error ?? "Checking Playback…"}</p>
-        {status?.scan.state === "scanning" && status.scan.total > 0 && <p className="mt-1 text-sm opacity-80">Checked {status.scan.current} of {status.scan.total} addresses</p>}
+        {status?.scan.state === "scanning" && <p className="mt-1 text-sm opacity-80" data-testid="scan-progress">{scanProgressText(status.scan)}</p>}
       </div>
 
       <div className="space-y-3">
         {scanning
           ? <button className={big} type="button" onClick={playback?.cancelScan}>Scanning… (cancel)</button>
           : <button className={big} type="button" onClick={() => playback?.scan()}>{scan?.state === "not_found" ? "Scan again" : "Scan Network"}</button>}
-        {scan?.state === "not_found" && !scanning && (
-          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-slate-200">
-            <p className="font-semibold">Couldn't find Playback</p>
-            <ul className="mt-1 list-disc pl-5 text-slate-300">{CHECKLIST.map((line) => <li key={line}>{line}</li>)}</ul>
-            <button className="mt-2 min-h-11 text-sky-200 underline" type="button" onClick={() => setSpecific(true)}>Enter address instead</button>
-          </div>
-        )}
+        {scan?.state === "not_found" && !scanning && (scan.error_class
+          ? (
+            <div role="alert" className="rounded-lg border border-rose-400/30 bg-rose-400/[0.06] p-3 text-sm text-slate-200" data-testid="scan-error">
+              <p className="font-semibold">{scan.typed ? "Couldn't connect" : "Couldn't scan the network"}</p>
+              <p className="mt-1">{scan.reason}</p>
+              <p className="mt-1 text-xs text-slate-400">{scanSummary(scan)}</p>
+              <div className="mt-2 flex flex-wrap gap-3">
+                {scan.settings_url && <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => void openExternalUrl(scan.settings_url as string)}>Open Local Network settings</button>}
+                {scan.details && <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => void copyDetails(scan.details as string)}>{copied ? "Copied" : "Copy diagnostic details"}</button>}
+                {!scan.typed && <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => setSpecific(true)}>Enter address instead</button>}
+              </div>
+            </div>
+          )
+          : (
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm text-slate-200">
+              <p className="font-semibold">Couldn't find Playback</p>
+              <ul className="mt-1 list-disc pl-5 text-slate-300">{CHECKLIST.map((line) => <li key={line}>{line}</li>)}</ul>
+              {scan.hosts_total ? <p className="mt-1 text-xs text-slate-400">{scanSummary(scan)}</p> : null}
+              <button className="mt-2 min-h-11 text-sky-200 underline" type="button" onClick={() => setSpecific(true)}>Enter address instead</button>
+            </div>
+          ))}
         {scan?.state === "found" && scan.candidates.length > 1 && !scanning && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3" role="group" aria-label="Choose which Playback">
             <p className="text-sm font-semibold text-slate-100">Choose which Playback</p>
