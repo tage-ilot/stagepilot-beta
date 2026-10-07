@@ -71,7 +71,37 @@ flavor and must be tested against PyInstaller's extracted libraries. Tauri
 updater signatures remain independent: they authenticate updates inside
 StagePilot and are required whether Apple signing is ad-hoc or Developer ID.
 
-## Keychain and Local Network prompts
+## Stable signing identity (from beta.30)
+
+Releases are re-signed after `tauri build` by `scripts/resign_macos_release.sh` with a
+free, self-created code-signing certificate ("StagePilot Beta Code Signing", public
+certificate: `docs/stagepilot-signing-cert.crt`, SHA-1 `78:E4:F3:FA:D1:52:19:6A:9D:C3:58:62:9F:7F:36:C5:C4:B5:7B:74`,
+valid to 2041). Nested code is signed inside-out with fixed identifiers (no `--deep`,
+no Hardened Runtime): `org.stagepilot.cloudflared`, `org.stagepilot.backend`, then the app
+`org.stagepilot.desktop`. The designated requirement becomes
+
+    identifier "org.stagepilot.desktop" and certificate root = H"78e4f3fa..."
+
+and is identical across builds (a self-signed leaf is its own root), so Local Network and
+Keychain approvals follow the app across updates. The updater archive is rebuilt from the
+re-signed bundle and given a fresh minisign signature; the DMG is repacked the same way.
+The private key lives only in the `MACOS_SIGNING_P12_BASE64` / `MACOS_SIGNING_P12_PASSWORD`
+repository secrets plus an owner-only offline backup; losing it costs one more round of
+prompts. `scripts/macos_signing_stability.sh` (CI: "macOS signing stability") builds two
+different bundles and fails on any requirement/identifier drift, and
+`verify_macos_release_bundle.sh` pins the requirement in release builds.
+
+This is NOT Apple notarization: Gatekeeper still shows its first-launch warning for a
+downloaded app. The goal is that approvals survive later updates.
+
+### One-time prompts after the first update to the stable identity
+
+macOS sees a new identity once. Click, once each: **Allow** for Local Network (run Scan
+Network), **Always Allow** for the Keychain password prompt (Planning Center), and approve
+any "App Management"/background-item prompt. Later updates should show none.
+
+## Keychain and Local Network prompts (ad-hoc builds, up to beta.29)
+
 
 Prompt sources on an ad-hoc build, what StagePilot does about each, and what cannot
 be fixed without a paid Developer ID:
