@@ -6,5 +6,7 @@
   <string>StagePilot.help</string>
   <key>CFBundleHelpBookName</key>
   <string>org.stagepilot.desktop.help</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>StagePilot looks for Playback on your local network so it can follow your service.</string>
 </dict>
 </plist>

@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 
 import { openExternalUrl } from "../desktop";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
-import type { PlaybackScanResult } from "../types";
 import type { PlaybackDraft } from "./PlaybackSaveFooter";
-import { playbackActivityText, playbackBannerTone, playbackOrderNotice, validPlaybackHost } from "./playbackStatus";
+import { playbackActivityText, playbackBannerTone, playbackOrderNotice, scanProgressText, scanSummary, validPlaybackHost } from "./playbackStatus";
 
 const button = "min-h-11 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3.5 py-2.5 text-sm font-semibold text-sky-200 hover:bg-sky-400/20";
 const big = "min-h-12 w-full rounded-xl border border-sky-300/40 bg-sky-500 px-5 py-3 text-base font-bold text-white hover:bg-sky-400 sm:w-auto";
@@ -15,22 +14,6 @@ const toneClass = {
   idle: "border-white/10 bg-white/5 text-slate-200",
 } as const;
 const CHECKLIST = ["Playback is open on a computer", "Remote Connections is turned on in Playback", "Both computers are on the same network"];
-
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
-
-export function scanProgressText(scan: PlaybackScanResult): string {
-  const seconds = Math.max(0, Math.floor(scan.elapsed ?? 0));
-  const phase = scan.phase ?? (scan.typed ? "Connecting…" : "Looking for Playback…");
-  const counts = scan.total > 1 ? ` Checked ${scan.current} of ${scan.total} addresses` : "";
-  return `${phase}${counts ? " —" + counts : ""} (${seconds}s)`;
-}
-
-export function scanSummary(scan: PlaybackScanResult): string {
-  const seconds = (scan.elapsed ?? 0).toFixed(1);
-  if (scan.typed) return `Tried one address in ${seconds}s.`;
-  const nets = scan.networks?.length ? `${plural(scan.networks.length, "network")} (${scan.networks.join(", ")})` : "no network";
-  return `Checked ${scan.hosts_probed ?? 0} of ${scan.hosts_total ?? 0} addresses on ${nets} in ${seconds}s.`;
-}
 
 export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackController; draft?: PlaybackDraft }) {
   const status = playback?.status;

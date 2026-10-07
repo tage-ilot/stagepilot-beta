@@ -145,6 +145,6 @@ def test_forwarding_path_statuses(
     assert seen["url"] == "https://control.example/v1/installations/abcd1234/diagnostics"
     assert seen["authorization"] == "Bearer spi_abcd1234." + "s" * 43
     assert seen["content_type"] == "application/octet-stream"
-    assert seen["body"].startswith(b"log contents\n--- playback ---\n")
+    assert bytes(seen["body"]).startswith(b"log contents\n--- playback ---\n")
     if expected_status == 200:
         assert response.json() == {"ok": True, "message": "Logs sent to the developer."}

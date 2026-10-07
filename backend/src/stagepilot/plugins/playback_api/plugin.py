@@ -57,8 +57,9 @@ def default_scanner(**kwargs: object) -> list[ScanCandidate] | ScanReport:
 SCAN_MESSAGES: dict[str, str] = {
     "permission_denied": (
         "macOS blocked StagePilot from reaching other computers on your network. "
-        "Open System Settings > Privacy & Security > Local Network, turn on StagePilot, "
-        "then quit and reopen StagePilot and scan again."
+        "Open System Settings > Privacy & Security > Local Network, turn on every StagePilot "
+        "entry (including stagepilot-backend if it is listed), then quit and reopen StagePilot "
+        "and scan again."
     ),
     "no_route": (
         "This computer has no route to that address. Check that it is on the same Wi-Fi or "

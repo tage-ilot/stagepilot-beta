@@ -254,7 +254,7 @@ async def test_diagnostics_bundle_carries_last_scan_and_recent_log() -> None:
         )()
 
     request = type("Req", (), {"app": type("A", (), {"state": State()})()})()
-    out = json.loads(with_playback_section('{"app_info": {}}', request))  # type: ignore[arg-type]
+    out = json.loads(with_playback_section('{"app_info": {}}', request))
     assert out["playback"]["last_scan"] == {"outcome": "x"}
     assert any("playback_scan_result" in line for line in out["playback"]["recent_log"])
 
