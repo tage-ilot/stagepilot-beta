@@ -1,0 +1,73 @@
+name: macOS signing proof (no publish)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and sign — ${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            suffix: x64
+            arch: x86_64
+          - runner: macos-15
+            suffix: aarch64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    environment: stagepilot-control-plane
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.11.28"
+          python-version: "3.12"
+          working-directory: backend
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: |
+          uv sync --project backend --extra dev --locked
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+          rustup update stable
+          rustup default stable
+          npm --prefix frontend run build
+      - name: Build, re-sign, verify (twice, two separate builds)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          STAGEPILOT_PCO_CLIENT_ID: ${{ secrets.PLANNING_CENTER_CLIENT_ID }}
+          STAGEPILOT_RELEASE_BUILD: "1"
+          STAGEPILOT_EXPECT_STABLE_SIGNING: "1"
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          B=desktop/src-tauri/target/release/bundle
+          for n in 1 2; do
+            npm --prefix desktop run build:mac
+            ARCHIVE="$(ls $B/macos/*.app.tar.gz)"
+            bash scripts/verify_macos_release_bundle.sh --archive "$ARCHIVE" --arch ${{ matrix.arch }}
+            bash scripts/verify_macos_release_bundle.sh --dmg "$(ls $B/dmg/*.dmg)" --arch ${{ matrix.arch }}
+            mkdir -p proof/build$n
+            cp "$ARCHIVE" "$ARCHIVE.sig" proof/build$n/
+            for f in "$B/macos/StagePilot.app" "$B/macos/StagePilot.app/Contents/MacOS/stagepilot-backend" "$B/macos/StagePilot.app/Contents/Resources/cloudflared"; do
+              echo "$f :: $(codesign -d -r- "$f" 2>&1 | grep designated)" | sed "s#$B/macos/##" | tee -a proof/build$n/dr.txt
+            done
+            [ $n = 1 ] && touch .rebuild
+          done
+          diff proof/build1/dr.txt proof/build2/dr.txt && echo "DESIGNATED REQUIREMENTS IDENTICAL ACROSS TWO BUILDS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proof-${{ matrix.suffix }}
+          path: proof/**
+          retention-days: 3
