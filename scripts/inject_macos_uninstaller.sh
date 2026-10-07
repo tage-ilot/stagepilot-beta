@@ -44,6 +44,12 @@ cp -R "$MOUNT_POINT/." "$CONTENTS_DIR/"
 hdiutil detach "$MOUNT_POINT" -quiet
 MOUNT_POINT=""
 
+# Optional: swap in an app bundle that was re-signed after Tauri built the DMG.
+if [[ -n "${STAGEPILOT_SIGNED_APP:-}" ]]; then
+  rm -rf "$CONTENTS_DIR/StagePilot.app"
+  cp -R "$STAGEPILOT_SIGNED_APP" "$CONTENTS_DIR/StagePilot.app"
+fi
+
 cp "$UNINSTALLER_SRC" "$CONTENTS_DIR/Uninstall StagePilot.command"
 cp "$README_SRC" "$CONTENTS_DIR/README - Uninstall.txt"
 chmod +x "$CONTENTS_DIR/Uninstall StagePilot.command"
