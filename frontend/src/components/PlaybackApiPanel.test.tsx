@@ -402,6 +402,21 @@ describe("Scan diagnostics", () => {
     expect(writeText).toHaveBeenCalledWith("{\"outcome\":\"error\"}");
   });
 
+  it("shows the plain macOS block headline, numbered steps and no generic checklist", async () => {
+    for (const typed of [false, true]) {
+      const scan = scanOf("not_found", { error_class: "permission_denied", typed, reason: "macOS is blocking StagePilot's local-network access", details: "{}", hosts_probed: 763, hosts_total: 763, elapsed: 0.2 });
+      const { unmount } = render(<PlaybackApiPanel playback={controller({ status: none({ scan }) })} />);
+      expect(screen.getByText("macOS is blocking StagePilot's local-network access")).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem")).toHaveLength(typed ? 4 : 4);
+      expect(screen.getByText(/Turn StagePilot off and on again/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open Local Network settings" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy diagnostic details" })).toBeInTheDocument();
+      expect(screen.queryByText("Couldn't find Playback")).toBeNull();
+      expect(screen.queryByText(/Playback is open/)).toBeNull();
+      unmount();
+    }
+  });
+
   it("a typed-address failure reports one address and its own error", () => {
     const scan = scanOf("not_found", { error_class: "refused", typed: true, reason: "That computer answered, but Playback isn't accepting connections.", elapsed: 0.2, details: "{}" });
     render(<PlaybackApiPanel playback={controller({ status: none({ scan }) })} />);

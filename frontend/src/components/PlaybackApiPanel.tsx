@@ -13,6 +13,7 @@ const toneClass = {
   searching: "border-amber-400/30 bg-amber-400/10 text-amber-100",
   idle: "border-white/10 bg-white/5 text-slate-200",
 } as const;
+const LOCAL_NETWORK_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork";
 const CHECKLIST = ["Playback is open on a computer", "Remote Connections is turned on in Playback", "Both computers are on the same network"];
 
 export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackController; draft?: PlaybackDraft }) {
@@ -53,7 +54,24 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
         {scanning
           ? <button className={big} type="button" onClick={playback?.cancelScan}>Scanning… (cancel)</button>
           : <button className={big} type="button" onClick={() => playback?.scan()}>{scan?.state === "not_found" ? "Scan again" : "Scan Network"}</button>}
-        {scan?.state === "not_found" && !scanning && (scan.error_class
+        {scan?.state === "not_found" && !scanning && (scan.error_class === "permission_denied"
+          ? (
+            <div role="alert" className="rounded-lg border border-rose-400/30 bg-rose-400/[0.06] p-3 text-sm text-slate-200" data-testid="scan-error">
+              <p className="font-semibold">macOS is blocking StagePilot's local-network access</p>
+              <ol className="mt-2 list-decimal pl-5 space-y-1">
+                <li>Quit StagePilot.</li>
+                <li>Open System Settings &gt; Privacy &amp; Security &gt; Local Network.</li>
+                <li>Turn StagePilot off and on again (if it is not listed, run Scan Network once and click Allow when macOS asks).</li>
+                <li>Reopen StagePilot and scan again.</li>
+              </ol>
+              <div className="mt-2 flex flex-wrap gap-3">
+                <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => void openExternalUrl(scan.settings_url ?? LOCAL_NETWORK_URL)}>Open Local Network settings</button>
+                {scan.details && <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => void copyDetails(scan.details as string)}>{copied ? "Copied" : "Copy diagnostic details"}</button>}
+                {!scan.typed && <button className="min-h-11 text-sky-200 underline" type="button" onClick={() => setSpecific(true)}>Enter address instead</button>}
+              </div>
+            </div>
+          )
+          : scan.error_class
           ? (
             <div role="alert" className="rounded-lg border border-rose-400/30 bg-rose-400/[0.06] p-3 text-sm text-slate-200" data-testid="scan-error">
               <p className="font-semibold">{scan.typed ? "Couldn't connect" : "Couldn't scan the network"}</p>

@@ -13,7 +13,14 @@ from typing import Literal
 
 from stagepilot.core.logging import get_logger
 
-from .find import DiscoveryResult, DiscoverySource, classify_exception, find_playback
+from .find import (
+    SCAN_BLOCK_DETAIL,
+    DiscoveryResult,
+    DiscoverySource,
+    classify_exception,
+    find_playback,
+    saved_address_blocked,
+)
 from .normalizer import Heartbeat, Normalizer, PlaybackEvent
 from .ws import WebSocket, WSClosed
 
@@ -213,12 +220,17 @@ class PlaybackClient:
                         source=endpoint.source if endpoint else None,
                         configured_host=bool(self.options.host_override),
                     )
+                    blocked = False
+                    if error_class in ("permission_denied", "no_route"):
+                        blocked = await asyncio.to_thread(saved_address_blocked)
                     self._publish(
                         PlaybackStatus(
                             host=endpoint.host if endpoint else self.options.host_override,
                             port=self.options.port,
                             source=endpoint.source if endpoint else None,
-                            last_error="Playback unavailable; remote connections may be off",
+                            last_error=SCAN_BLOCK_DETAIL
+                            if blocked
+                            else "Playback unavailable; remote connections may be off",
                         )
                     )
             finally:
