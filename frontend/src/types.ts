@@ -298,6 +298,15 @@ export interface PlaybackScanResult {
   reason: string | null;
   current: number;
   total: number;
+  phase?: string | null;
+  error_class?: "permission_denied" | "no_route" | "refused" | "timed_out" | "not_playback" | "invalid_address" | "unexpected_error" | null;
+  typed?: boolean;
+  elapsed?: number;
+  networks?: string[];
+  hosts_probed?: number;
+  hosts_total?: number;
+  details?: string | null;
+  settings_url?: string | null;
 }
 
 export interface PlaybackStatusResponse extends PlaybackConnection {

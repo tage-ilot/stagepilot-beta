@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import subprocess
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import uvicorn
@@ -96,6 +99,35 @@ def default_web_root() -> Path | None:
     )
 
 
+def log_sidecar_identity(logger: Any) -> None:
+    """Log the running executable and (macOS) code-signing identifier once at startup.
+
+    macOS Local Network and Keychain grants are bound to this identity, so it is the first
+    thing needed to diagnose "blocked from the LAN" or repeated password prompts.
+    """
+    identifier: str | None = None
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["/usr/bin/codesign", "-dv", sys.executable],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            match = re.search(r"^Identifier=(\S+)", out.stderr, re.M)
+            identifier = match[1] if match else None
+        except (OSError, subprocess.SubprocessError):
+            identifier = None
+    logger.info(
+        "sidecar_identity",
+        executable=sys.executable,
+        frozen=bool(getattr(sys, "frozen", False)),
+        signing_identifier=identifier,
+        platform=sys.platform,
+    )
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -151,6 +183,7 @@ def create_app(
     resolved_settings = settings or resolved_settings_service.load()
     configure_logging(resolved_settings.log_level)
     logger = get_logger("application")
+    log_sidecar_identity(logger)
     event_bus = EventBus()
     state_store = StateStore()
     state_service = StateService(

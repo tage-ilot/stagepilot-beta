@@ -1,4 +1,4 @@
-import type { PlaybackConnection, PlaybackStatusResponse } from "../types";
+import type { PlaybackConnection, PlaybackScanResult, PlaybackStatusResponse } from "../types";
 
 // The backend accepts a bare host, not a URL. Keep port at the existing configured value.
 export function validPlaybackHost(host: string): boolean {
@@ -42,4 +42,20 @@ export function playbackActivityText(type: string, position: number): string {
   const generic = verb === "Paused" || verb === "Stopped";
   if (generic) return verb;
   return position < 0 ? `A song ${verb}` : `Song ${position + 1} ${verb}`;
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+export function scanProgressText(scan: PlaybackScanResult): string {
+  const seconds = Math.max(0, Math.floor(scan.elapsed ?? 0));
+  const phase = scan.phase ?? (scan.typed ? "Connecting…" : "Looking for Playback…");
+  const counts = scan.total > 1 ? ` Checked ${scan.current} of ${scan.total} addresses` : "";
+  return `${phase}${counts ? " —" + counts : ""} (${seconds}s)`;
+}
+
+export function scanSummary(scan: PlaybackScanResult): string {
+  const seconds = (scan.elapsed ?? 0).toFixed(1);
+  if (scan.typed) return `Tried one address in ${seconds}s.`;
+  const nets = scan.networks?.length ? `${plural(scan.networks.length, "network")} (${scan.networks.join(", ")})` : "no network";
+  return `Checked ${scan.hosts_probed ?? 0} of ${scan.hosts_total ?? 0} addresses on ${nets} in ${seconds}s.`;
 }

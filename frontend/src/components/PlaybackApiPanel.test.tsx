@@ -48,7 +48,7 @@ describe("Scan Network is always first and never dead", () => {
     const playback = controller({ status: none({ scan: scanOf("scanning", { current: 64, total: 254 }), reason: "Looking for Playback…" }), pending: "scan" });
     const view = render(<PlaybackApiPanel playback={playback} />);
     expect(screen.getByTestId("playback-banner")).toHaveTextContent("Looking for Playback…");
-    expect(screen.getByText("Checked 64 of 254 addresses")).toBeVisible();
+    expect(screen.getByText(/Checked 64 of 254 addresses/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Scanning… (cancel)" }));
     expect(playback.cancelScan).toHaveBeenCalledOnce();
     view.rerender(<PlaybackApiPanel playback={controller({ status: none({ scan: scanOf("not_found", { reason: "x" }), reason: "Couldn't find Playback." }) })} />);
@@ -356,5 +356,57 @@ describe("Save settings footer", () => {
   it("footer is sticky at the bottom of the card (visible without scrolling)", () => {
     panel();
     expect(screen.getByTestId("playback-save-footer").className).toMatch(/sticky bottom-0/);
+  });
+});
+
+describe("Scan diagnostics", () => {
+  const scanning = (extra = {}) => none({ scan: scanOf("scanning", { current: 64, total: 254, phase: "Network 192.0.2.0/24", elapsed: 3.4, ...extra }) });
+
+  it("shows phase, real progress and elapsed time while scanning", () => {
+    render(<PlaybackApiPanel playback={controller({ status: scanning() })} />);
+    const text = screen.getByTestId("scan-progress").textContent ?? "";
+    expect(text).toContain("Network 192.0.2.0/24");
+    expect(text).toContain("Checked 64 of 254");
+    expect(text).toContain("3s");
+  });
+
+  it("shows Connecting for a typed address and never the generic message", () => {
+    const status = none({ scan: scanOf("scanning", { typed: true, phase: "Connecting to 192.0.2.50…", elapsed: 1 }) });
+    render(<PlaybackApiPanel playback={controller({ status })} />);
+    expect(screen.getByTestId("scan-progress").textContent).toContain("Connecting to 192.0.2.50");
+    expect(screen.queryByText("Couldn't find Playback")).toBeNull();
+  });
+
+  it("a scanning state is not replaced by not-found before the backend says so", () => {
+    const { rerender } = render(<PlaybackApiPanel playback={controller({ status: scanning() })} />);
+    expect(screen.queryByText("Couldn't find Playback")).toBeNull();
+    expect(screen.getByRole("button", { name: /Scanning/ })).toBeInTheDocument();
+    rerender(<PlaybackApiPanel playback={controller({ status: none({ scan: scanOf("not_found", { reason: "x", hosts_probed: 254, hosts_total: 254, networks: ["192.0.2.0/24"], elapsed: 9 }) }) })} />);
+    expect(screen.getByText("Couldn't find Playback")).toBeInTheDocument();
+    expect(screen.getByText(/Checked 254 of 254 addresses on 1 network \(192.0.2.0\/24\)/)).toBeInTheDocument();
+  });
+
+  it("shows the specific cause, next step, settings link and copy button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const scan = scanOf("not_found", {
+      error_class: "permission_denied", reason: "macOS blocked StagePilot. Open System Settings > Privacy & Security > Local Network.",
+      settings_url: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork", details: "{\"outcome\":\"error\"}",
+      hosts_probed: 254, hosts_total: 254, networks: ["192.0.2.0/24"], elapsed: 0.4,
+    });
+    render(<PlaybackApiPanel playback={controller({ status: none({ scan }) })} />);
+    expect(screen.getByTestId("scan-error")).toHaveTextContent("Privacy & Security > Local Network");
+    expect(screen.queryByText("Couldn't find Playback")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Local Network settings" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy diagnostic details" }));
+    expect(writeText).toHaveBeenCalledWith("{\"outcome\":\"error\"}");
+  });
+
+  it("a typed-address failure reports one address and its own error", () => {
+    const scan = scanOf("not_found", { error_class: "refused", typed: true, reason: "That computer answered, but Playback isn't accepting connections.", elapsed: 0.2, details: "{}" });
+    render(<PlaybackApiPanel playback={controller({ status: none({ scan }) })} />);
+    expect(screen.getByText("Couldn't connect")).toBeInTheDocument();
+    expect(screen.getByText("Tried one address in 0.2s.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Local Network settings" })).toBeNull();
   });
 });

@@ -70,3 +70,23 @@ entitlements if needed, and Apple notarization. That is a separate release
 flavor and must be tested against PyInstaller's extracted libraries. Tauri
 updater signatures remain independent: they authenticate updates inside
 StagePilot and are required whether Apple signing is ad-hoc or Developer ID.
+
+## Keychain and Local Network prompts
+
+Prompt sources on an ad-hoc build, what StagePilot does about each, and what cannot
+be fixed without a paid Developer ID:
+
+| Prompt | Cause | Status |
+| --- | --- | --- |
+| Login Keychain password (Planning Center secrets) | A Keychain item's access list names the program that created it. An ad-hoc program's designated requirement is its `cdhash`, which changes with every build, so each update looks like a new program and macOS asks for the login password. | Reads are minimized (none when Planning Center is not configured, one per launch otherwise). Click **Always Allow** once after each update. Cannot be removed without a stable signing identity. |
+| Local Network access | Granted per executable. The packaged backend is a separate executable with its own identity, and a rebuilt sidecar is a new one. | Scan now detects and explains it; see `playback-api.md`. |
+| Gatekeeper first open | Unsigned/unnotarized app. | Unavoidable without Developer ID. Right-click **Open** once. |
+| Updater replacing the app | Tauri swaps the bundle; macOS may re-ask the above. | Unavoidable ad-hoc. |
+
+A fixed designated requirement (`codesign -i org.stagepilot.backend -r=...`) would
+make the Keychain and Local Network grants survive updates, but: Tauri signs the
+sidecar and the updater archive during `tauri build`, so re-signing afterwards
+invalidates the archive's minisign signature, and an identifier-only requirement
+lets any ad-hoc binary with that identifier match the grant. That change was not
+shipped without an end-to-end update test from an installed beta, because a
+mistake would strand installed betas.

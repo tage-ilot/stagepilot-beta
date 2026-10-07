@@ -200,3 +200,14 @@ Playback/hardware validation, deployment, release or merge has been performed.
 See `playback-settings-contract.md`, `playback-transport-handoff.md`, and
 `playback-mapping-handoff.md` for slice contracts. Consolidated verification is
 recorded in the integration handoff, not inferred from older slice counts.
+
+## Local Network access on macOS
+
+If Scan Network reports that macOS blocked StagePilot, open **System Settings >
+Privacy & Security > Local Network** and turn on every StagePilot entry
+(including `stagepilot-backend` if listed), then quit and reopen StagePilot. The
+scan result's "Copy diagnostic details" and "Send logs to developer" include the
+last scan (networks, probed counts, per-class errors, loopback/gateway self-test).
+Backend log lines are `playback_scan_start`, `playback_scan_result`,
+`playback_connect_failed` and `sidecar_identity` in
+`~/Library/Logs/org.stagepilot.desktop/stagepilot-backend.log`.

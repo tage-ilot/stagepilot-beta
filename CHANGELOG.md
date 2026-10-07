@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Scan Network no longer reports every failure as "Couldn't find Playback". Scan
+  errors are classified (`permission_denied`, `no_route`, `refused`, `timed_out`,
+  `not_playback`, `invalid_address`, `unexpected_error`), shown with one concrete
+  next step, and logged. Each scan self-tests loopback and the default gateway so
+  "this app is blocked from the local network" is told apart from "nothing is
+  answering". A typed address is one direct probe with its own specific result
+  and never runs a network scan.
+- The scan shows its real phase, progress (checked N of M), networks and elapsed
+  time, and reports how many addresses were actually probed.
+- Fewer macOS password prompts: the Keychain is not read at all when Planning
+  Center is not configured, and is read at most once per launch otherwise.
+
+### Added
+
+- Playback scan diagnostics: one INFO log line per scan (trigger, networks,
+  interfaces, per-class error counts, outcome, duration), connect/reconnect and
+  settings-migration decisions, and the sidecar's executable/signing identifier at
+  startup. "Copy diagnostic details" on a failed scan, and the last scan plus
+  recent Playback log lines in "Send logs to developer".
+- "Open Local Network settings" link when macOS blocks LAN access.
+
+### Known issue
+
+- On macOS the packaged backend can be denied Local Network access even though the
+  app is enabled under Privacy & Security > Local Network (see
+  docs/playback-api.md, "Local Network access on macOS"). StagePilot now says so
+  and tells you what to turn on. The code-signing identifier is intentionally not
+  changed in this release (see docs/macos-adhoc-signing.md, "Keychain and Local
+  Network prompts").
+
 ## [1.1.104-beta.27] - 2026-10-06
 
 ### Changed
