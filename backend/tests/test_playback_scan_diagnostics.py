@@ -64,7 +64,7 @@ def test_probe_checked_raises_instead_of_returning_none() -> None:
     with socket.socket() as closed:
         closed.bind(("127.0.0.1", 0))
         port = closed.getsockname()[1]
-    # Windows retries a refused loopback connect until the timeout; both are real, classified errors.
+    # Windows retries a refused loopback connect until the timeout; both are classified.
     with pytest.raises((ConnectionRefusedError, TimeoutError)) as caught:
         probe_checked("127.0.0.1", port, 0.2)
     assert classify_exception(caught.value)[0] in ("refused", "timed_out")
