@@ -32,6 +32,7 @@ EXPECTED_NATIVE = {
     "ci.yml:desktop",
     "ci.yml:desktop-macos-lifecycle",
     "release-macos.yml:build",
+    "macos-signing-stability.yml:stability",
     "release-windows.yml:build",
 }
 
