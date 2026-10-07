@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.104-beta.30] - 2026-10-07
+
 ### Fixed
 
 - Scan Network, a typed address and a saved address now say plainly "macOS is blocking
