@@ -97,7 +97,8 @@ if [[ "${STAGEPILOT_EXPECT_STABLE_SIGNING:-}" == "1" ]]; then
     local item="$1" id="$2" dr
     dr="$(codesign -d -r- "$item" 2>&1 | sed -n 's/^designated => //p')"
     echo "designated ($id): $dr"
-    [[ "$dr" == *"identifier \"$id\""* && "$dr" == *"certificate leaf = H\"$PINNED_LEAF\""* ]] || {
+    # A self-signed certificate is its own root, so macOS writes "certificate root = H...".
+    [[ "$dr" == "identifier \"$id\" and certificate root = H\"$PINNED_LEAF\"" ]] || {
       echo "Unexpected designated requirement for $item: $dr" >&2
       exit 1
     }
