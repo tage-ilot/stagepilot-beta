@@ -293,7 +293,7 @@ class PlaybackClient:
     async def measure_song_length(
         self, *, settle: float = 3.0, on_command: Callable[[], None] = lambda: None
     ) -> float | None:
-        """Silent seek-clamp lower bound. Integration owns discovery/event suppression.
+        """Read the final-measure start. Integration owns discovery/event suppression.
 
         Only the selected stopped song is touched; fresh heartbeats confirm each
         return and two steady end positions. Never play, fade, or select a song.

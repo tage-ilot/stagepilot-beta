@@ -125,17 +125,23 @@ class PlaybackApiSettings(BaseModel):
     port: int = Field(default=8080, ge=1, le=65535)
     auto_scan: bool = True
     fast_transport: bool = True
+    planning_center_update_service_type_id: str | None = None
     song_order: list[StrictInt] = Field(default_factory=list, max_length=200)
     captured_version: StrictInt | None = None
     setlist_id: StrictInt | str | None = None
     captured_at: datetime | None = None
     song_lengths: list[float | None] = Field(default_factory=list, max_length=200)
+    discovery_duration_seconds: float | None = Field(default=None, gt=0)
     lengths_measured_at: datetime | None = None
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
         if update and "song_order" in update and update["song_order"] != self.song_order:
             # Discovery supplies a new aligned measurement explicitly.
-            update = {"song_lengths": [], "lengths_measured_at": None, **update}
+            update = {
+                "song_lengths": [],
+                "lengths_measured_at": None,
+                **update,
+            }
         return super().model_copy(update=update, deep=deep)
 
     @model_validator(mode="after")

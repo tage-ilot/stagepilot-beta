@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
 from uuid import uuid4
@@ -90,11 +91,24 @@ class OnboardingSettings(BaseModel):
     general_completed: bool = False
 
 
+class PlanningCenterLengthUndo(BaseModel):
+    """Write-ahead undo entry; never contains credentials."""
+
+    service_type_id: str
+    plan_id: str
+    item_id: str
+    title: str
+    old_length: int
+    new_length: int
+    written_at: datetime
+
+
 class PersistentSettings(BaseModel):
     """Versioned ordinary settings persisted outside the repository."""
 
     model_config = ConfigDict(extra="forbid")
 
+    planning_center_length_undo: list[PlanningCenterLengthUndo] = Field(default_factory=list)
     schema_version: Literal[2] = SETTINGS_SCHEMA_VERSION
     onboarding: OnboardingSettings = Field(default_factory=OnboardingSettings)
     integration_modes: IntegrationModes = Field(default_factory=IntegrationModes)
@@ -654,6 +668,7 @@ class SettingsService:
         resolved = PersistentSettings.from_runtime(self._runtime)
         return resolved.model_copy(
             update={
+                "planning_center_length_undo": self._persistent.planning_center_length_undo,
                 "onboarding": self._persistent.onboarding,
                 "web_dashboard_pin_enabled": self._persistent.web_dashboard_pin_enabled,
                 "web_dashboard_pin_hash": self._persistent.web_dashboard_pin_hash,

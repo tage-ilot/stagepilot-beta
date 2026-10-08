@@ -7,6 +7,7 @@ import type {
   DashboardAuthStatus,
   DashboardAccess,
   HealthResponse,
+  LengthPreview,
   LightsOperationResponse,
   LightsSettingsInput,
   LightsStatusResponse,
@@ -254,6 +255,12 @@ export const discoverPlaybackSongOrder = () =>
   requestJson<PlaybackStatusResponse>("/api/v1/playback-api/discover-song-order", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
   });
+const lengthPath = "/api/v1/playback-api/planning-center-lengths";
+export const getLengthCategories = () => requestJson<PlanningCenterServiceType[]>(`${lengthPath}/categories`);
+export const chooseLengthCategory = (service_type_id: string) => requestJson<PlaybackStatusResponse>(`${lengthPath}/category`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ service_type_id }) });
+export const previewPlanLengths = () => requestJson<LengthPreview>(`${lengthPath}/preview`, { method: "POST" });
+export const confirmPlanLengths = (token: string) => requestJson<PlaybackStatusResponse>(`${lengthPath}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, confirm: true }) });
+export const restorePlanLengths = () => requestJson<PlaybackStatusResponse>(`${lengthPath}/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }) });
 export const getMidiMessages = () => requestJson<MidiMonitorResponse>("/api/v1/midi/messages");
 export const refreshMidiInputs = () =>
   requestJson<MidiInputsResponse>("/api/v1/midi/inputs/refresh", { method: "POST" });

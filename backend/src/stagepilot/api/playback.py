@@ -13,6 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from stagepilot.api.remote_retry import RemoteRetryRoute
 from stagepilot.core.config import MidiSource, PlaybackApiSettings
 from stagepilot.core.settings import SettingsFileError
+from stagepilot.plugins.planning_center.errors import (
+    PlanningCenterApiError,
+    PlanningCenterAuthenticationError,
+    PlanningCenterPermissionError,
+)
+from stagepilot.plugins.planning_center.models import PlanningCenterServiceType
 from stagepilot.plugins.playback_api.arbiter import PlaybackConnection, Source, SourceStatus
 from stagepilot.plugins.playback_api.client import ConnectionOptions
 from stagepilot.plugins.playback_api.normalizer import PlaybackEvent
@@ -20,6 +26,11 @@ from stagepilot.plugins.playback_api.plugin import (
     LOCAL_NETWORK_SETTINGS_URL,
     DiscoveryConflict,
     PlaybackInputPlugin,
+)
+from stagepilot.services.planning_center_lengths import (
+    DENIED_MESSAGE,
+    LengthPreview,
+    LengthUpdateResult,
 )
 
 router = APIRouter(prefix="/api/v1/playback-api", route_class=RemoteRetryRoute)
@@ -67,6 +78,11 @@ class PlaybackPlanSong(BaseModel):
 
 
 class PlaybackStatusResponse(BaseModel):
+    planning_center_lengths: LengthUpdateResult
+    planning_center_undo_available: bool
+    planning_center_connected: bool
+    plan_title: str | None
+    plan_date: str | None
     scan: ScanResult
     selected: bool
     enabled: bool
@@ -86,6 +102,9 @@ class PlaybackStatusResponse(BaseModel):
     discovery_total: int
     song_order: list[int]
     song_lengths: list[float | None]
+    discovery_duration_seconds: float | None
+    planning_center_update_service_type_id: str | None
+    planning_center_update_reason: str | None
     lengths_measured_at: datetime | None
     plan_songs: list[PlaybackPlanSong]
     song_count: int
@@ -140,6 +159,15 @@ async def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResp
     heartbeat = status.heartbeat
     connection = controller.connection
     return PlaybackStatusResponse(
+        planning_center_lengths=controller.planning_center_lengths.result,
+        planning_center_undo_available=controller.planning_center_lengths.undo_available,
+        planning_center_connected=state.planning_center_status.value == "connected",
+        planning_center_update_reason=await update_reason(controller),
+        planning_center_update_service_type_id=config.planning_center_update_service_type_id
+        or controller.settings.planning_center.service_type_id,
+        discovery_duration_seconds=config.discovery_duration_seconds,
+        plan_title=state.plan.title if state.plan else None,
+        plan_date=state.plan.date.isoformat() if state.plan else None,
         scan=ScanResult(
             state=controller.scan_state,
             candidates=[
@@ -266,6 +294,160 @@ async def settings(payload: PlaybackSettingsRequest, request: Request) -> Playba
         raise HTTPException(503, str(exc)) from exc
     except DiscoveryConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+    return await status_response(controller)
+
+
+def scan_signature(controller: PlaybackInputPlugin) -> str:
+    config = controller.settings.playback_api
+    return json.dumps(
+        [
+            config.song_order,
+            config.song_lengths,
+            str(config.captured_at),
+            config.captured_version,
+            config.setlist_id,
+            config.planning_center_update_service_type_id,
+        ],
+        sort_keys=True,
+    )
+
+
+async def update_reason(controller: PlaybackInputPlugin) -> str | None:
+    state = await controller.state_store.snapshot()
+    if state.planning_center_status.value != "connected":
+        return "Connect Planning Center first."
+    if controller.status.heartbeat and controller.status.heartbeat.playing:
+        return "Stop Playback first."
+    if controller.discovery == "failed":
+        return "The song scan failed or was cancelled. Scan songs again."
+    config = controller.settings.playback_api
+    if controller.discovery == "running":
+        return "Wait for the song scan to finish."
+    if not config.captured_at or not config.song_order:
+        return "Scan songs first to read the lengths from Playback."
+    if controller.mapper.stale:
+        return "The setlist changed. Scan songs again."
+    if not any(length is not None for length in config.song_lengths):
+        return "The scan has no song lengths. Scan songs again."
+    if controller.planning_center_lengths.result.status == "running":
+        return "Wait for the Planning Center changes to finish."
+    return None
+
+
+class CategoryChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    service_type_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class LengthConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str
+    confirm: Literal[True]
+
+
+def preview_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (PlanningCenterPermissionError, PlanningCenterAuthenticationError)) or (
+        isinstance(exc, PlanningCenterApiError) and exc.status_code in (401, 403)
+    ):
+        return HTTPException(403, DENIED_MESSAGE)
+    if isinstance(exc, ValueError):
+        return HTTPException(409, str(exc))
+    return HTTPException(
+        503,
+        "Planning Center could not read this plan. "
+        "Song order and lengths are saved. Try again later.",
+    )
+
+
+@router.get("/planning-center-lengths/categories", response_model=list[PlanningCenterServiceType])
+async def length_categories(request: Request) -> list[PlanningCenterServiceType]:
+    try:
+        return await _controller(request).planning_center_lengths.categories()
+    except Exception as exc:
+        raise preview_error(exc) from None
+
+
+@router.put("/planning-center-lengths/category", response_model=PlaybackStatusResponse)
+async def choose_length_category(
+    payload: CategoryChoice, request: Request
+) -> PlaybackStatusResponse:
+    controller = _controller(request)
+    if (
+        controller.discovery == "running"
+        or controller.planning_center_lengths.result.status == "running"
+    ):
+        raise HTTPException(409, "Wait for the current operation to finish.")
+    try:
+        categories = await controller.planning_center_lengths.categories()
+        if not any(c.id == payload.service_type_id for c in categories):
+            raise ValueError("Choose an available Planning Center category.")
+        previous = controller._service.snapshot()
+        config = previous.playback_api.model_copy(
+            update={"planning_center_update_service_type_id": payload.service_type_id}
+        )
+        controller._service.save(previous.model_copy(update={"playback_api": config}))
+        controller.settings.playback_api = config
+    except Exception as exc:
+        raise preview_error(exc) from None
+    return await status_response(controller)
+
+
+@router.post("/planning-center-lengths/preview", response_model=LengthPreview)
+async def preview_lengths(request: Request) -> LengthPreview:
+    controller = _controller(request)
+    reason = await update_reason(controller)
+    if reason:
+        raise HTTPException(409, reason)
+    config = controller.settings.playback_api
+    category = (
+        config.planning_center_update_service_type_id
+        or controller.settings.planning_center.service_type_id
+    )
+    if not category:
+        raise HTTPException(409, "Choose a Planning Center category first.")
+    try:
+        return await controller.planning_center_lengths.preview(
+            category, config.song_lengths, scan_signature(controller)
+        )
+    except Exception as exc:
+        raise preview_error(exc) from None
+
+
+@router.post("/planning-center-lengths/confirm", response_model=PlaybackStatusResponse)
+async def confirm_lengths(payload: LengthConfirmation, request: Request) -> PlaybackStatusResponse:
+    controller = _controller(request)
+    reason = await update_reason(controller)
+    if reason:
+        raise HTTPException(409, reason)
+    signature = scan_signature(controller)
+    controller.planning_center_lengths.write_allowed = lambda: (
+        not controller.mapper.stale
+        and controller.discovery not in ("running", "failed")
+        and scan_signature(controller) == signature
+        and not (controller.status.heartbeat and controller.status.heartbeat.playing)
+    )
+    try:
+        await controller.planning_center_lengths.confirm(payload.token, signature)
+    except Exception as exc:
+        raise preview_error(exc) from None
+    return await status_response(controller)
+
+
+@router.post("/planning-center-lengths/restore", response_model=PlaybackStatusResponse)
+async def restore_lengths(
+    request: Request, payload: object = Body(default=None)
+) -> PlaybackStatusResponse:
+    if not isinstance(payload, dict) or payload.get("confirm") is not True:
+        raise HTTPException(400, "Confirm restoring Planning Center times with {confirm: true}.")
+    controller = _controller(request)
+    if (
+        controller.discovery == "running"
+        or controller.planning_center_lengths.result.status == "running"
+    ):
+        raise HTTPException(409, "Wait for the scan or Planning Center changes to finish.")
+    if controller.status.heartbeat and controller.status.heartbeat.playing:
+        raise HTTPException(409, "Stop Playback before restoring Planning Center times.")
+    await controller.planning_center_lengths.restore()
     return await status_response(controller)
 
 
