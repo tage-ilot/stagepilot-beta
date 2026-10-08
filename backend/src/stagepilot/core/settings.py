@@ -101,6 +101,7 @@ class PlanningCenterLengthUndo(BaseModel):
     old_length: int
     new_length: int
     written_at: datetime
+    pending_from_length: int | None = None
 
 
 class PersistentSettings(BaseModel):

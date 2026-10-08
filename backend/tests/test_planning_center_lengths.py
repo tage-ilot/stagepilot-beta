@@ -178,9 +178,9 @@ async def test_failure_reports_partial_and_stops_then_later_success(
     )
     assert "token-secret" not in rig.service.result.model_dump_json() + caplog.text
     rig.failures.clear()
-    await rig.service.restore()
-    assert not rig.service.undo_available
-    await rig.update(rig.plan, [151, 151, 151])
+    loaded = (await rig.state.snapshot()).plan
+    assert loaded is not None
+    await rig.update(loaded, [151, 151, 151])
     assert rig.remote == {"0": 151, "1": 151, "2": 151}
 
 

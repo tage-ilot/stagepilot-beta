@@ -174,9 +174,10 @@ class PlanningCenterLengthService:
             elif any(
                 (r.service_type_id, r.plan_id, r.item_id)
                 == (plan.service_type_id, plan.id, song.id)
+                and song.duration_seconds not in (r.new_length, r.pending_from_length)
                 for r in self.settings.snapshot().planning_center_length_undo
             ):
-                reason = "Previous times are kept; restore before changing this song again."
+                reason = "Someone changed this item; their edit was left alone."
             rows.append(
                 LengthItemResult(
                     item_id=song.id,
@@ -266,6 +267,8 @@ class PlanningCenterLengthService:
                 assert client is not None
                 attempted = False
                 accepted = False
+                undo = record
+                previous_records = self.settings.snapshot().planning_center_length_undo
                 try:
                     state = await self.state.snapshot()
                     if state.planning_center_status is not ConnectionStatus.CONNECTED:
@@ -282,6 +285,15 @@ class PlanningCenterLengthService:
                         record.service_type_id, record.plan_id, record.item_id
                     )
                     songs, _ = client._extract_songs([current])
+                    if (
+                        restore
+                        and record.pending_from_length is not None
+                        and current.attributes.length == record.pending_from_length
+                    ):
+                        # A later uncertain PATCH never committed: restore the previous
+                        # StagePilot value, not an unrelated remote edit.
+                        expected = record.pending_from_length
+                        item_result.old_length = expected
                     if not songs or current.attributes.length != expected:
                         item_result.status = "skipped"
                         item_result.reason = "Someone changed this item; their edit was left alone."
@@ -294,9 +306,34 @@ class PlanningCenterLengthService:
                         )
                     if not restore:
                         # Record before PATCH; a crash/timeout can leave an uncertain write.
-                        self._persist(
-                            [*self.settings.snapshot().planning_center_length_undo, record]
+                        prior = next(
+                            (
+                                r
+                                for r in previous_records
+                                if (r.service_type_id, r.plan_id, r.item_id)
+                                == (record.service_type_id, record.plan_id, record.item_id)
+                            ),
+                            None,
                         )
+                        if prior and expected not in (
+                            prior.new_length,
+                            prior.pending_from_length,
+                        ):
+                            item_result.status = "skipped"
+                            item_result.reason = (
+                                "Someone changed this item; their edit was left alone."
+                            )
+                            continue
+                        # Coalesce a sequence of explicit updates into one restore point.
+                        # Fresh remote state distinguishes an uncertain committed write
+                        # (prior.new_length) from one that never committed (prior.old_length).
+                        undo = record.model_copy(
+                            update={
+                                "old_length": prior.old_length if prior else expected,
+                                "pending_from_length": expected,
+                            }
+                        )
+                        self._persist([r for r in previous_records if r != prior] + [undo])
                     attempted = True
                     response = await client.update_plan_item_length(
                         record.service_type_id,
@@ -325,6 +362,16 @@ class PlanningCenterLengthService:
                     if verified.attributes.length != target:
                         raise RuntimeError("Unconfirmed write")
 
+                    if not restore:
+                        self._persist(
+                            [
+                                r.model_copy(update={"pending_from_length": None})
+                                if r == undo
+                                else r
+                                for r in self.settings.snapshot().planning_center_length_undo
+                            ]
+                        )
+
                     if restore:
                         completed.append(record)
                 except PlanningCenterLengthConflictError:
@@ -333,13 +380,7 @@ class PlanningCenterLengthService:
                     if restore:
                         completed.append(record)
                     else:
-                        self._persist(
-                            [
-                                r
-                                for r in self.settings.snapshot().planning_center_length_undo
-                                if r != record
-                            ]
-                        )
+                        self._persist(previous_records)
                 except Exception as exc:
                     if isinstance(exc, PlanningCenterPermissionError):
                         halted = DENIED_MESSAGE
@@ -370,13 +411,7 @@ class PlanningCenterLengthService:
                             exc, (PlanningCenterPermissionError, PlanningCenterRateLimitError)
                         )
                     ):
-                        self._persist(
-                            [
-                                r
-                                for r in self.settings.snapshot().planning_center_length_undo
-                                if r != record
-                            ]
-                        )
+                        self._persist(previous_records)
         except asyncio.CancelledError:
             self.result.status = "partial" if changed else "failed"
             self.result.reload = "failed" if changed else "not_needed"
