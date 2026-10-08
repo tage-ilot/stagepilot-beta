@@ -827,7 +827,7 @@ fn start_backend(app: &tauri::AppHandle, supervisor: BackendSupervisor) -> Resul
     } else {
         "127.0.0.1"
     };
-    let mut command = app
+    let command = app
         .shell()
         .sidecar("stagepilot-backend")
         .map_err(|error| format!("Unable to locate the packaged backend sidecar: {error}"))?
@@ -861,12 +861,12 @@ fn start_backend(app: &tauri::AppHandle, supervisor: BackendSupervisor) -> Resul
             env!("STAGEPILOT_PCO_CLIENT_ID"),
         );
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
+    let command = {
         let broker = app.state::<NativeCredentialBroker>();
-        command = command
+        command
             .env("STAGEPILOT_CREDENTIAL_BROKER_ORIGIN", &broker.origin)
-            .env("STAGEPILOT_CREDENTIAL_BROKER_TOKEN", &broker.authorization);
-    }
+            .env("STAGEPILOT_CREDENTIAL_BROKER_TOKEN", &broker.authorization)
+    };
     let (mut events, child) = command
         .spawn()
         .map_err(|error| format!("Unable to start the packaged backend sidecar: {error}"))?;
@@ -1679,13 +1679,13 @@ pub fn run() {
     let port = configured_port();
     let supervisor = BackendSupervisor::new(port);
     let shutdown_supervisor = supervisor.clone();
-    let mut builder = tauri::Builder::default();
+    let builder = tauri::Builder::default();
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
+    let builder = {
         let credential_broker =
             NativeCredentialBroker::start().expect("failed to start the native credential broker");
-        builder = builder.manage(credential_broker);
-    }
+        builder.manage(credential_broker)
+    };
     let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
             if let Some(action) = stagepilot_launch_action(&arguments) {
