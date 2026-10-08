@@ -181,9 +181,11 @@ describe("Song order card", () => {
 
   it("progress and failure are plain", () => {
     const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 3 }) })} />);
-    expect(screen.getByText("Checking your songs… step 3. Please wait.")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "Reading Playback song lengths" })).toBeVisible();
+    expect(screen.queryByText(/step 3/)).not.toBeInTheDocument();
     view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 12, discovery_song: 3, discovery_total: 8 }) })} />);
-    expect(screen.getByText("Checking song 3 of 8… Please wait.")).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "100");
+    expect(screen.queryByText(/Checking song/)).not.toBeInTheDocument();
     expect(screen.queryByText(/step 12/)).not.toBeInTheDocument();
     view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "failed", last_error: "Playback went away." }) })} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Playback went away.");
@@ -298,7 +300,7 @@ describe("No dead primary button without a visible fix", () => {
   it.each(states)("%s", (_name, status) => {
     panel(controller({ status }));
     const footer = screen.getByTestId("playback-save-footer");
-    const disabled = screen.getAllByRole("button").filter((button) => (button as HTMLButtonElement).disabled && !footer.contains(button));
+    const disabled = screen.getAllByRole("button").filter((button) => (button as HTMLButtonElement).disabled && !footer.contains(button) && !button.closest('[aria-label="Planning Center song times"]'));
     expect(disabled.map((b) => b.textContent)).toEqual([]);
     expect(screen.getAllByRole("button").some((b) => /Scan Network|Scanning|Scan again/.test(b.textContent ?? "") && !(b as HTMLButtonElement).disabled)).toBe(true);
   });

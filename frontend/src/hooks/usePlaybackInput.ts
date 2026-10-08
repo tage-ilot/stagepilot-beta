@@ -15,6 +15,7 @@ export interface PlaybackController {
   scan: (host?: string) => void;
   cancelScan: () => void;
   discover: () => void;
+  acceptStatus?: (status: PlaybackStatusResponse) => void;
 }
 
 export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: SettingsResponse) => void): PlaybackController {
@@ -188,5 +189,7 @@ export function usePlaybackInput(canConfigure: boolean, onSettings: (settings: S
     });
   }, [onSettings, run]);
 
-  return { status, events, error: error ?? statusError, message, pending, save, selectSource, scan, cancelScan, discover };
+  const acceptStatus = useCallback((next: PlaybackStatusResponse) => { ++statusRevision.current; setStatus(next); void getSettings().then(onSettings).catch(() => undefined); }, [onSettings]);
+
+  return { acceptStatus, status, events, error: error ?? statusError, message, pending, save, selectSource, scan, cancelScan, discover };
 }

@@ -42,6 +42,7 @@ from stagepilot.plugins.playback_api.find import (
 )
 from stagepilot.plugins.playback_api.mapping import Observation, PlaybackMapper
 from stagepilot.plugins.playback_api.normalizer import Heartbeat, PlaybackEvent
+from stagepilot.services.planning_center_lengths import PlanningCenterLengthService
 
 ClientFactory = Callable[[ConnectionOptions, Observer], PlaybackClient]
 MidiFactory = Callable[[Settings], MidiPlaybackPlugin]
@@ -147,6 +148,12 @@ class PlaybackInputPlugin(Plugin):
         )
         self.settings = settings.model_copy(deep=True)
         self._service = settings_service
+        self.planning_center_lengths = PlanningCenterLengthService(
+            settings_service,
+            state_store,
+            dispatcher,
+            is_playing=lambda: bool(self.status.heartbeat and self.status.heartbeat.playing),
+        )
         self._midi_factory = midi_factory
         self._client_factory = client_factory
         self._scanner = scanner
@@ -387,8 +394,13 @@ class PlaybackInputPlugin(Plugin):
 
     async def save_settings(self, settings: PersistentSettings) -> None:
         async with self._lifecycle:
-            if self.discovery == "running":
-                raise DiscoveryConflict("Wait for Discover Song Order before changing settings.")
+            if (
+                self.discovery == "running"
+                or self.planning_center_lengths.result.status == "running"
+            ):
+                raise DiscoveryConflict(
+                    "Wait for song discovery or Planning Center changes to finish."
+                )
             saved = self._service.snapshot().playback_api
             if (
                 settings.playback_api.song_order,
@@ -397,6 +409,7 @@ class PlaybackInputPlugin(Plugin):
                 settings.playback_api.setlist_id,
                 settings.playback_api.song_lengths,
                 settings.playback_api.lengths_measured_at,
+                settings.playback_api.discovery_duration_seconds,
             ) != (
                 saved.song_order,
                 saved.captured_version,
@@ -404,8 +417,23 @@ class PlaybackInputPlugin(Plugin):
                 saved.setlist_id,
                 saved.song_lengths,
                 saved.lengths_measured_at,
+                saved.discovery_duration_seconds,
             ):
                 raise ValueError("Song order can only be changed by Discover Song Order.")
+            settings = settings.model_copy(
+                update={
+                    "planning_center_length_undo": (
+                        self._service.snapshot().planning_center_length_undo
+                    ),
+                    "playback_api": settings.playback_api.model_copy(
+                        update={
+                            "planning_center_update_service_type_id": (
+                                saved.planning_center_update_service_type_id
+                            )
+                        }
+                    ),
+                }
+            )
             config = settings.playback_api
             ConnectionOptions(config.enabled, config.host, config.port, config.auto_scan)
             self._service.save(settings)
@@ -474,7 +502,10 @@ class PlaybackInputPlugin(Plugin):
             and status.connected
         ):
             config = self.settings.playback_api.model_copy(
-                update={"song_lengths": [], "lengths_measured_at": None}
+                update={
+                    "song_lengths": [],
+                    "lengths_measured_at": None,
+                }
             )
             self.settings.playback_api = config
             self._service.save(
@@ -734,8 +765,13 @@ class PlaybackInputPlugin(Plugin):
 
     async def discover_song_order(self) -> None:
         async with self._lifecycle:
-            if self.discovery == "running":
-                raise DiscoveryConflict("Song order discovery is already running.")
+            if (
+                self.discovery == "running"
+                or self.planning_center_lengths.result.status == "running"
+            ):
+                raise DiscoveryConflict(
+                    "Song order discovery or Planning Center update is already running."
+                )
             heartbeat = self._check_discovery()
             async with self._dispatch_lock:
                 self.mapper.set_discovery(True)
@@ -746,6 +782,7 @@ class PlaybackInputPlugin(Plugin):
                 self.discovery_total = len(self.mapper.song_order) if not self.mapper.stale else 0
                 self.discovery_error = None
                 self._discovery_task = asyncio.current_task()
+        scan_started = time.monotonic()
         original = heartbeat.song_id
         version = heartbeat.setlist_version
         assert version is not None
@@ -797,6 +834,7 @@ class PlaybackInputPlugin(Plugin):
                     "setlist_id": self.status.setlist_id,
                     "captured_at": datetime.now(UTC),
                     "song_lengths": lengths,
+                    "discovery_duration_seconds": time.monotonic() - scan_started,
                     "lengths_measured_at": datetime.now(UTC),
                 }
             )

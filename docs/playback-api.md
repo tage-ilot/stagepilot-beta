@@ -70,9 +70,9 @@ restores the original selection using Previous only. No select-song command or
 generic send/control API exists. The operation is capped at 200 total navigation
 steps (including the walk to the start and restoration), with five seconds per
 step. A very long setlist/original selection may exceed that cap and fail safely.
-At an end, at least two fresh unchanged heartbeats and continued recent receipt
+At an end, two fresh unchanged heartbeats and continued recent receipt
 are required; a silent endpoint is a timeout, never an empty/successful result.
-The usual approximately two-second song changes make runtime depend on setlist
+The usual two-second song changes make runtime depend on setlist
 length; probing both ends may each take five seconds.
 
 On the forward walk, each stopped song is returned to zero (confirmed by a fresh
@@ -80,8 +80,8 @@ heartbeat), sought past its end, and measured from two steady fresh heartbeats.
 It is then returned to zero before navigation continues. Failed/no-effect length
 reads become null and do not discard a successful order. Nothing is played: no
 Play, Fade, or Select command is sent, so scanning does not fire Playback MIDI cues.
-Clamped lengths are lower bounds and can be up to four seconds short. They are
-display-only; countdowns and lighting still use Planning Center durations.
+Playback lengths are read from where each song ends (the start of its last measure).
+Countdowns and lighting still use Planning Center durations.
 
 All Playback-triggered StagePilot actions are suppressed from discovery entry
 until exit, including starts and stop/pause actions. Monitor events carry
@@ -224,3 +224,42 @@ last scan (networks, probed counts, per-class errors, loopback/gateway self-test
 Backend log lines are `playback_scan_start`, `playback_scan_result`,
 `playback_connect_failed` and `sidecar_identity` in
 `~/Library/Logs/org.stagepilot.desktop/stagepilot-backend.log`.
+
+
+## Explicit Planning Center song-time updates
+
+A scan only saves Playback order and measured lengths. It never writes to Planning
+Center. **Update Planning Center** previews the next upcoming plan in the chosen
+category; only the subsequent confirmation writes plan-item `length` attributes.
+The category menu saves its choice immediately, independently of the settings Save
+footer. Upcoming discovery shares the existing lookahead and preferred-time logic.
+
+Measured lengths are rounded to the nearest second, half up, with no difference
+tolerance. Equal rounded values, unmeasured positions and non-song items are skipped.
+One preview and confirmation covers all measured songs.
+
+The read-only preview expires after five minutes, is single-use and is bound to the
+saved scan and category. Every write checks the item again for conflicting edits,
+keeps a durable write-ahead undo record and verifies the remote value. Restore skips
+items edited since StagePilot wrote them. Uncertain or denied restores retain their
+records for a later retry. Credentials are never included in records or results.
+401/403 are ordinary permission failures; 429 observes Retry-After once.
+
+If the written plan is the loaded plan, StagePilot requests one `RELOAD_PLAN` and
+verifies its durations. A running timer defers reload until idle; this feature
+publishes no timer or light actions. Updating another plan never switches the
+loaded plan. Permission, conflict or reload failures do not invalidate the scan.
+
+Endpoints under `/api/v1/playback-api/planning-center-lengths`:
+
+- `GET /categories`: active categories (read-only).
+- `PUT /category`: `{ "service_type_id": "42" }`, immediate local persistence.
+- `POST /preview`: read-only target-plan rows and a short-lived preview token.
+- `POST /confirm`: `{ "token": "…", "confirm": true }`.
+- `POST /restore`: `{ "confirm": true }`.
+
+Song-scan progress is smoothed locally with a monotonic, time-driven fill. Real
+step events raise a blended target without setting the fill directly. The fill
+keeps moving below 90% until actual completion, then finishes and briefly holds.
+Failure/cancellation never produces a fake 100%. Reduced motion uses small plain
+increments; the unknown-count bar omits determinate ARIA values.

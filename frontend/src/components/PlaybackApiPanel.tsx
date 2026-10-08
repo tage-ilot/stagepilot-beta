@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { openExternalUrl } from "../desktop";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
 import type { PlaybackDraft } from "./PlaybackSaveFooter";
+import { PlanningCenterLengths } from "./PlanningCenterLengths";
+import { ScanProgress } from "./ScanProgress";
 import { PlaybackSongLengths } from "./PlaybackSongLengths";
 import { playbackActivityText, playbackBannerTone, playbackOrderNotice, playbackSongCountMismatch, scanProgressText, scanSummary, validPlaybackHost } from "./playbackStatus";
 
@@ -109,8 +111,9 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
       {status && (
         <section className="space-y-2 rounded-xl border border-sky-400/20 bg-sky-400/[0.05] p-4" aria-labelledby="song-order-heading">
           <h3 id="song-order-heading" className="font-bold text-white">Song order</h3>
+          <div className="flex flex-wrap items-start gap-3"><div className="w-full min-w-0 sm:w-auto sm:flex-1">
+          <ScanProgress state={running ? "running" : status.discovery} steps={status.discovery_song ?? 0} total={status.discovery_total ?? 0} previousDuration={status.discovery_duration_seconds} estimatedSongs={status.song_order.length}>
           {!apiConnected ? <p className="text-sm text-slate-300">Connect to Playback first.</p>
-            : running ? <p role="status" className="text-sm text-sky-200">{(status.discovery_total ?? 0) > 0 ? `Checking song ${status.discovery_song ?? 0} of ${status.discovery_total}… Please wait.` : `Checking your songs… step ${status.progress}. Please wait.`}</p>
               : status.playing ? <p className="text-sm text-amber-200">Stop Playback to set up song order.</p>
                 : <>
                   {orderSaved ? <p className="text-sm text-emerald-200">Song order saved ({status.song_order.length} {status.song_order.length === 1 ? "song" : "songs"})</p>
@@ -118,6 +121,9 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
                       <p className="text-sm text-slate-300">StagePilot steps through your Playback songs once to learn the order. Playback must be stopped.</p></>}
                   <button className={orderSaved ? button : big} type="button" onClick={() => setConfirm(true)}>{orderSaved ? "Set up again" : "Set up song order"}</button>
                 </>}
+          </ScanProgress></div>
+          <PlanningCenterLengths status={status} onStatus={playback?.acceptStatus} />
+          </div>
           {mismatch && <p className="text-sm text-slate-300">{mismatch}</p>}
           <PlaybackSongLengths status={status} />
           {status.discovery === "failed" && status.last_error && <p role="alert" className="text-sm text-rose-200">{status.last_error}</p>}

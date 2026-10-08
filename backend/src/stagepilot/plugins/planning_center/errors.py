@@ -35,6 +35,10 @@ class PlanningCenterPlanSelectionError(PlanningCenterError):
     """A requested plan is not one of the nearest-date candidates."""
 
 
+class PlanningCenterLengthConflictError(PlanningCenterError):
+    """The item changed while a rate-limited write was waiting."""
+
+
 class PlanningCenterApiError(PlanningCenterError):
     """Planning Center returned an unsuccessful HTTP response."""
 

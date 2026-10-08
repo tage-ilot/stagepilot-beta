@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -19,6 +20,7 @@ from stagepilot.plugins.planning_center.errors import (
     PlanningCenterAuthenticationError,
     PlanningCenterConfigurationError,
     PlanningCenterError,
+    PlanningCenterLengthConflictError,
     PlanningCenterPermissionError,
     PlanningCenterPlanSelectionError,
     PlanningCenterRateLimitError,
@@ -104,6 +106,97 @@ class PlanningCenterClient:
         """Release the underlying connection pool."""
 
         await self._client.aclose()
+
+    def _item_path(self, service_type_id: str, plan_id: str, item_id: str) -> str:
+        for value, label in (
+            (service_type_id, "service type"),
+            (plan_id, "plan"),
+            (item_id, "item"),
+        ):
+            self._validate_identifier(value, label)
+        return f"services/v2/service_types/{service_type_id}/plans/{plan_id}/items/{item_id}"
+
+    async def _length_request(
+        self,
+        method: str,
+        path: str,
+        length: int | None = None,
+        expected_length: int | None = None,
+        write_allowed: Callable[[], bool] = lambda: True,
+    ) -> ItemResource:
+        # Public Item docs: PATCH assigns length on this plan item, not its Arrangement.
+        # https://api.planningcenteronline.com/docs/apps/services/versions/2018-11-01/vertices/item
+        body = {"data": {"type": "Item", "attributes": {"length": length}}}
+        for attempt in range(2):
+            if method == "PATCH" and not write_allowed():
+                raise PlanningCenterConfigurationError(
+                    "Playback started; stop it before changing plan times."
+                )
+            try:
+                response = await self._client.request(
+                    method, path, json=body if method == "PATCH" else None
+                )
+            except httpx.TimeoutException:
+                raise PlanningCenterTimeoutError(
+                    "Planning Center timed out; the change may not be confirmed."
+                ) from None
+            except httpx.RequestError:
+                raise PlanningCenterTransportError(
+                    "Could not connect to Planning Center."
+                ) from None
+            if response.status_code in (401, 403):
+                raise PlanningCenterPermissionError(
+                    "Planning Center did not allow this change. The account or token used by "
+                    "StagePilot can't edit this plan."
+                )
+            if response.status_code == 429:
+                delay = self._parse_retry_after(response.headers.get("Retry-After"))
+                if attempt == 0 and delay is not None:
+                    await asyncio.sleep(delay)
+                    if method == "PATCH":
+                        current = await self._length_request("GET", path)
+                        songs, _ = self._extract_songs([current])
+                        if not songs or current.attributes.length != expected_length:
+                            raise PlanningCenterLengthConflictError(
+                                "Someone changed this item; their edit was left alone."
+                            )
+                    continue
+                raise PlanningCenterRateLimitError(delay)
+            if not response.is_success:
+                raise PlanningCenterApiError(response.status_code)
+            try:
+                item = ItemResource.model_validate(response.json()["data"])
+                if item.id != path.rsplit("/", 1)[-1]:
+                    raise ValueError("Wrong item")
+                return item
+            except (ValueError, KeyError, TypeError):
+                raise PlanningCenterResponseError(
+                    "Planning Center returned an invalid item response."
+                ) from None
+        raise AssertionError("unreachable")
+
+    async def get_plan_item(self, service_type_id: str, plan_id: str, item_id: str) -> ItemResource:
+        return await self._length_request("GET", self._item_path(service_type_id, plan_id, item_id))
+
+    async def update_plan_item_length(
+        self,
+        service_type_id: str,
+        plan_id: str,
+        item_id: str,
+        length: int,
+        *,
+        expected_length: int | None = None,
+        write_allowed: Callable[[], bool] = lambda: True,
+    ) -> ItemResource:
+        if type(length) is not int or not 0 <= length <= 86400:
+            raise PlanningCenterConfigurationError("Invalid plan item length.")
+        return await self._length_request(
+            "PATCH",
+            self._item_path(service_type_id, plan_id, item_id),
+            length,
+            expected_length,
+            write_allowed,
+        )
 
     async def list_service_types(self) -> list[PlanningCenterServiceType]:
         """Return all available service types in their configured sequence."""

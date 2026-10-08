@@ -9,9 +9,13 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from stagepilot.core.config import PlaybackApiSettings
+from stagepilot.core.config import LightingCue, PlaybackApiSettings, ProPresenterSettings
 from stagepilot.core.settings import SettingsFileStore
+from stagepilot.plugins.lights import LightsPlugin
+from stagepilot.plugins.propresenter.plugin import ProPresenterPlugin
+from test_lights_plugin import FakeOutputBackend, lights_settings
 from test_playback_integration import FakePlayback, application, controller, wait_for
+from test_propresenter_plugin import FakeProPresenterClient
 
 
 def test_old_settings_file_loads_without_lengths(tmp_path: Path) -> None:
@@ -145,3 +149,44 @@ async def test_unexpected_measurement_failure_does_not_fail_order(
         saved = app.state.runtime.settings_service.snapshot().playback_api
         assert saved.song_order == fake.songs
         assert saved.song_lengths == [None, None, None]
+
+
+async def test_full_seek_scan_sends_no_propresenter_or_lights_commands() -> None:
+    fake = FakePlayback(index=1)
+    async with application(fake) as (app, _):
+        inputs = controller(app)
+        output = FakeProPresenterClient()
+        backend = FakeOutputBackend()
+        presenter = ProPresenterPlugin(
+            inputs.event_bus,
+            inputs.state_store,
+            ProPresenterSettings(enabled=True, health_check_interval_seconds=300),
+            client_factory=lambda _settings: output,
+        )
+        lights = LightsPlugin(
+            inputs.event_bus,
+            inputs.state_store,
+            lights_settings(LightingCue(at_seconds=0, note=72, velocity=110)),
+            backend_factory=lambda: backend,
+        )
+        await presenter.start()
+        await lights.start()
+        output.calls.clear()
+        try:
+            await inputs.discover_song_order()
+            await asyncio.sleep(0.15)
+            assert inputs.discovery == "done"
+            assert inputs.settings.playback_api.song_lengths == fake.lengths
+            assert not [
+                call for call in output.calls if call[0] in {"start", "stop", "set", "reset"}
+            ]
+            assert backend.ports and not any(port.messages for port in backend.ports)
+            assert set(fake.commands) <= {
+                "transportPreviousSong",
+                "transportNextSong",
+                "waveformSeek",
+                "transportReturnToStart",
+            }
+        finally:
+            await lights.stop()
+            await presenter.stop()

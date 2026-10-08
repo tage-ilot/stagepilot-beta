@@ -821,31 +821,9 @@ class PlanningCenterPlugin(Plugin):
         self,
         candidates: list[PlanningCenterPlanCandidate],
     ) -> PlanningCenterPlanCandidate | None:
-        title_preference = self._settings.plan_title_preference
-        time_preference = self._settings.preferred_service_time
-        if title_preference is None and time_preference is None:
-            return None
+        from stagepilot.plugins.planning_center.preferences import preferred_candidate
 
-        normalized_title = title_preference.casefold().strip() if title_preference else None
-        scores: list[tuple[int, PlanningCenterPlanCandidate]] = []
-        for candidate in candidates:
-            score = 0
-            if (
-                normalized_title is not None
-                and candidate.title.casefold().strip() == normalized_title
-            ):
-                score += 1
-            if time_preference is not None and any(
-                value.strftime("%H:%M") == time_preference for value in candidate.service_times
-            ):
-                score += 1
-            scores.append((score, candidate))
-
-        highest_score = max((score for score, _candidate in scores), default=0)
-        if highest_score == 0:
-            return None
-        matches = [candidate for score, candidate in scores if score == highest_score]
-        return matches[0] if len(matches) == 1 else None
+        return preferred_candidate(self._settings, candidates)
 
     @staticmethod
     def _candidate(candidate: PlanningCenterPlanCandidate) -> ServicePlanCandidate:

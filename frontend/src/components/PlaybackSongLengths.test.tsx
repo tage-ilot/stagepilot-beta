@@ -18,7 +18,7 @@ describe("Playback song lengths", () => {
     expect(rows()[0]).toHaveTextContent("1. First song Plan: 3:00Playback: 3:00");
     expect(rows()[1]).toHaveTextContent("2. Second song Plan: 4:00Playback: 4:00");
     expect(screen.queryByText(/differs by/)).not.toBeInTheDocument();
-    expect(screen.getByText("Playback lengths are read from the tracks and can be up to 4 seconds short.")).toBeVisible();
+    expect(screen.getByText("Playback lengths are read from where each song ends (the start of its last measure).")).toBeVisible();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -39,10 +39,10 @@ describe("Playback song lengths", () => {
   });
 
   it.each([
-    [180, 170, null], [180, 190, null], [180, 180, null],
+    [180, 170, "differs by 10 s"], [180, 190, "differs by 10 s"], [180, 180, null],
     [180, 158, "differs by 22 s"], [180, 202, "differs by 22 s"],
-    [180, 169.5, "differs by 11 s"],
-  ])("only notes raw differences greater than 10 seconds (%s/%s)", (plan, playback, note) => {
+    [180, 169.5, "differs by 10 s"],
+  ])("notes every unequal whole-second value (%s/%s)", (plan, playback, note) => {
     show({ plan_songs: [song("First", plan)], song_lengths: [playback] });
     if (note) expect(screen.getByText(note)).toBeVisible();
     else expect(screen.queryByText(/differs by/)).not.toBeInTheDocument();

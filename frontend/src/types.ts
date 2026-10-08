@@ -280,7 +280,12 @@ export interface PlaybackSettingsInput {
   fast_transport: boolean;
 }
 
+export interface LengthRow { item_id: string; title: string; old_length: number | null; new_length: number | null; status: "updated" | "restored" | "skipped" | "failed"; reason: string | null }
+export interface LengthPreview { token: string; category: string; plan_title: string; plan_date: string; items: LengthRow[]; message: string }
+
 export interface PlaybackApiSettings extends PlaybackSettingsInput {
+  discovery_duration_seconds?: number | null;
+  planning_center_update_service_type_id?: string | null;
   song_order: number[];
   song_lengths?: (number | null)[];
   lengths_measured_at?: string | null;
@@ -314,6 +319,12 @@ export interface PlaybackScanResult {
 }
 
 export interface PlaybackStatusResponse extends PlaybackConnection {
+  planning_center_connected?: boolean;
+  planning_center_undo_available?: boolean;
+  planning_center_update_service_type_id?: string | null;
+  planning_center_update_reason?: string | null;
+  discovery_duration_seconds?: number | null;
+  planning_center_lengths?: { status: string; message: string; items: LengthRow[]; reload: string };
   scan: PlaybackScanResult;
   selected: boolean;
   enabled: boolean;

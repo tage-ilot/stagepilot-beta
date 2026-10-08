@@ -122,7 +122,14 @@ class StateService:
                 ActionName.RELOAD_PLAN: self._reload_plan,
                 ActionName.RESET_POSITION: self._reset_position,
             }
-            outcome = await handlers[event.payload.action]()
+            if (
+                event.source == "planning_center_lengths"
+                and event.payload.action is ActionName.RELOAD_PLAN
+                and (await self._state_store.snapshot()).timer.status is TimerStatus.RUNNING
+            ):
+                outcome = ActionOutcome(False, "Reload the plan when the timer is idle.")
+            else:
+                outcome = await handlers[event.payload.action]()
             self._action_results[event.payload.request_id] = outcome
 
     async def _start_next(self) -> ActionOutcome:
