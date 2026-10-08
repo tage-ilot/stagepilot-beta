@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [1.1.104-beta.31] - 2026-10-08
+
+### Fixed
+
+- Playback play, pause and stop update promptly; selecting another song while
+  one plays now stops the timer. Saved song order checks setlist id and version.
+- Platform-conditional desktop bindings pass strict Linux Rust checks without
+  changing native credential or startup behavior.
+
+### Added
+
+- Discover Song Order silently reads each song's length (no audio played),
+  reports a Playback/plan song-count mismatch, and shows scan progress.
+- Update Planning Center previews changes and requires confirmation before
+  writing only song lengths. It checks conflicts and retains undo; nothing
+  runs automatically, and a running timer is never changed.
+
+### Release-scoped risk acceptance
+
+- Hunter waived offline updater-key backup/recovery attestation for this private
+  beta only and accepts the recovery risk. This does not prove backups exist
+  or change future release policy. Signing-secret presence, the configured
+  public key and new published updater signatures still require verification.
+- Real-rig scan/Update Planning Center preview and macOS Keychain/permission
+  persistence across this update remain UNVERIFIED; hardware acceptance is
+  not implied by automated tests or signed builds.
+
 ## [1.1.104-beta.30] - 2026-10-07
 
 ### Fixed
