@@ -1,0 +1,114 @@
+[
+  {
+    "width": 1280,
+    "scenario": "unavailable",
+    "overflow": false,
+    "filename": "desktop1280-unavailable.png",
+    "text": "Song order\n\nSong order isn't set up yet.\n\nStagePilot steps through your Playback songs once to learn the order. Playback must be stopped.\n\nSet up song order\nUpdate Planning Center\n▾\n\nScan songs first to read the lengths from Playback."
+  },
+  {
+    "width": 1280,
+    "scenario": "dropdown",
+    "overflow": false,
+    "filename": "desktop1280-dropdown.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n✓ Sunday Service\nYouth Night\nMidweek Service\n\nPreview the next upcoming plan before changing its song times.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "preview",
+    "overflow": false,
+    "filename": "desktop1280-preview.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdate Planning Center?\n\nSunday Service · Sunday Worship · 2026-10-11\n\nWorship 4:05 → 4:28\nTo Worship You I Live 5:15 → 4:21\nAlready The Same No change — Already the same.\nUpdate Planning Center\nCancel\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "success",
+    "overflow": false,
+    "filename": "desktop1280-success.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdated 2 songs in Planning Center: Worship 4:05 -> 4:28, To Worship You I Live 5:15 -> 4:21. Left 1 songs as they were (already the same). StagePilot reloaded the plan and verified the song times.\n\nRestore Planning Center times\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "denied",
+    "overflow": false,
+    "filename": "desktop1280-denied.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nPlanning Center did not allow this change. The account or token used by StagePilot can't edit this plan.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "restore",
+    "overflow": false,
+    "filename": "desktop1280-restore.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdated 2 songs in Planning Center: Worship 4:05 -> 4:28, To Worship You I Live 5:15 -> 4:21. Left 1 songs as they were (already the same). StagePilot reloaded the plan and verified the song times.\n\nRestore Planning Center times\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "progress-indeterminate",
+    "overflow": false,
+    "filename": "desktop1280-progress-indeterminate.png",
+    "text": "Song order\n\nReading song lengths… Please wait.\n\nUpdate Planning Center\n▾\n\nWait for the song scan to finish.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 1280,
+    "scenario": "progress-determinate",
+    "overflow": false,
+    "filename": "desktop1280-progress-determinate.png",
+    "text": "Song order\n\nReading song lengths… Please wait.\n\nUpdate Planning Center\n▾\n\nWait for the song scan to finish.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "unavailable",
+    "overflow": false,
+    "filename": "phone390-unavailable.png",
+    "text": "Song order\n\nSong order isn't set up yet.\n\nStagePilot steps through your Playback songs once to learn the order. Playback must be stopped.\n\nSet up song order\nUpdate Planning Center\n▾\n\nScan songs first to read the lengths from Playback."
+  },
+  {
+    "width": 390,
+    "scenario": "dropdown",
+    "overflow": false,
+    "filename": "phone390-dropdown.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n✓ Sunday Service\nYouth Night\nMidweek Service\n\nPreview the next upcoming plan before changing its song times.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "preview",
+    "overflow": false,
+    "filename": "phone390-preview.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdate Planning Center?\n\nSunday Service · Sunday Worship · 2026-10-11\n\nWorship 4:05 → 4:28\nTo Worship You I Live 5:15 → 4:21\nAlready The Same No change — Already the same.\nUpdate Planning Center\nCancel\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "success",
+    "overflow": false,
+    "filename": "phone390-success.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdated 2 songs in Planning Center: Worship 4:05 -> 4:28, To Worship You I Live 5:15 -> 4:21. Left 1 songs as they were (already the same). StagePilot reloaded the plan and verified the song times.\n\nRestore Planning Center times\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "denied",
+    "overflow": false,
+    "filename": "phone390-denied.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nPlanning Center did not allow this change. The account or token used by StagePilot can't edit this plan.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "restore",
+    "overflow": false,
+    "filename": "phone390-restore.png",
+    "text": "Song order\n\nSong order saved (3 songs)\n\nSet up again\nUpdate Planning Center\n▾\n\nPreview the next upcoming plan before changing its song times.\n\nUpdated 2 songs in Planning Center: Worship 4:05 -> 4:28, To Worship You I Live 5:15 -> 4:21. Left 1 songs as they were (already the same). StagePilot reloaded the plan and verified the song times.\n\nRestore Planning Center times\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "progress-indeterminate",
+    "overflow": false,
+    "filename": "phone390-progress-indeterminate.png",
+    "text": "Song order\n\nReading song lengths… Please wait.\n\nUpdate Planning Center\n▾\n\nWait for the song scan to finish.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  },
+  {
+    "width": 390,
+    "scenario": "progress-determinate",
+    "overflow": false,
+    "filename": "phone390-progress-determinate.png",
+    "text": "Song order\n\nReading song lengths… Please wait.\n\nUpdate Planning Center\n▾\n\nWait for the song scan to finish.\n\n1. Worship Plan: 4:05\n\nPlayback: 4:28\n\ndiffers by 23 s\n\n2. To Worship You I Live Plan: 5:15\n\nPlayback: 4:20\n\ndiffers by 55 s\n\n3. Already The Same Plan: 4:42\n\nPlayback: 4:42\n\nPlayback lengths are read from where each song ends (the start of its last measure)."
+  }
+]
