@@ -14,14 +14,14 @@ describe("Playback typed HTTP contract", () => {
     await getPlaybackStatus();
     await getPlaybackEvents();
     await findPlayback();
-    await updatePlaybackSettings({ enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true });
+    await updatePlaybackSettings({ enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true, fast_transport: true });
     await discoverPlaybackSongOrder();
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       "status", "events", "find", "settings", "discover-song-order",
     ].map((path) => `${apiOrigin}/api/v1/playback-api/${path}`));
     expect(fetch.mock.calls.every(([, options]) => options.credentials === "include")).toBe(true);
     expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: "POST" });
-    expect(fetch.mock.calls[3]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true }) });
+    expect(fetch.mock.calls[3]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true, fast_transport: true }) });
     expect(fetch.mock.calls[4]?.[1]).toMatchObject({ method: "POST", body: '{"confirm":true}' });
   });
 });

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { openExternalUrl } from "../desktop";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
 import type { PlaybackDraft } from "./PlaybackSaveFooter";
-import { playbackActivityText, playbackBannerTone, playbackOrderNotice, scanProgressText, scanSummary, validPlaybackHost } from "./playbackStatus";
+import { playbackActivityText, playbackBannerTone, playbackOrderNotice, playbackSongCountMismatch, scanProgressText, scanSummary, validPlaybackHost } from "./playbackStatus";
 
 const button = "min-h-11 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3.5 py-2.5 text-sm font-semibold text-sky-200 hover:bg-sky-400/20";
 const big = "min-h-12 w-full rounded-xl border border-sky-300/40 bg-sky-500 px-5 py-3 text-base font-bold text-white hover:bg-sky-400 sm:w-auto";
@@ -31,6 +31,7 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
   const hostOk = validPlaybackHost(trimmed);
   const orderSaved = Boolean(status?.song_order.length) && !status?.stale;
   const notice = status ? playbackOrderNotice(status) : null;
+  const mismatch = status && orderSaved ? playbackSongCountMismatch(status) : null;
   // A dialog never outlives the state that allowed it (e.g. Playback started playing).
   const canDiscover = apiConnected && !status?.playing && !running;
   useEffect(() => { if (!canDiscover) setConfirm(false); }, [canDiscover]);
@@ -111,11 +112,12 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
             : running ? <p role="status" className="text-sm text-sky-200">Checking your songs… step {status.progress}. Please wait.</p>
               : status.playing ? <p className="text-sm text-amber-200">Stop Playback to set up song order.</p>
                 : <>
-                  {orderSaved ? <p className="text-sm text-emerald-200">Song order saved ({status.song_order.length} songs)</p>
+                  {orderSaved ? <p className="text-sm text-emerald-200">Song order saved ({status.song_order.length} {status.song_order.length === 1 ? "song" : "songs"})</p>
                     : <>{notice && <p className="text-sm text-amber-200">{notice}</p>}
                       <p className="text-sm text-slate-300">StagePilot steps through your Playback songs once to learn the order. Playback must be stopped.</p></>}
                   <button className={orderSaved ? button : big} type="button" onClick={() => setConfirm(true)}>{orderSaved ? "Set up again" : "Set up song order"}</button>
                 </>}
+          {mismatch && <p className="text-sm text-slate-300">{mismatch}</p>}
           {status.discovery === "failed" && status.last_error && <p role="alert" className="text-sm text-rose-200">{status.last_error}</p>}
         </section>
       )}
@@ -139,6 +141,11 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
           <input type="checkbox" checked={draft?.autoScan ?? true} disabled={!status || !draft} onChange={(event) => draft?.setAutoScan(event.target.checked)} />
           Look for Playback on the network if it isn't on this computer
         </label>
+        <label className="flex min-h-11 items-center gap-3 text-sm text-slate-200">
+          <input type="checkbox" checked={draft?.fastTransport ?? status?.settings.fast_transport ?? true} disabled={!status || !draft} aria-describedby="fast-transport-help" onChange={(event) => draft?.setFastTransport(event.target.checked)} />
+          Respond to Play immediately
+        </label>
+        <p id="fast-transport-help" className="text-sm text-slate-400">Reacts to the command instead of waiting up to one second for Playback to report it.</p>
       </div>
 
       <div>

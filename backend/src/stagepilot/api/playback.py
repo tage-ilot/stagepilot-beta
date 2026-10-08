@@ -31,6 +31,7 @@ class PlaybackSettingsRequest(BaseModel):
     host: str | None = None
     port: int = Field(default=8080, ge=1, le=65535)
     auto_scan: bool = True
+    fast_transport: bool = True
 
 
 class ScanCandidateModel(BaseModel):
@@ -77,6 +78,8 @@ class PlaybackStatusResponse(BaseModel):
     discovery: Literal["idle", "running", "failed", "done"]
     progress: int
     song_order: list[int]
+    song_count: int
+    plan_song_count: int
     captured_version: int | None
     captured_at: datetime | None
     stale: bool
@@ -120,7 +123,8 @@ def scan_extras(controller: PlaybackInputPlugin) -> dict[str, Any]:
     }
 
 
-def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
+async def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
+    state = await controller.state_store.snapshot()
     status = controller.status
     config = controller.settings.playback_api
     heartbeat = status.heartbeat
@@ -152,11 +156,17 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
         discovery=controller.discovery,
         progress=controller.progress,
         song_order=list(controller.mapper.song_order),
+        song_count=len(controller.mapper.song_order),
+        plan_song_count=len(state.plan.songs) if state.plan else 0,
         captured_version=controller.mapper.captured_version,
         captured_at=config.captured_at,
         stale=controller.mapper.stale,
         settings=PlaybackSettingsRequest(
-            enabled=config.enabled, host=config.host, port=config.port, auto_scan=config.auto_scan
+            enabled=config.enabled,
+            host=config.host,
+            port=config.port,
+            auto_scan=config.auto_scan,
+            fast_transport=config.fast_transport,
         ),
     )
 
@@ -164,7 +174,7 @@ def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResponse:
 @router.get("/status", response_model=PlaybackStatusResponse)
 async def status(request: Request) -> PlaybackStatusResponse:
     await _controller(request)._publish_connection()
-    return status_response(_controller(request))
+    return await status_response(_controller(request))
 
 
 @router.get("/connection", response_model=PlaybackConnection)
@@ -198,14 +208,14 @@ async def find(request: Request, payload: object = Body(default=None)) -> Playba
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return status_response(controller)
+    return await status_response(controller)
 
 
 @router.post("/find/cancel", response_model=PlaybackStatusResponse)
 async def cancel_find(request: Request) -> PlaybackStatusResponse:
     controller = _controller(request)
     await controller.cancel_scan()
-    return status_response(controller)
+    return await status_response(controller)
 
 
 @router.put("/settings", response_model=PlaybackStatusResponse)
@@ -236,7 +246,7 @@ async def settings(payload: PlaybackSettingsRequest, request: Request) -> Playba
         raise HTTPException(503, str(exc)) from exc
     except DiscoveryConflict as exc:
         raise HTTPException(409, str(exc)) from exc
-    return status_response(controller)
+    return await status_response(controller)
 
 
 @router.post("/discover-song-order", response_model=PlaybackStatusResponse)
@@ -250,4 +260,4 @@ async def discover(
         await controller.discover_song_order()
     except DiscoveryConflict as exc:
         raise HTTPException(409, str(exc)) from exc
-    return status_response(controller)
+    return await status_response(controller)

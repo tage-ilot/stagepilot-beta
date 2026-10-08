@@ -123,8 +123,10 @@ class PlaybackApiSettings(BaseModel):
     host: str | None = Field(default=None, max_length=255)
     port: int = Field(default=8080, ge=1, le=65535)
     auto_scan: bool = True
+    fast_transport: bool = True
     song_order: list[StrictInt] = Field(default_factory=list, max_length=200)
     captured_version: StrictInt | None = None
+    setlist_id: StrictInt | str | None = None
     captured_at: datetime | None = None
 
     @field_validator("song_order")

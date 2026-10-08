@@ -180,7 +180,9 @@ class PlaybackInputPlugin(Plugin):
         self._wire_midi()
         saved = settings.playback_api
         if saved.song_order and saved.captured_version is not None:
-            self.mapper.install_order(tuple(saved.song_order), saved.captured_version)
+            self.mapper.install_order(
+                tuple(saved.song_order), saved.captured_version, saved.setlist_id
+            )
         self.client: PlaybackClient | None = None
         self._queue: asyncio.Queue[tuple[int, Observation | ConnectionPayload]] = asyncio.Queue(64)
         self._history: deque[MonitorEntry] = deque(maxlen=100)
@@ -222,7 +224,11 @@ class PlaybackInputPlugin(Plugin):
     def _options(self) -> ConnectionOptions:
         config = self.settings.playback_api
         return ConnectionOptions(
-            config.enabled and self.selected, config.host, config.port, config.auto_scan
+            config.enabled and self.selected,
+            config.host,
+            config.port,
+            config.auto_scan,
+            config.fast_transport,
         )
 
     def _wire_midi(self) -> None:
@@ -385,7 +391,8 @@ class PlaybackInputPlugin(Plugin):
                 settings.playback_api.song_order,
                 settings.playback_api.captured_version,
                 settings.playback_api.captured_at,
-            ) != (saved.song_order, saved.captured_version, saved.captured_at):
+                settings.playback_api.setlist_id,
+            ) != (saved.song_order, saved.captured_version, saved.captured_at, saved.setlist_id):
                 raise ValueError("Song order can only be changed by Discover Song Order.")
             config = settings.playback_api
             ConnectionOptions(config.enabled, config.host, config.port, config.auto_scan)
@@ -445,7 +452,9 @@ class PlaybackInputPlugin(Plugin):
         if self._ownership_revision != self.arbiter.revision:
             self.mapper.discard_pending()
             self._ownership_revision = self.arbiter.revision
-        observations = self.mapper.observe(heartbeat if fresh else None, events)
+        observations = self.mapper.observe(
+            heartbeat if fresh else None, events, status.setlist_id if status.connected else None
+        )
         self._history.extend(MonitorEntry(item.event, item.discovery) for item in observations)
         if status.connected != self._connection:
             self._connection = status.connected
@@ -741,6 +750,7 @@ class PlaybackInputPlugin(Plugin):
                 update={
                     "song_order": order,
                     "captured_version": version,
+                    "setlist_id": self.status.setlist_id,
                     "captured_at": datetime.now(UTC),
                 }
             )
@@ -748,7 +758,7 @@ class PlaybackInputPlugin(Plugin):
                 self._service.snapshot().model_copy(update={"playback_api": saved}, deep=True)
             )
             self.settings.playback_api = saved
-            self.mapper.install_order(tuple(order), version)
+            self.mapper.install_order(tuple(order), version, saved.setlist_id)
             self.mapper.observe(self._heartbeat, ())
             self.discovery = "done"
         except asyncio.CancelledError:

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -49,6 +50,7 @@ class FakePlayback:
     version: int = 8
     commands: list[str] = field(default_factory=list)
     silent: bool = False
+    heartbeat_timeout: float = 0.25
     disconnect_on_command: bool = False
     version_on_command: bool = False
     wrap: bool = False
@@ -133,6 +135,11 @@ class FakePlayback:
         task = asyncio.create_task(self.serve(reader, writer))
         self.tasks.add(task)
 
+    async def broadcast(self, raw: str) -> None:
+        for writer in tuple(self.writers):
+            writer.write(frame(raw.encode()))
+            await writer.drain()
+
     def client(self, options: ConnectionOptions, observer: Observer) -> PlaybackClient:
         return PlaybackClient(
             options,
@@ -141,7 +148,7 @@ class FakePlayback:
                 "127.0.0.1", self.port, "loopback", Heartbeat(900, 0, False, False, 8)
             ),
             reconnect_delays=(0.02,),
-            heartbeat_timeout=0.25,
+            heartbeat_timeout=self.heartbeat_timeout,
         )
 
 
@@ -165,12 +172,15 @@ async def application(
     saved: bool = False,
     midi: FakeMidiBackend | None = None,
     settings_service: SettingsService | None = None,
+    fast_transport: bool = True,
 ) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient]]:
     server = await asyncio.start_server(fake.accept, "127.0.0.1", 0)
     fake.port = server.sockets[0].getsockname()[1]
     settings = Settings(
         playback_api=PlaybackApiSettings(
-            song_order=fake.songs if saved else [], captured_version=8 if saved else None
+            song_order=fake.songs if saved else [],
+            captured_version=8 if saved else None,
+            fast_transport=fast_transport,
         ),
         midi=MidiSettings(enabled=True, input_name="Playback MIDI"),
     )
@@ -665,3 +675,126 @@ async def test_scan_not_found_wrong_host_multiple_cancel_and_validation() -> Non
         assert data["scan"]["state"] == "idle"
         for bad in ({"host": "http://bad/"}, {"host": "a b"}, {"nope": 1}):
             assert (await client.post("/api/v1/playback-api/find", json=bad)).status_code == 422
+
+
+@pytest.mark.parametrize("fast", [True, False])
+async def test_fake_transport_replay_latency_and_single_dispatch(fast: bool) -> None:
+    from stagepilot.core.actions import ActionOutcome
+
+    fake = FakePlayback(index=0, heartbeat_timeout=2)
+    async with application(fake, saved=True, fast_transport=fast) as (app, _):
+        inputs = controller(app)
+        dispatcher = AsyncMock()
+        dispatcher.dispatch_song_position.return_value = ActionOutcome(True, "accepted")
+        dispatcher.dispatch.return_value = ActionOutcome(True, "accepted")
+        inputs._dispatcher.dispatcher = dispatcher  # Keep the real mapper and arbiter.
+        fake.silent = True
+        await asyncio.sleep(0.06)  # Let the prior automatic heartbeat finish.
+        latencies = []
+        for raw, kind, playing, position in [
+            ('{"transportPlay":{"playing":true}}', "song.started", True, 0.5),
+            ('{"transportPlay":{"playing":false}}', "song.paused", False, 0.5),
+            ('{"transportReturnToStart":{}}', "song.stopped", False, 0),
+        ]:
+            before = len(inputs.events)
+
+            def new_event(count: int = before) -> bool:
+                return len(inputs.events) > count
+
+            sent = time.monotonic()
+            await fake.broadcast(raw)
+            if fast:
+                await wait_for(new_event)
+                assert inputs.events[-1].event.type == kind
+                assert inputs.events[-1].event.provisional
+                assert inputs.events[-1].event.timestamp - sent < 0.15
+            await asyncio.sleep(0.6)  # Deliberately late authoritative heartbeat.
+            await fake.broadcast(heartbeat(900, position, playing, 8))
+            await wait_for(new_event)
+            event = inputs.events[-1].event
+            assert event.type == kind and event.provisional is fast
+            latency = event.timestamp - sent
+            latencies.append(round(latency, 3))
+            if not fast:
+                assert 0.55 <= latency < 1.5
+            await wait_for(lambda: inputs._queue.empty())
+        await wait_for(lambda: dispatcher.dispatch.await_count == 2)
+        dispatcher.dispatch_song_position.assert_awaited_once_with(1, source="playback_api")
+        assert [call.args[0] for call in dispatcher.dispatch.await_args_list] == [
+            ActionName.STOP_TIMER,
+            ActionName.STOP_TIMER,
+        ]
+        assert len([entry for entry in inputs.events if entry.event.type == "song.started"]) == 1
+        print(f"Replay fast={fast}: play/pause/return latency seconds={latencies}")
+        assert fake.commands == []  # No controls sent to Playback by StagePilot.
+
+
+async def test_load_identity_saved_at_discovery_and_same_version_change_stales() -> None:
+    fake = FakePlayback(index=0)
+    async with application(fake) as (app, client):
+        inputs = controller(app)
+        await fake.broadcast(
+            json.dumps(
+                {
+                    "contentLoadSetlist": {
+                        "setlistData": {"setlistID": 7, "setlistName": "PRIVATE SERVICE PLAN"}
+                    }
+                }
+            )
+        )
+        await wait_for(lambda: inputs.status.setlist_id == 7)
+        data = (
+            await client.post("/api/v1/playback-api/discover-song-order", json={"confirm": True})
+        ).json()
+        assert data["discovery"] == "done" and not data["stale"]
+        saved = app.state.runtime.settings_service.snapshot().playback_api
+        assert saved.setlist_id == inputs.mapper.setlist_id == 7
+        await fake.broadcast(
+            json.dumps(
+                {
+                    "contentLoadSetlist": {
+                        "setlistData": {"setlistID": 8, "setlistName": "ANOTHER PRIVATE PLAN"}
+                    }
+                }
+            )
+        )
+        await wait_for(lambda: inputs.mapper.stale)
+        data = (await client.get("/api/v1/playback-api/status")).json()
+        assert data["captured_version"] == data["setlist_cloud_version"] == 8
+        assert data["stale"]
+        events = (await client.get("/api/v1/playback-api/events")).text
+        assert "PRIVATE" not in events and "PRIVATE" not in saved.model_dump_json()
+        saved_data = (await client.get("/api/v1/settings")).json()["settings"]
+        saved_data["playback_api"]["setlist_id"] = 8
+        assert (await client.put("/api/v1/settings", json=saved_data)).status_code == 400
+
+
+async def test_song_counts_follow_plan_reload_without_rediscovery() -> None:
+    fake = FakePlayback(index=0)
+    async with application(fake) as (app, client):
+        inputs = controller(app)
+        data = (
+            await client.post("/api/v1/playback-api/discover-song-order", json={"confirm": True})
+        ).json()
+        assert data["song_count"] == len(fake.songs) == 3
+        state = await inputs.state_store.snapshot()
+        assert state.plan is not None
+        assert data["plan_song_count"] == len(state.plan.songs)
+        plan = state.plan.model_copy(deep=True)
+        plan.songs = plan.songs[:1]
+        await inputs.state_store.mutate(lambda current: setattr(current, "plan", plan))
+        changed = (await client.get("/api/v1/playback-api/status")).json()
+        assert changed["song_count"] == 3 and changed["plan_song_count"] == 1
+        assert changed["song_order"] == data["song_order"] and not changed["stale"]
+
+
+async def test_fast_transport_setting_reconfigures_client() -> None:
+    fake = FakePlayback()
+    async with application(fake) as (app, client):
+        data = (
+            await client.put("/api/v1/playback-api/settings", json={"fast_transport": False})
+        ).json()
+        assert data["settings"]["fast_transport"] is False
+        inputs = controller(app)
+        assert inputs.client is not None and inputs.client.options.fast_transport is False
+        assert not app.state.runtime.settings_service.snapshot().playback_api.fast_transport

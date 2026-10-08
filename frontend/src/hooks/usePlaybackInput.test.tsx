@@ -63,7 +63,7 @@ describe("usePlaybackInput", () => {
     const onSettings = vi.fn();
     const { result } = renderHook(() => usePlaybackInput(true, onSettings));
     await tick();
-    const input = { enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true };
+    const input = { enabled: true, host: "192.0.2.10", port: 8080, auto_scan: true, fast_transport: true };
     act(() => { void result.current.save(input); });
     await tick();
     expect(api.updatePlaybackSettings).toHaveBeenCalledWith(input);
@@ -110,10 +110,10 @@ describe("usePlaybackInput", () => {
     const { result } = renderHook(() => usePlaybackInput(true, vi.fn()));
     await tick();
     let ok: boolean | undefined;
-    await act(async () => { ok = await result.current.save({ enabled: false, host: null, port: 8080, auto_scan: true }); });
+    await act(async () => { ok = await result.current.save({ enabled: false, host: null, port: 8080, auto_scan: true, fast_transport: true }); });
     expect(ok).toBe(true);
     vi.mocked(api.updatePlaybackSettings).mockRejectedValue(new Error("Could not write settings."));
-    await act(async () => { ok = await result.current.save({ enabled: true, host: null, port: 8080, auto_scan: true }); });
+    await act(async () => { ok = await result.current.save({ enabled: true, host: null, port: 8080, auto_scan: true, fast_transport: true }); });
     expect(ok).toBe(false);
     expect(result.current.error).toBe("Could not write settings.");
   });

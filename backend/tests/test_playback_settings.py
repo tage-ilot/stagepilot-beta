@@ -179,3 +179,32 @@ def test_old_format_file_untouched_default_moves_and_explicit_midi_stays(tmp_pat
         assert json.loads(path.read_text())["schema_version"] == 2
         reloaded = SettingsFileStore(path).load()
         assert reloaded is not None and reloaded == loaded
+
+
+def test_old_playback_settings_load_new_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "playback_api": {"enabled": True, "song_order": [101, 202], "captured_version": 11},
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = SettingsFileStore(path).load()
+    assert loaded is not None
+    assert loaded.playback_api.fast_transport is True
+    assert loaded.playback_api.setlist_id is None
+    assert loaded.playback_api.song_order == [101, 202]
+
+
+def test_fast_transport_and_identity_persist(tmp_path: Path) -> None:
+    store = SettingsFileStore(tmp_path / "settings.json")
+    settings = PersistentSettings(
+        playback_api=PlaybackApiSettings(
+            fast_transport=False, setlist_id=93000001, song_order=[101], captured_version=11
+        )
+    )
+    store.save(settings)
+    assert store.load() == settings

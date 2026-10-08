@@ -328,6 +328,7 @@ async def update_settings(
             settings.playback_api.song_order != saved_order.song_order
             or settings.playback_api.captured_version != saved_order.captured_version
             or settings.playback_api.captured_at != saved_order.captured_at
+            or settings.playback_api.setlist_id != saved_order.setlist_id
         ):
             raise HTTPException(400, "Song order can only be changed by Discover Song Order.")
     try:

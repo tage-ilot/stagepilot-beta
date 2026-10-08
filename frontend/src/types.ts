@@ -277,11 +277,13 @@ export interface PlaybackSettingsInput {
   host: string | null;
   port: number;
   auto_scan: boolean;
+  fast_transport: boolean;
 }
 
 export interface PlaybackApiSettings extends PlaybackSettingsInput {
   song_order: number[];
   captured_version: number | null;
+  setlist_id?: number | string | null;
   captured_at: string | null;
 }
 
@@ -321,6 +323,8 @@ export interface PlaybackStatusResponse extends PlaybackConnection {
   setlist_cloud_version: number | null;
   discovery: "idle" | "running" | "failed" | "done";
   progress: number;
+  song_count: number;
+  plan_song_count: number;
   song_order: number[];
   captured_version: number | null;
   captured_at: string | null;
@@ -336,6 +340,7 @@ export interface PlaybackMonitorEntry {
     position: number | null;
     previous_song_id: number | null;
     continues_playing: boolean;
+    provisional?: boolean;
     playing: boolean | null;
     pad: boolean | null;
     setlist_version: number | null;

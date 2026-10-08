@@ -21,6 +21,19 @@ export const playbackOrderNotice = (status: PlaybackStatusResponse) =>
   status.stale && status.song_order.length > 0 ? "Your Playback setlist changed. Set up song order again."
     : status.song_order.length === 0 ? "Song order isn't set up yet." : null;
 
+export function playbackSongCountMismatch(status: PlaybackStatusResponse): string | null {
+  const playback = status.song_count;
+  const plan = status.plan_song_count;
+  if (!Number.isInteger(playback) || !Number.isInteger(plan) || playback < 0 || plan < 0 || playback === plan) return null;
+  const extra = Math.abs(playback - plan);
+  const first = Math.min(playback, plan) + 1;
+  const range = extra === 1 ? `${first}` : `${first}-${Math.max(playback, plan)}`;
+  const counts = `Playback has ${playback} song${playback === 1 ? "" : "s"}, this plan has ${plan}.`;
+  return playback > plan
+    ? `${counts} Playback song${extra === 1 ? "" : "s"} ${range} ${extra === 1 ? "is" : "are"} ignored.`
+    : `${counts} Plan song${extra === 1 ? "" : "s"} ${range} ${extra === 1 ? "has" : "have"} no Playback song.`;
+}
+
 export type BannerTone = "connected" | "searching" | "backup" | "idle";
 // The sentence always comes from the backend `reason`; only the colour is chosen here.
 export const playbackBannerTone = (status: PlaybackConnection & { scan?: { state: string } }): BannerTone =>
@@ -38,6 +51,7 @@ const EVENT_TEXT: Record<string, string> = {
   "song.ended": "ended", "song.selected": "selected", "song.changed": "changed",
 };
 export function playbackActivityText(type: string, position: number): string {
+  if (type === "transport.reverted") return "Playback did not confirm the command; transport reverted.";
   const verb = EVENT_TEXT[type] ?? type;
   const generic = verb === "Paused" || verb === "Stopped";
   if (generic) return verb;
