@@ -282,6 +282,8 @@ export interface PlaybackSettingsInput {
 
 export interface PlaybackApiSettings extends PlaybackSettingsInput {
   song_order: number[];
+  song_lengths?: (number | null)[];
+  lengths_measured_at?: string | null;
   captured_version: number | null;
   setlist_id?: number | string | null;
   captured_at: string | null;
@@ -323,6 +325,11 @@ export interface PlaybackStatusResponse extends PlaybackConnection {
   setlist_cloud_version: number | null;
   discovery: "idle" | "running" | "failed" | "done";
   progress: number;
+  discovery_song?: number;
+  discovery_total?: number;
+  song_lengths?: (number | null)[];
+  lengths_measured_at?: string | null;
+  plan_songs?: { title: string; duration_seconds: number | null }[];
   song_count: number;
   plan_song_count: number;
   song_order: number[];

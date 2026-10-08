@@ -124,6 +124,8 @@ class PlaybackClient:
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
         self._lifecycle_lock = asyncio.Lock()
+        self._heartbeat_serial = 0
+        self._changed = asyncio.Event()
 
     @property
     def status(self) -> PlaybackStatus:
@@ -162,7 +164,10 @@ class PlaybackClient:
         return await asyncio.to_thread(self._finder, self.options)
 
     def _publish(self, status: PlaybackStatus, events: tuple[PlaybackEvent, ...] = ()) -> None:
+        if status.heartbeat is not None and status.heartbeat is not self._status.heartbeat:
+            self._heartbeat_serial += 1
         self._status = status
+        self._changed.set()
         self._history.extend(events)
         if self._observer:
             # Input observers must not kill reconnect; integration owns logging.
@@ -250,6 +255,13 @@ class PlaybackClient:
                 await asyncio.wait_for(self._stopping.wait(), delay)
 
     async def _discovery_step(self, direction: Literal["previous", "next"]) -> None:
+        await self._discovery_command(direction)
+
+    async def _discovery_command(
+        self,
+        direction: Literal["previous", "next", "seek_end", "return_to_start"],
+        guard: Callable[[], bool] = lambda: True,
+    ) -> None:
         """Private integration hook; stopped-state check repeated before every send.
 
         Confirmation, exclusive operation, suppression and restoration are owned
@@ -272,7 +284,73 @@ class PlaybackClient:
                 and status.connected
                 and status.heartbeat is not None
                 and not status.heartbeat.playing
+                and guard()
             )
 
         worker = asyncio.create_task(asyncio.to_thread(socket._discovery_step, direction, allowed))
         await _join_worker(worker, cancelled.set)
+
+    async def measure_song_length(
+        self, *, settle: float = 3.0, on_command: Callable[[], None] = lambda: None
+    ) -> float | None:
+        """Silent seek-clamp lower bound. Integration owns discovery/event suppression.
+
+        Only the selected stopped song is touched; fresh heartbeats confirm each
+        return and two steady end positions. Never play, fade, or select a song.
+        A failed measurement returns None, independently of order discovery.
+        """
+        initial = self.status
+        song = initial.heartbeat
+        if song is None or song.playing or not initial.connected:
+            return None
+        socket = self._socket
+
+        def current() -> Heartbeat:
+            status = self.status
+            hb = status.heartbeat
+            if (
+                not status.connected
+                or self._socket is not socket
+                or hb is None
+                or hb.playing
+                or hb.song_id != song.song_id
+                or hb.setlist_version != song.setlist_version
+                or status.setlist_id != initial.setlist_id
+            ):
+                raise ValueError("Playback changed during length measurement")
+            return hb
+
+        async def wait(serial: int, predicate: Callable[[Heartbeat], bool]) -> Heartbeat:
+            async with asyncio.timeout(settle):
+                while True:
+                    self._changed.clear()
+                    hb = current()
+                    if self._heartbeat_serial > serial and predicate(hb):
+                        return hb
+                    await self._changed.wait()
+
+        async def send(command: Literal["seek_end", "return_to_start"]) -> int:
+            current()
+            serial = self._heartbeat_serial
+            await self._discovery_command(command, lambda: current().song_id == song.song_id)
+            on_command()
+            return serial
+
+        result: float | None = None
+        try:
+            await wait(await send("return_to_start"), lambda hb: hb.position < 0.01)
+            first = await wait(await send("seek_end"), lambda hb: hb.position > 0.5)
+            serial = self._heartbeat_serial
+            second = await wait(serial, lambda hb: hb.position > 0.5)
+            if abs(first.position - second.position) < 0.01:
+                result = second.position
+        except (OSError, ValueError, TimeoutError):
+            pass
+        finally:
+            # Cancellation propagates, but the reset remains inside discovery.
+            # Guarding current() avoids touching a changed/playing selection.
+            try:
+                await wait(await send("return_to_start"), lambda hb: hb.position < 0.01)
+            except (OSError, ValueError, TimeoutError):
+                result = None
+        return result

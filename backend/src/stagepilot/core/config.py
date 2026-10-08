@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal, Self
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -128,6 +129,22 @@ class PlaybackApiSettings(BaseModel):
     captured_version: StrictInt | None = None
     setlist_id: StrictInt | str | None = None
     captured_at: datetime | None = None
+    song_lengths: list[float | None] = Field(default_factory=list, max_length=200)
+    lengths_measured_at: datetime | None = None
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        if update and "song_order" in update and update["song_order"] != self.song_order:
+            # Discovery supplies a new aligned measurement explicitly.
+            update = {"song_lengths": [], "lengths_measured_at": None, **update}
+        return super().model_copy(update=update, deep=deep)
+
+    @model_validator(mode="after")
+    def lengths_match_order(self) -> PlaybackApiSettings:
+        if self.song_lengths and len(self.song_lengths) != len(self.song_order):
+            raise ValueError("Song lengths must have the same length as song order.")
+        if any(length is not None and not 0 < length <= 86400 for length in self.song_lengths):
+            raise ValueError("Song lengths must be finite positive seconds or null.")
+        return self
 
     @field_validator("song_order")
     @classmethod

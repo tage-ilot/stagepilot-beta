@@ -47,6 +47,7 @@ class FakePlayback:
     index: int = 1
     playing: bool = False
     position: float = 0
+    lengths: list[float | None] = field(default_factory=lambda: [279.53, 265.85, 260.17])
     version: int = 8
     commands: list[str] = field(default_factory=list)
     silent: bool = False
@@ -107,13 +108,29 @@ class FakePlayback:
                 payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
                 if header[0] & 15 != 1:
                     continue
-                command = next(iter(json.loads(payload)))
-                assert command in {"transportPreviousSong", "transportNextSong"}
+                message = json.loads(payload)
+                command = next(iter(message))
+                assert command in {
+                    "transportPreviousSong",
+                    "transportNextSong",
+                    "waveformSeek",
+                    "transportReturnToStart",
+                }
                 self.commands.append(command)
                 if self.disconnect_on_command:
                     return
                 if self.version_on_command:
                     self.version += 1
+                if command == "waveformSeek":
+                    assert message[command] == {"sequenceTime": 86400.0}
+                    if self.lengths[self.index] is not None:
+                        self.position = self.lengths[self.index] or 0
+                    await self.broadcast(payload.decode())
+                    continue
+                if command == "transportReturnToStart":
+                    self.position = 0
+                    await self.broadcast(payload.decode())
+                    continue
                 delta = -1 if command == "transportPreviousSong" else 1
                 self.index = (
                     (self.index + delta) % len(self.songs)
@@ -245,7 +262,16 @@ async def test_loopback_discovery_ends_restore_persist_and_suppress(initial: int
         assert any(item["discovery"] for item in events)
         persisted = app.state.runtime.settings_service.snapshot().playback_api
         assert persisted.song_order == fake.songs and persisted.captured_version == 8
-        assert set(fake.commands) == {"transportPreviousSong", "transportNextSong"}
+        assert set(fake.commands) == {
+            "transportPreviousSong",
+            "transportNextSong",
+            "waveformSeek",
+            "transportReturnToStart",
+        }
+        assert data["song_lengths"] == fake.lengths
+        assert data["lengths_measured_at"]
+        assert persisted.song_lengths == fake.lengths
+        assert fake.position == 0
 
 
 @pytest.mark.parametrize(
