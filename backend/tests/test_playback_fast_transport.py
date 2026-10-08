@@ -105,6 +105,39 @@ def test_return_at_stopped_start_is_noop() -> None:
     assert prepared().feed(command("transportReturnToStart"), 0.1) == ()
 
 
+async def test_rejected_return_from_paused_mid_song_reverts_and_restores_armed() -> None:
+    norm = prepared(position=10)
+    dispatcher = AsyncMock()
+    mapper = PlaybackMapper(dispatcher, StateStore())
+    mapper.install_order((101,), 1)
+    batches = [(norm.heartbeat, norm.feed(command("transportReturnToStart"), 0.1))]
+    assert norm.feed(heartbeat(position=10), 1) == ()
+    events = norm.feed(heartbeat(position=10), 3.2)
+    assert types(events) == ["transport.reverted"]
+    batches.append((norm.heartbeat, events))
+    for hb, batch in batches:
+        for observation in mapper.observe(hb, batch):
+            await mapper.dispatch(observation)
+    dispatcher.dispatch.assert_awaited_once_with(ActionName.STOP_TIMER, source="playback_api")
+    assert types(norm.feed(command("transportPlay", playing=True), 3.3)) == ["song.resumed"]
+
+
+@pytest.mark.parametrize("playing", [False, True])
+async def test_delayed_successful_return_stops_timer_once(playing: bool) -> None:
+    norm = prepared(playing=playing, position=10)
+    dispatcher = AsyncMock()
+    mapper = PlaybackMapper(dispatcher, StateStore())
+    mapper.install_order((101,), 1)
+    events = norm.feed(command("transportReturnToStart"), 0.1)
+    for observation in mapper.observe(norm.heartbeat, events):
+        await mapper.dispatch(observation)
+    assert norm.feed(heartbeat(position=11 if playing else 10, playing=playing), 1) == ()
+    assert norm.feed(heartbeat(), 3.2) == ()
+    assert norm.feed(heartbeat(), 4) == ()
+    dispatcher.dispatch.assert_awaited_once_with(ActionName.STOP_TIMER, source="playback_api")
+    assert types(norm.feed(command("transportPlay", playing=True), 4.1)) == ["song.started"]
+
+
 def test_return_then_play_before_heartbeat_uses_reset_position() -> None:
     norm = prepared(playing=True, position=10)
     norm.feed(command("transportReturnToStart"), 0.1)

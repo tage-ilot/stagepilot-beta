@@ -323,7 +323,11 @@ class Normalizer:
         self, current: Heartbeat, timestamp: float, events: tuple[PlaybackEvent, ...]
     ) -> tuple[PlaybackEvent, ...]:
         # Start/resume classifications may differ at heartbeat time: both promise playing.
+        returning = self._pending[-1].reason == "return-to-start"
+
         def key(event: PlaybackEvent) -> tuple[str, int | None]:
+            if returning and event.type in ("song.stopped", "song.paused"):
+                return "stop", event.song_id
             return (
                 "play" if event.type in ("song.started", "song.resumed") else event.type,
                 event.song_id,
@@ -337,7 +341,11 @@ class Normalizer:
                 pending.remove(match)
             else:
                 kept.append(event)
-        if current.playing == self._expected and current.song_id == self._expected_song:
+        if (
+            current.playing == self._expected
+            and current.song_id == self._expected_song
+            and (not returning or current.position == 0)
+        ):
             self._pending.clear()
             self._expected = None
         else:
