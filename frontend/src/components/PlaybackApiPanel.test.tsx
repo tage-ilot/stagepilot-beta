@@ -30,9 +30,9 @@ const panel = (playback = controller(), extra: { onDirtyChange?: (dirty: boolean
 
 describe("Scan Network is always first and never dead", () => {
   it.each([
-    ["fresh install, nothing configured", none({ selected: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true } })],
-    ["MIDI-selected install", none({ selected: false, enabled: false, active_source: "midi", connected: true, reason: "Connected through MIDI (backup). Find Playback for full control.", settings: { enabled: false, host: null, port: 8080, auto_scan: true } })],
-    ["Playback switched off", none({ enabled: false, settings: { enabled: false, host: null, port: 8080, auto_scan: true } })],
+    ["fresh install, nothing configured", none({ selected: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true, fast_transport: true } })],
+    ["MIDI-selected install", none({ selected: false, enabled: false, active_source: "midi", connected: true, reason: "Connected through MIDI (backup). Find Playback for full control.", settings: { enabled: false, host: null, port: 8080, auto_scan: true, fast_transport: true } })],
+    ["Playback switched off", none({ enabled: false, settings: { enabled: false, host: null, port: 8080, auto_scan: true, fast_transport: true } })],
   ])("%s", (_name, status) => {
     const playback = controller({ status });
     panel(playback);
@@ -126,7 +126,7 @@ describe("Song order card", () => {
   });
 
   it("works with nothing typed or saved: no address and no save needed", () => {
-    render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ song_order: [], stale: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true } }) })} />);
+    render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ song_order: [], stale: true, settings: { enabled: true, host: null, port: 8080, auto_scan: true, fast_transport: true } }) })} />);
     expect(screen.getByRole("button", { name: "Set up song order" })).toBeEnabled();
   });
 
@@ -147,6 +147,35 @@ describe("Song order card", () => {
     expect(screen.getByText("Song order saved (2 songs)")).toBeVisible();
   });
 
+  it.each([
+    [5, 4, "Playback has 5 songs, this plan has 4. Playback song 5 is ignored."],
+    [4, 6, "Playback has 4 songs, this plan has 6. Plan songs 5-6 have no Playback song."],
+    [6, 4, "Playback has 6 songs, this plan has 4. Playback songs 5-6 are ignored."],
+    [4, 5, "Playback has 4 songs, this plan has 5. Plan song 5 has no Playback song."],
+    [1, 0, "Playback has 1 song, this plan has 0. Playback song 1 is ignored."],
+    [0, 1, "Playback has 0 songs, this plan has 1. Plan song 1 has no Playback song."],
+  ])("shows saved count mismatch %i/%i, including while playing", (song_count, plan_song_count, text) => {
+    const status = playbackStatus({ song_count, plan_song_count });
+    const view = render(<PlaybackApiPanel playback={controller({ status })} />);
+    expect(within(screen.getByRole("region", { name: "Song order" })).getByText(text)).toBeVisible();
+    view.rerender(<PlaybackApiPanel playback={controller({ status: { ...status, playing: true } })} />);
+    expect(screen.getByText(text)).toBeVisible();
+  });
+
+  it.each([
+    { song_count: 2, plan_song_count: 2 },
+    { song_count: 5, plan_song_count: 4, stale: true },
+    { song_count: 5, plan_song_count: 4, song_order: [] },
+  ])("hides mismatch for matching counts or unsaved order %o", (extra) => {
+    render(<PlaybackApiPanel playback={controller({ status: playbackStatus(extra) })} />);
+    expect(screen.queryByText(/Playback has \d+ songs?/)).not.toBeInTheDocument();
+  });
+
+  it("uses singular for a saved one-song order", () => {
+    render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ song_order: [101], song_count: 1, plan_song_count: 1 }) })} />);
+    expect(screen.getByText("Song order saved (1 song)")).toBeVisible();
+  });
+
   it("progress and failure are plain", () => {
     const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 3 }) })} />);
     expect(screen.getByText(/Checking your songs/)).toBeVisible();
@@ -157,6 +186,10 @@ describe("Song order card", () => {
 
 describe("Recent activity", () => {
   const event = { type: "song.started", timestamp: 123.4, song_id: 202, position: 0, previous_song_id: null, continues_playing: false, playing: true, pad: false, setlist_version: 1, previous_version: null, section_id: null, active: null, reason: null, message_kind: null };
+  it("renders transport rollback as plain activity, without a song number", () => {
+    render(<PlaybackApiPanel playback={controller({ events: [{ event: { ...event, type: "transport.reverted", provisional: false }, discovery: false }] })} />);
+    expect(screen.getByRole("list", { name: "Recent activity", hidden: true })).toHaveTextContent("Playback did not confirm the command; transport reverted.");
+  });
   it("uses plain rows and wall-clock time, no monotonic wording; unknown songs are never numbered", () => {
     render(<PlaybackApiPanel playback={controller({ events: [
       { event, discovery: false, at: "2026-01-01T10:00:00Z" },
@@ -301,7 +334,7 @@ describe("Save settings footer", () => {
     render(<Harness save={save} />);
     fireEvent.click(toggle());
     fireEvent.click(saveButton());
-    expect(save).toHaveBeenCalledWith({ enabled: false, host: null, port: 8080, auto_scan: true });
+    expect(save).toHaveBeenCalledWith({ enabled: false, host: null, port: 8080, auto_scan: true, fast_transport: true });
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
     await act(async () => finish(true));
@@ -325,7 +358,41 @@ describe("Save settings footer", () => {
     render(<Harness save={save} />);
     fireEvent.click(screen.getByLabelText(/Look for Playback on the network/));
     await act(async () => { fireEvent.click(saveButton()); });
-    expect(save).toHaveBeenCalledWith({ enabled: true, host: null, port: 8080, auto_scan: false });
+    expect(save).toHaveBeenCalledWith({ enabled: true, host: null, port: 8080, auto_scan: false, fast_transport: true });
+  });
+
+  it("fast transport saves through the shared footer and stays clean after saving", async () => {
+    const save = vi.fn().mockResolvedValue(true);
+    render(<Harness save={save} />);
+    const fast = screen.getByRole("checkbox", { name: "Respond to Play immediately" });
+    expect(fast).toBeChecked();
+    expect(fast).toHaveAccessibleDescription("Reacts to the command instead of waiting up to one second for Playback to report it.");
+    fireEvent.click(fast);
+    expect(saveButton()).toBeEnabled();
+    await act(async () => { fireEvent.click(saveButton()); });
+    expect(save).toHaveBeenCalledExactlyOnceWith({ enabled: true, host: null, port: 8080, auto_scan: true, fast_transport: false });
+    expect(fast).not.toBeChecked();
+    expect(saveButton()).toBeDisabled();
+    expect(screen.getByText("Saved")).toBeVisible();
+  });
+
+  it("discard restores fast transport without saving", () => {
+    const save = vi.fn();
+    render(<Harness save={save} />);
+    fireEvent.click(screen.getByLabelText("Respond to Play immediately"));
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.getByLabelText("Respond to Play immediately")).toBeChecked();
+    expect(saveButton()).toBeDisabled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("failed fast transport save retains the draft", async () => {
+    render(<Harness save={vi.fn().mockResolvedValue(false)} />);
+    fireEvent.click(screen.getByLabelText("Respond to Play immediately"));
+    await act(async () => { fireEvent.click(saveButton()); });
+    expect(screen.getByLabelText("Respond to Play immediately")).not.toBeChecked();
+    expect(saveButton()).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("not saved");
   });
 
   it("Scan Network and Connect are never gated by unsaved edits", async () => {

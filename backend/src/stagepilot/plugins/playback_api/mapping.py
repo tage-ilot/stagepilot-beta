@@ -23,13 +23,19 @@ class PlaybackMapper:
         self._state_store = state_store
         self.song_order: tuple[int, ...] = ()
         self.captured_version: int | None = None
+        self.setlist_id: int | str | None = None
         self.stale = True
         self.discovery = False
         self._generation = 0
         self._heartbeat: Heartbeat | None = None
         self._invalidated = True
 
-    def install_order(self, song_order: tuple[int, ...], captured_version: int) -> None:
+    def install_order(
+        self,
+        song_order: tuple[int, ...],
+        captured_version: int,
+        setlist_id: int | str | None = None,
+    ) -> None:
         """Install only a complete explicitly discovered order, not learned IDs."""
         if (
             not song_order
@@ -41,6 +47,7 @@ class PlaybackMapper:
             raise ValueError("Discovery requires unique integer IDs and an integer version.")
         self.song_order = tuple(song_order)
         self.captured_version = captured_version
+        self.setlist_id = setlist_id
         self.stale = True  # A fresh authoritative heartbeat must validate the result.
         self._heartbeat = None
         self._generation += 1
@@ -61,9 +68,16 @@ class PlaybackMapper:
         return self._generation
 
     def observe(
-        self, heartbeat: Heartbeat | None, events: tuple[PlaybackEvent, ...]
+        self,
+        heartbeat: Heartbeat | None,
+        events: tuple[PlaybackEvent, ...],
+        setlist_id: int | str | None = None,
     ) -> tuple[Observation, ...]:
         """Validate status BEFORE queuing the accompanying event batch."""
+        if self.setlist_id is not None and setlist_id is not None and setlist_id != self.setlist_id:
+            self.stale = True
+            self._invalidated = True
+            self._generation += 1
         if heartbeat is not None:
             self._heartbeat = heartbeat
             if (
@@ -90,6 +104,12 @@ class PlaybackMapper:
         if observation.discovery or self.discovery or observation.generation != self._generation:
             return None
         if event.type in ("song.paused", "song.stopped"):
+            return await self._dispatcher.dispatch(ActionName.STOP_TIMER, source="playback_api")
+        if (
+            event.type == "transport.reverted"
+            and event.reason == "song.started"
+            and not event.playing
+        ):
             return await self._dispatcher.dispatch(ActionName.STOP_TIMER, source="playback_api")
         if event.type != "song.started" or self.stale or self._heartbeat is None:
             return None

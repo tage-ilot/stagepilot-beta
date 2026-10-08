@@ -33,6 +33,7 @@ class ConnectionOptions:
     host_override: str | None = None
     port: int = 8080
     auto_scan: bool = True
+    fast_transport: bool = True
 
     def __post_init__(self) -> None:
         if not 1 <= self.port <= 65535:
@@ -51,6 +52,7 @@ class PlaybackStatus:
     source: DiscoverySource | None = None
     last_error: str | None = None
     heartbeat: Heartbeat | None = None
+    setlist_id: int | str | None = None
 
 
 Observer = Callable[[PlaybackStatus, tuple[PlaybackEvent, ...]], None]
@@ -182,7 +184,7 @@ class PlaybackClient:
                     self._socket_factory, endpoint.host, endpoint.port, self._heartbeat_timeout
                 )
                 self._socket = ws
-                norm = Normalizer()
+                norm = Normalizer(fast_transport=self.options.fast_transport)
                 last_heartbeat = time.monotonic()
                 while not self._stopping.is_set():
                     remaining = self._heartbeat_timeout - (time.monotonic() - last_heartbeat)
@@ -205,6 +207,7 @@ class PlaybackClient:
                             endpoint.port,
                             endpoint.source,
                             heartbeat=norm.heartbeat,
+                            setlist_id=norm.setlist_id,
                         ),
                         events,
                     )

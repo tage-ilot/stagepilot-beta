@@ -5,8 +5,10 @@ import type { PlaybackController } from "../hooks/usePlaybackInput";
 export interface PlaybackDraft {
   enabled: boolean;
   autoScan: boolean;
+  fastTransport: boolean;
   setEnabled: (value: boolean) => void;
   setAutoScan: (value: boolean) => void;
+  setFastTransport: (value: boolean) => void;
   dirty: boolean;
   saving: boolean;
   saved: boolean;
@@ -23,6 +25,8 @@ export function usePlaybackDraft(playback?: PlaybackController): PlaybackDraft {
   const status = playback?.status ?? null;
   const savedEnabled = status?.settings.enabled ?? true;
   const savedAutoScan = status?.settings.auto_scan ?? true;
+  const savedFastTransport = status?.settings.fast_transport ?? true;
+  const [fastTransport, setFastTransportState] = useState(savedFastTransport);
   const [enabled, setEnabledState] = useState(savedEnabled);
   const [autoScan, setAutoScanState] = useState(savedAutoScan);
   const [saved, setSaved] = useState(false);
@@ -32,18 +36,21 @@ export function usePlaybackDraft(playback?: PlaybackController): PlaybackDraft {
 
   useEffect(() => setEnabledState(savedEnabled), [savedEnabled]);
   useEffect(() => setAutoScanState(savedAutoScan), [savedAutoScan]);
+  useEffect(() => setFastTransportState(savedFastTransport), [savedFastTransport]);
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  const dirty = enabled !== savedEnabled || autoScan !== savedAutoScan;
+  const dirty = enabled !== savedEnabled || autoScan !== savedAutoScan || fastTransport !== savedFastTransport;
   const setEnabled = useCallback((value: boolean) => { setSaved(false); setError(null); setEnabledState(value); }, []);
   const setAutoScan = useCallback((value: boolean) => { setSaved(false); setError(null); setAutoScanState(value); }, []);
+
+  const setFastTransport = useCallback((value: boolean) => { setSaved(false); setError(null); setFastTransportState(value); }, []);
 
   const save = useCallback(async () => {
     if (!status || !playback) return false;
     setError(null);
     setSaving(true);
     try {
-      const ok = await playback.save({ ...status.settings, enabled, auto_scan: autoScan });
+      const ok = await playback.save({ ...status.settings, enabled, auto_scan: autoScan, fast_transport: fastTransport });
       if (!ok) {
         setError("Your settings were not saved. Your changes are still here; try again.");
         return false;
@@ -55,15 +62,16 @@ export function usePlaybackDraft(playback?: PlaybackController): PlaybackDraft {
     } finally {
       setSaving(false);
     }
-  }, [autoScan, enabled, playback, status]);
+  }, [autoScan, enabled, fastTransport, playback, status]);
 
   const revert = useCallback(() => {
     setEnabledState(savedEnabled);
     setAutoScanState(savedAutoScan);
+    setFastTransportState(savedFastTransport);
     setError(null);
-  }, [savedAutoScan, savedEnabled]);
+  }, [savedAutoScan, savedEnabled, savedFastTransport]);
 
-  return { enabled, autoScan, setEnabled, setAutoScan, dirty, saving, saved, error, save, revert };
+  return { enabled, autoScan, fastTransport, setEnabled, setAutoScan, setFastTransport, dirty, saving, saved, error, save, revert };
 }
 
 const primary = "min-h-11 rounded-lg border border-sky-300/40 bg-sky-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40";
