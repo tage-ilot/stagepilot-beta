@@ -63,8 +63,8 @@ The operator must run Discover Song Order while Playback is stopped. Confirm
 that the complete Playback setlist order matches the StagePilot plan order.
 Number N is the discovered list index plus one (the existing MIDI position path).
 
-The confirmed operation sends only `{"transportPreviousSong":{}}` and
-`{"transportNextSong":{}}` over the current connection. It remembers the original
+The confirmed operation sends only Previous/Next, `transportReturnToStart`, and
+`waveformSeek {"sequenceTime":86400.0}` over the current connection. It remembers the original
 selection, walks Previous to the nonwrapping start, walks Next to the end, then
 restores the original selection using Previous only. No select-song command or
 generic send/control API exists. The operation is capped at 200 total navigation
@@ -74,6 +74,14 @@ At an end, at least two fresh unchanged heartbeats and continued recent receipt
 are required; a silent endpoint is a timeout, never an empty/successful result.
 The usual approximately two-second song changes make runtime depend on setlist
 length; probing both ends may each take five seconds.
+
+On the forward walk, each stopped song is returned to zero (confirmed by a fresh
+heartbeat), sought past its end, and measured from two steady fresh heartbeats.
+It is then returned to zero before navigation continues. Failed/no-effect length
+reads become null and do not discard a successful order. Nothing is played: no
+Play, Fade, or Select command is sent, so scanning does not fire Playback MIDI cues.
+Clamped lengths are lower bounds and can be up to four seconds short. They are
+display-only; countdowns and lighting still use Planning Center durations.
 
 All Playback-triggered StagePilot actions are suppressed from discovery entry
 until exit, including starts and stop/pause actions. Monitor events carry
@@ -86,7 +94,12 @@ the transport failed. Shutdown cancels and joins the operation before transport
 cleanup. Discovery cannot be started by startup, reconnect, Find, or settings.
 
 Only a complete restored result atomically saves
-`{song_order, captured_version, captured_at}`. Start/restart actions require the
+`{song_order, captured_version, captured_at, song_lengths, lengths_measured_at}`.
+Lengths align by index, with null for an unreadable song; an empty list means
+unknown. Order replacement or stale setlist validation clears lengths.
+Progress counts all navigation/measurement commands; song X of Y uses the trusted
+previous order count when available (the first walk's total is unknown until its end).
+Start/restart actions require the
 current heartbeat version to match and every observed heartbeat ID to belong to
 the saved order. Changed/missing version or an unknown ID makes the order sticky
 stale; matching later observations do not silently rearm it. Rediscover to repair.

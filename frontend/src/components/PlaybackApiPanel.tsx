@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { openExternalUrl } from "../desktop";
 import type { PlaybackController } from "../hooks/usePlaybackInput";
 import type { PlaybackDraft } from "./PlaybackSaveFooter";
+import { PlaybackSongLengths } from "./PlaybackSongLengths";
 import { playbackActivityText, playbackBannerTone, playbackOrderNotice, playbackSongCountMismatch, scanProgressText, scanSummary, validPlaybackHost } from "./playbackStatus";
 
 const button = "min-h-11 rounded-lg border border-sky-400/30 bg-sky-400/10 px-3.5 py-2.5 text-sm font-semibold text-sky-200 hover:bg-sky-400/20";
@@ -109,7 +110,7 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
         <section className="space-y-2 rounded-xl border border-sky-400/20 bg-sky-400/[0.05] p-4" aria-labelledby="song-order-heading">
           <h3 id="song-order-heading" className="font-bold text-white">Song order</h3>
           {!apiConnected ? <p className="text-sm text-slate-300">Connect to Playback first.</p>
-            : running ? <p role="status" className="text-sm text-sky-200">Checking your songs… step {status.progress}. Please wait.</p>
+            : running ? <p role="status" className="text-sm text-sky-200">{(status.discovery_total ?? 0) > 0 ? `Checking song ${status.discovery_song ?? 0} of ${status.discovery_total}… Please wait.` : `Checking your songs… step ${status.progress}. Please wait.`}</p>
               : status.playing ? <p className="text-sm text-amber-200">Stop Playback to set up song order.</p>
                 : <>
                   {orderSaved ? <p className="text-sm text-emerald-200">Song order saved ({status.song_order.length} {status.song_order.length === 1 ? "song" : "songs"})</p>
@@ -118,13 +119,14 @@ export function PlaybackApiPanel({ playback, draft }: { playback?: PlaybackContr
                   <button className={orderSaved ? button : big} type="button" onClick={() => setConfirm(true)}>{orderSaved ? "Set up again" : "Set up song order"}</button>
                 </>}
           {mismatch && <p className="text-sm text-slate-300">{mismatch}</p>}
+          <PlaybackSongLengths status={status} />
           {status.discovery === "failed" && status.last_error && <p role="alert" className="text-sm text-rose-200">{status.last_error}</p>}
         </section>
       )}
       {confirm && <div role="dialog" aria-modal="true" aria-labelledby="discover-confirm-heading" className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4">
         <div className="max-w-lg space-y-4 rounded-xl border border-sky-400/30 bg-slate-950 p-5 shadow-2xl">
           <h3 id="discover-confirm-heading" className="text-lg font-bold text-white">Set up song order?</h3>
-          <p className="text-sm text-slate-200">StagePilot will step through the songs in Playback, then go back to the song that was selected. Playback must stay stopped. It takes about 2 seconds per song.</p>
+          <p className="text-sm text-slate-200">StagePilot will step through the songs in Playback to read their lengths, then go back to the song that was selected. Playback must stay stopped. Nothing will be played.</p>
           <div className="flex flex-wrap gap-3">
             <button className={button} autoFocus onClick={() => { setConfirm(false); playback?.discover(); }} type="button">Set up song order</button>
             <button className={button} onClick={() => setConfirm(false)} type="button">Cancel</button>

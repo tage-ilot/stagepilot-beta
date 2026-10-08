@@ -117,6 +117,9 @@ describe("Song order card", () => {
     await user.click(screen.getByRole("button", { name: "Set up song order" }));
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent("must stay stopped");
+    expect(dialog).toHaveTextContent("read their lengths");
+    expect(dialog).toHaveTextContent("Nothing will be played.");
+    expect(dialog).not.toHaveTextContent("2 seconds");
     expect(playback.discover).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -178,9 +181,21 @@ describe("Song order card", () => {
 
   it("progress and failure are plain", () => {
     const view = render(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 3 }) })} />);
-    expect(screen.getByText(/Checking your songs/)).toBeVisible();
+    expect(screen.getByText("Checking your songs… step 3. Please wait.")).toBeVisible();
+    view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "running", progress: 12, discovery_song: 3, discovery_total: 8 }) })} />);
+    expect(screen.getByText("Checking song 3 of 8… Please wait.")).toBeVisible();
+    expect(screen.queryByText(/step 12/)).not.toBeInTheDocument();
     view.rerender(<PlaybackApiPanel playback={controller({ status: playbackStatus({ discovery: "failed", last_error: "Playback went away." }) })} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Playback went away.");
+  });
+  it("reuses the count mismatch line alongside length rows, including while playing", () => {
+    render(<PlaybackApiPanel playback={controller({ status: playbackStatus({
+      playing: true, song_count: 2, plan_song_count: 1, song_lengths: [180, 202],
+      plan_songs: [{ title: "Plan title", duration_seconds: 180 }],
+    }) })} />);
+    expect(screen.getAllByText("Playback has 2 songs, this plan has 1. Playback song 2 is ignored.")).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Song lengths" })).toBeVisible();
+    expect(screen.getByText("1. Plan title")).toBeVisible();
   });
 });
 

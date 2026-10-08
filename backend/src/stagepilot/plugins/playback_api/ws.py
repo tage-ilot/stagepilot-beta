@@ -157,13 +157,19 @@ class WebSocket:
             self._sock.sendall(frame)
 
     def _discovery_step(
-        self, direction: Literal["previous", "next"], allowed: Callable[[], bool] = lambda: True
+        self,
+        direction: Literal["previous", "next", "seek_end", "return_to_start"],
+        allowed: Callable[[], bool] = lambda: True,
     ) -> None:
         """Integration must guard confirmation/stopped state before each step."""
         if direction == "previous":
             payload = b'{"transportPreviousSong":{}}'
         elif direction == "next":
             payload = b'{"transportNextSong":{}}'
+        elif direction == "seek_end":
+            payload = b'{"waveformSeek":{"sequenceTime":86400.0}}'
+        elif direction == "return_to_start":
+            payload = b'{"transportReturnToStart":{}}'
         else:
             raise ValueError("invalid discovery direction")
         mask = os.urandom(4)

@@ -196,6 +196,9 @@ class PlaybackInputPlugin(Plugin):
         self._discovery_task: asyncio.Task[object] | None = None
         self.discovery: Literal["idle", "running", "failed", "done"] = "idle"
         self.progress = 0
+        self.discovery_song = 0
+        self.discovery_total = 0
+        self._navigation_steps = 0
         self.discovery_error: str | None = None
         self._changed = asyncio.Event()
         self._heartbeat: Heartbeat | None = None
@@ -392,7 +395,16 @@ class PlaybackInputPlugin(Plugin):
                 settings.playback_api.captured_version,
                 settings.playback_api.captured_at,
                 settings.playback_api.setlist_id,
-            ) != (saved.song_order, saved.captured_version, saved.captured_at, saved.setlist_id):
+                settings.playback_api.song_lengths,
+                settings.playback_api.lengths_measured_at,
+            ) != (
+                saved.song_order,
+                saved.captured_version,
+                saved.captured_at,
+                saved.setlist_id,
+                saved.song_lengths,
+                saved.lengths_measured_at,
+            ):
                 raise ValueError("Song order can only be changed by Discover Song Order.")
             config = settings.playback_api
             ConnectionOptions(config.enabled, config.host, config.port, config.auto_scan)
@@ -455,6 +467,19 @@ class PlaybackInputPlugin(Plugin):
         observations = self.mapper.observe(
             heartbeat if fresh else None, events, status.setlist_id if status.connected else None
         )
+        if (
+            self.mapper.stale
+            and self.discovery != "running"
+            and self.settings.playback_api.song_lengths
+            and status.connected
+        ):
+            config = self.settings.playback_api.model_copy(
+                update={"song_lengths": [], "lengths_measured_at": None}
+            )
+            self.settings.playback_api = config
+            self._service.save(
+                self._service.snapshot().model_copy(update={"playback_api": config}, deep=True)
+            )
         self._history.extend(MonitorEntry(item.event, item.discovery) for item in observations)
         if status.connected != self._connection:
             self._connection = status.connected
@@ -680,13 +705,14 @@ class PlaybackInputPlugin(Plugin):
 
     async def _step(self, direction: Literal["previous", "next"], version: int) -> int:
         before = self._check_discovery(version).song_id
-        if self.progress >= self._max_steps:
+        if self._navigation_steps >= self._max_steps:
             raise DiscoveryConflict("Song order discovery exceeded the 200-step safety limit.")
         client = self.client
         assert client is not None
         serial = self._serial
         await client._discovery_step(direction)
         self.progress += 1
+        self._navigation_steps += 1
         deadline = time.monotonic() + self._step_timeout
         while True:
             current = self._check_discovery(version)
@@ -715,11 +741,15 @@ class PlaybackInputPlugin(Plugin):
                 self.mapper.set_discovery(True)
                 self.discovery = "running"
                 self.progress = 0
+                self._navigation_steps = 0
+                self.discovery_song = 0
+                self.discovery_total = len(self.mapper.song_order) if not self.mapper.stale else 0
                 self.discovery_error = None
                 self._discovery_task = asyncio.current_task()
         original = heartbeat.song_id
         version = heartbeat.setlist_version
         assert version is not None
+        order: list[int] = []
         try:
             current = original
             visited = {current}
@@ -732,7 +762,20 @@ class PlaybackInputPlugin(Plugin):
                 visited.add(previous)
                 current = previous
             order = [current]
+            lengths: list[float | None] = []
             while True:
+                self.discovery_song = len(order)
+                client = self.client
+                assert client is not None
+                try:
+                    length = await client.measure_song_length(
+                        settle=self._step_timeout, on_command=self._measurement_progress
+                    )
+                except Exception:
+                    # Length reading is best effort; navigation remains authoritative.
+                    length = None
+                lengths.append(length)
+                self._check_discovery(version)
                 following = await self._step("next", version)
                 if following == current:
                     break
@@ -742,6 +785,7 @@ class PlaybackInputPlugin(Plugin):
                 current = following
             if original not in order:
                 raise DiscoveryConflict("Original Playback selection was lost during discovery.")
+            self.discovery_total = len(order)
             for expected in reversed(order[order.index(original) : -1]):
                 if await self._step("previous", version) != expected:
                     raise DiscoveryConflict("Could not restore the original Playback selection.")
@@ -752,6 +796,8 @@ class PlaybackInputPlugin(Plugin):
                     "captured_version": version,
                     "setlist_id": self.status.setlist_id,
                     "captured_at": datetime.now(UTC),
+                    "song_lengths": lengths,
+                    "lengths_measured_at": datetime.now(UTC),
                 }
             )
             self._service.save(
@@ -762,6 +808,23 @@ class PlaybackInputPlugin(Plugin):
             self.mapper.observe(self._heartbeat, ())
             self.discovery = "done"
         except asyncio.CancelledError:
+            # Best effort, bounded Previous/Next restoration while suppression
+            # is still active. Never select/play to recover a cancelled scan.
+            with suppress(Exception):
+                selected = self._check_discovery(version).song_id
+                direction: Literal["previous", "next"] = (
+                    "previous"
+                    if original in order
+                    and selected in order
+                    and order.index(selected) > order.index(original)
+                    else "next"
+                )
+                for _ in range(self._max_steps):
+                    if self._check_discovery(version).song_id == original:
+                        break
+                    before = self._check_discovery(version).song_id
+                    if await self._step(direction, version) == before:
+                        break
             self.discovery = "failed"
             self.discovery_error = (
                 "Song order discovery cancelled; no result saved. Check Playback selection."
@@ -773,3 +836,6 @@ class PlaybackInputPlugin(Plugin):
         finally:
             self.mapper.set_discovery(False)
             self._discovery_task = None
+
+    def _measurement_progress(self) -> None:
+        self.progress += 1

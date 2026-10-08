@@ -73,9 +73,12 @@ win. The `playback_api` settings block defaults to `enabled: true`, `host: null`
 then attached-LAN scanning. A manual host exclusively overrides discovery.
 
 Playback receives observations only, except the operator-confirmed Discover Song
-Order operation, whose only commands are Next/Previous while Playback is stopped.
-Only its completed/restored result saves `song_order`, `captured_version`, and
-`captured_at`. Unknown IDs or changed/missing versions make the order stale and
+Order operation, whose only commands are Next/Previous, seek-to-end, and
+return-to-start while Playback is stopped. Nothing is played. Its complete/restored
+result saves `song_order`, `captured_version`, `captured_at`, aligned `song_lengths`
+(null for a failed read), and `lengths_measured_at`. Lengths are display-only lower
+bounds; timers and lights continue using Planning Center durations. Unknown IDs
+or changed/missing versions make the order stale, clear measured lengths, and
 block start/restart; pause/stop may still stop the timer outside discovery.
 Reconnect revalidates its first snapshot rather than invalidating by itself.
 

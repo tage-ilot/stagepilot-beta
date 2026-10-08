@@ -61,6 +61,11 @@ class FindRequest(BaseModel):
     host: str | None = Field(default=None, max_length=255)
 
 
+class PlaybackPlanSong(BaseModel):
+    title: str
+    duration_seconds: int | None
+
+
 class PlaybackStatusResponse(BaseModel):
     scan: ScanResult
     selected: bool
@@ -77,7 +82,12 @@ class PlaybackStatusResponse(BaseModel):
     setlist_cloud_version: int | None
     discovery: Literal["idle", "running", "failed", "done"]
     progress: int
+    discovery_song: int
+    discovery_total: int
     song_order: list[int]
+    song_lengths: list[float | None]
+    lengths_measured_at: datetime | None
+    plan_songs: list[PlaybackPlanSong]
     song_count: int
     plan_song_count: int
     captured_version: int | None
@@ -155,7 +165,17 @@ async def status_response(controller: PlaybackInputPlugin) -> PlaybackStatusResp
         setlist_cloud_version=heartbeat.setlist_version if heartbeat else None,
         discovery=controller.discovery,
         progress=controller.progress,
+        discovery_song=controller.discovery_song,
+        discovery_total=controller.discovery_total,
         song_order=list(controller.mapper.song_order),
+        song_lengths=config.song_lengths if not controller.mapper.stale else [],
+        lengths_measured_at=config.lengths_measured_at if not controller.mapper.stale else None,
+        plan_songs=[
+            PlaybackPlanSong(title=song.title, duration_seconds=song.duration_seconds)
+            for song in state.plan.songs
+        ]
+        if state.plan
+        else [],
         song_count=len(controller.mapper.song_order),
         plan_song_count=len(state.plan.songs) if state.plan else 0,
         captured_version=controller.mapper.captured_version,
