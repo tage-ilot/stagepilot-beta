@@ -46,3 +46,11 @@ no-ai-design-slop + audit-ai-design-slop, frontend-evidence-audit, webapp-testin
 5. Icons: the service icons are already generic pixel-art illustrations; keep them (they count as 8-bit moments).
 6. PRODUCT.md added at the repo root.
 7. Reviews of screens happen through LAN-viewable HTML/screenshots before merge.
+
+## Plumbing notes (from testing the DESIGN.md exports, 2026-10-09)
+The `json-tailwind`, `css-tailwind` and `dtcg` exports all run (exit 0). Things Phase 2 must handle:
+- The export covers colours, font sizes, radii and spacing only. The `elevation`, `elevation-options` and `text-shadow` sections are custom and are **not exported**; map them by hand into `boxShadow` and a small `textShadow` utility.
+- Bare `rounded` is not in the export. Add `DEFAULT: 8px` so the 12 bare uses become 8px by design.
+- The token `neutral` shares its name with Tailwind's built-in `neutral-*` palette. The app uses none of those classes today, but rename it (for example `idle`) in the same PR to avoid confusion.
+- Colour tokens named `text`, `border`, `panel` become classes like `text-text` and `border-border`. Prefer prefixed names (`ink`, `edge`, `surface`) when generating the theme.
+- Replace `stage.*` colours and the old `panel` boxShadow in `tailwind.config.js` rather than keeping two systems.

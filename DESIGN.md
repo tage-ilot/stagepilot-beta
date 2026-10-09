@@ -659,6 +659,13 @@ Words: "Alternate connection: MIDI settings" becomes **MIDI** under
 4. **Advanced** (collapsed, see above).
 5. **Save bar, always last and always in the same place** (see below).
 
+**Narrow screens (320px, found when the guide was checked):** the header's
+status badge and close button are 160px + 44px and don't fit beside the title.
+Below 480px the header wraps: the title takes the first row with the 44px close
+button at the right; the status badge moves to its own row beneath the title.
+The close button never shrinks below 44px. The save bar's buttons stack full
+width below 480px.
+
 ### Saving (decided: save as you go, plus an always-visible Save configuration button)
 - **Default: a change saves the moment it is made.** Selects and toggles save
   on change; text fields save when the user leaves the field or presses Enter.
@@ -718,6 +725,36 @@ New app-wide options go here, never into a connection.
 - **Toast** only for things the user did not just cause (crash, update).
 - **Empty state:** one sentence saying what to do next plus one button.
 - **Progress in a panel** uses the blue pixel bar; on phones, the spinner.
+
+### Build rules (from the Web Interface Guidelines and hardening checks)
+These are the mechanical rules every component must follow. Each one came from
+a skill check against beta 31 or against this guide.
+- **Motion:** list the transitioned properties (never `transition: all`);
+  animate `transform` and `opacity` only (the loader fill should scale, not
+  animate `width`); honour `prefers-reduced-motion` with a calm alternative that
+  still shows the state change; animations must not block input.
+- **Touch:** `touch-action: manipulation` on buttons and controls;
+  `overscroll-behavior: contain` inside dialogs, panels and menus; 44px targets
+  on `pointer: coarse`; nothing important only on hover.
+- **Text:** `…` (single character) in placeholders and loading text, and
+  placeholders show an example ("For example, Sunday Morning…"); `tabular-nums`
+  on every timer, clock, count and duration; non-breaking space between a number
+  and its unit; 11px is the smallest text anywhere (no 10px).
+- **Forms:** every field has a visible label above it; correct `type`,
+  `inputmode` and `autocomplete`; never block paste; validate on blur and keep
+  the user's input on error; focus the first error after a failed save; the Save
+  button is disabled only while a save is in flight (no double submit).
+- **Semantics:** `<button>` for actions, `<a>` for navigation; icon-only buttons
+  have an `aria-label`; async results (saved, failed, connecting) are announced
+  with `aria-live="polite"`; status is never colour alone; headings go in order
+  (no skipped levels).
+- **Long and odd content:** text containers use `min-w-0` with truncate or wrap;
+  labels allow 40% longer translations (no fixed widths on text); long names
+  (songs, devices, computers) truncate with the full text available on focus or
+  tap; empty lists show an empty state, never a blank gap; layouts survive 200%
+  zoom and 320px width.
+- **Destructive or live-affecting actions** need a confirm or an undo window.
+- **Images:** explicit width and height; decorative images `alt=""`.
 
 ### Rules for adding anything new
 1. Does it belong to a connection? Then it goes in that connection's
