@@ -263,9 +263,8 @@ components:
     textColor: "{colors.text-body}"
     rounded: "{rounded.lg}"
     padding: "{spacing.md}"
-text-shadow:                     # custom section. DECIDED for every button: a faint shadow so the label pops
-  on-dark-text: "0 1px 2px rgb(10 10 12 / 0.55)"     # light text (on dark or tinted buttons): small very-dark-grey shadow
-  on-light-text: "0 1px 0 rgb(255 255 255 / 0.40)"   # dark text (on coral, amber, emerald, sky fills): light shadow
+text-shadow:                     # custom section. DECIDED: LIGHT label text only gets a shadow. Dark label text gets none.
+  on-dark-text: "0 1px 2px rgb(10 10 12 / 0.55)"     # light text (on dark or tinted buttons): small very-dark-grey shadow (owner: looks great)
 elevation-options:               # custom section: PICK ONE strength for elevation.default / overlay (levels 2-5 scale the three soft layers)
   level-1: "inset 1px 1px 0 rgb(255 190 150 / 0.07), 2px 3px 6px rgb(33 15 13 / 0.35), 6px 10px 24px rgb(22 13 12 / 0.42), 12px 28px 64px rgb(22 13 12 / 0.45)"
   level-2: "inset 1px 1px 0 rgb(255 190 150 / 0.07), 2px 3px 6px rgb(33 15 13 / 0.44), 6px 10px 24px rgb(22 13 12 / 0.53), 12px 28px 64px rgb(22 13 12 / 0.56)"
@@ -525,7 +524,7 @@ that is not a status, a service, or coral.
   - *Tinted* (most of the app): `hue @ 10%` fill, `hue @ 20-30%` border, light
     `hue-200` text, `hue @ 20%` on hover.
   - Disabled: 40% opacity (a few use 50%; normalise to 40%), `cursor-not-allowed`.
-  - **Label shadow (decided, all buttons):** light text gets a small very-dark-grey shadow (`text-shadow.on-dark-text`), dark text gets a light one (`text-shadow.on-light-text`), so labels stay crisp on any fill.
+  - **Label shadow (decided):** light text on a dark or tinted button gets a small very-dark-grey shadow (`text-shadow.on-dark-text`). **Dark text gets no shadow.** A light shadow under dark text was tried and rejected by the owner because it looks bad (it reads as a blurry halo). If dark labels ever need more punch, change the fill or the text colour, not add a shadow.
   - Primary = coral (decided). Secondary = tinted in the panel's hue.
 - **Inputs (decided):** `surface-950`, widget border, 8px radius, 44px
   tall, `text-muted` placeholder. Native checkboxes (7), `accent-rose-500` on 3.
@@ -791,8 +790,9 @@ kept because the current code does it.
   the same warm colour set bolder (700), not a separate colour.
 - Three widget borders (6 / 10 / 18%). One warm layered default shadow (old
   shadow deleted); stronger levels 2 to 5 exist for the owner to choose.
-- Button labels carry a subtle text shadow: dark-grey under light text, light
-  under dark text.
+- Light button labels carry a small very-dark-grey text shadow. Dark labels
+  (on coral, amber, emerald, sky fills) carry none: the light shadow under dark
+  text was tried and rejected.
 - Advanced tones are 30% service colour mixed with 70% `text-muted`.
 - Light text on dark fills, dark text on light fills; error text keeps its
   reddish colour. Contrast minimum 4.5:1 for text.
