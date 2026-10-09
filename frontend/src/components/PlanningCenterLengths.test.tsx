@@ -31,7 +31,43 @@ describe("explicit Planning Center split button", () => {
     expect(within(dialog).getByText(/4:05 → 4:28/)).toBeVisible(); expect(within(dialog).getByText(/No change/)).toBeVisible();
     const confirm = within(dialog).getByRole("button", { name: "Update Planning Center" }); expect(confirm).toBeEnabled();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" })); expect(api.confirmPlanLengths).not.toHaveBeenCalled(); expect(update()).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" })); expect(api.confirmPlanLengths).not.toHaveBeenCalled(); await waitFor(() => expect(update()).toHaveFocus());
+  });
+  it.each(["Cancel", "Escape"])("%s unmounts the preview before returning keyboard focus", async action => {
+    const user = userEvent.setup(); show(); const trigger = update(); await user.click(trigger);
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Update Planning Center" });
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(confirm).toHaveFocus());
+    await user.keyboard("{Shift>}{Tab}{/Shift}"); expect(cancel).toHaveFocus();
+    await user.keyboard("{Tab}"); expect(confirm).toHaveFocus();
+    const dialogPresentAtFocus: boolean[] = [];
+    const focus = vi.spyOn(trigger, "focus");
+    focus.mockImplementation(() => {
+      dialogPresentAtFocus.push(screen.queryByRole("dialog") !== null);
+      HTMLElement.prototype.focus.call(trigger);
+    });
+    try {
+      if (action === "Cancel") await user.click(cancel); else await user.keyboard("{Escape}");
+      await waitFor(() => expect(update()).toHaveFocus());
+      expect(dialogPresentAtFocus).toEqual([false]);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(api.confirmPlanLengths).not.toHaveBeenCalled();
+    } finally { focus.mockRestore(); }
+  });
+  it.each([false, true])("confirmation settles before restoring focus (failure: %s)", async failure => {
+    let resolve!: (status: PlaybackStatusResponse) => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(api.confirmPlanLengths).mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no; }));
+    show(); fireEvent.click(update()); const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update Planning Center" }));
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" }); expect(dialog).toBeInTheDocument();
+    if (failure) reject(new Error("Confirmation failed.")); else resolve(ready());
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(update()).toHaveFocus());
+    expect(update()).toBeEnabled();
+    if (failure) expect(screen.getByRole("alert")).toHaveTextContent("Confirmation failed.");
   });
   it("one confirmation covers every measured length; result and Restore appear and restore updates result", async () => {
     vi.mocked(api.previewPlanLengths).mockResolvedValue({ ...preview, items: [{ ...preview.items[0]! }] });

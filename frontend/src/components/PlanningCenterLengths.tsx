@@ -30,7 +30,8 @@ export function PlanningCenterLengths({ status, onStatus }: { status: PlaybackSt
   const dialog = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const returnFocus = useRef<"arrow" | "main" | null>(null);
-  useEffect(() => { if (!busy && returnFocus.current) { (returnFocus.current === "arrow" ? arrow : main).current?.focus(); returnFocus.current = null; } }, [busy, open, preview]);
+  // Restore only after the dialog unmounts and the trigger is enabled.
+  useEffect(() => { if (!busy && !preview && returnFocus.current) { (returnFocus.current === "arrow" ? arrow : main).current?.focus(); returnFocus.current = null; } }, [busy, open, preview]);
   const reason = lengthUpdateReason(status);
   const fingerprint = `${status.captured_at}|${status.stale}|${status.discovery}|${status.playing}|${status.planning_center_connected}`;
   useEffect(() => { generation.current++; setPreview(null); }, [fingerprint]);
@@ -45,7 +46,7 @@ export function PlanningCenterLengths({ status, onStatus }: { status: PlaybackSt
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, [open]);
-  const close = () => { setPreview(null); returnFocus.current = "main"; if (!busy) main.current?.focus(); };
+  const close = () => { returnFocus.current = "main"; setPreview(null); };
   const run = async (action: () => Promise<void>) => {
     if (busy) return;
     setBusy(true); setError(null);
@@ -82,7 +83,7 @@ export function PlanningCenterLengths({ status, onStatus }: { status: PlaybackSt
       <p className="break-words text-sm text-slate-200">{preview.category} · {preview.plan_title} · {preview.plan_date}</p>
       <ul className="divide-y divide-white/10 text-sm text-slate-200">{preview.items.map(r => <li key={r.item_id} className="break-words py-2"><strong>{r.title}</strong> {r.status === "skipped" ? `No change — ${r.reason}` : `${duration(r.old_length)} → ${duration(r.new_length)}`}</li>)}</ul>
       {preview.message && <p className="text-sm text-slate-200">{preview.message}</p>}
-      <div className="flex flex-wrap gap-3">{preview.items.some(r => r.status === "updated") && <button className={button} disabled={busy || !!reason} onClick={() => void run(async () => { accept(await confirmPlanLengths(preview.token)); close(); })}>Update Planning Center</button>}<button className={button} disabled={busy} onClick={close}>Cancel</button></div>
+      <div className="flex flex-wrap gap-3">{preview.items.some(r => r.status === "updated") && <button className={button} disabled={busy || !!reason} onClick={() => void run(async () => { try { accept(await confirmPlanLengths(preview.token)); } finally { close(); } })}>Update Planning Center</button>}<button className={button} disabled={busy} onClick={close}>Cancel</button></div>
       {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
     </div></div>}
   </div>;
