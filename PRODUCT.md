@@ -73,6 +73,8 @@ statistics or benchmarks exist; do not invent any.
 
 ## Accessibility & Inclusion
 
-Text contrast at least 4.5:1, 44px touch targets on touch devices, full
-keyboard operation, visible focus, and reduced-motion support. Status is never
+Text contrast at least 4.5:1, 44px touch targets on touch devices, rock-solid
+mouse-hover and touch behaviour (the stated priority), visible focus and the
+existing keyboard and screen-reader support kept intact, and reduced-motion
+support. Status is never
 conveyed by colour alone.

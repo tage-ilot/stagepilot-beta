@@ -32,7 +32,7 @@ no-ai-design-slop + audit-ai-design-slop, frontend-evidence-audit, webapp-testin
 3. **Primitives** (each used 3+ times): Button, Field/Select, Panel, StatusDot/Badge, Disclosure (Advanced and Activity variants), SegmentedControl, SaveBar, Dialog. Built in a single components folder with all states.
 4. **Surfaces, one PR each, lowest risk first:** loaders/startup (incl. removing the white line and the phone bar+spinner bug) -> header and status cards (wide/compact at 1000px) -> StagePilot panel -> Presentation -> Services -> Lights -> Playback (Connection method) -> live controls -> dialogs and sign-in gates.
 5. **Behaviour changes, separate from styling,** each with its own tests and review: vocabulary renames; save-as-you-go with held changes and the always-visible Save configuration bar; Connection method select; "Other computer…"; MIDI network/channel held, rest of Lights immediate.
-6. **Harden.** Long names, many songs, offline, API errors, double-click on Save, 200% zoom, keyboard only, reduced motion; touch tested with real devices if possible, otherwise labelled as emulated.
+6. **Harden.** Long names, many songs, offline, API errors, double-click on Save, 200% zoom, reduced motion, existing keyboard support not regressed; touch tested with real devices if possible, otherwise labelled as emulated.
 7. **Lock it in.** Delete duplicated styles; add a lint/check that blocks raw hex and off-palette Tailwind colours; CI step runs `design.md lint`; final audit scores vs baseline.
 
 ## Per-PR gate

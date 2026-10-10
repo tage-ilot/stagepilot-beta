@@ -502,6 +502,21 @@ that is not a status, a service, or coral.
 - **12px** for **all** panels and cards (decided; setup panels move from 16px).
 - **16px** for toasts only. **Full** for pills and dots.
 
+### Borders inside panels (decided)
+A panel is one box. Inside it, **only these get their own border**: form
+fields (inputs, selects, text areas), the Advanced disclosure row, the Activity
+row, and the save bar. Everything else is grouped with spacing, a heading, or a
+single thin divider (`border-subtle`), never another bordered box.
+- A group of related fields is a heading plus spacing, not a bordered card.
+- Status cards, live controls and dialogs are their own surfaces, not boxes
+  inside a panel.
+- A thin divider separates sections of one panel; do not put a divider and a
+  box around the same thing.
+- Nested boxes only when the inner one is a different kind of thing the user can
+  act on (for example the held-change field marker or an alert).
+Reason: the design check flagged "card inside card" repeatedly; extra borders
+add noise without adding hierarchy.
+
 ## Motion
 
 - Micro-interactions 140ms; live reveals 420ms; status colour 180ms;
@@ -744,7 +759,7 @@ a skill check against beta 31 or against this guide.
   `inputmode` and `autocomplete`; never block paste; validate on blur and keep
   the user's input on error; focus the first error after a failed save; the Save
   button is disabled only while a save is in flight (no double submit).
-- **Semantics:** `<button>` for actions, `<a>` for navigation; icon-only buttons
+- **Semantics (keep what exists; hover and touch come first):** `<button>` for actions, `<a>` for navigation; icon-only buttons
   have an `aria-label`; async results (saved, failed, connecting) are announced
   with `aria-live="polite"`; status is never colour alone; headings go in order
   (no skipped levels).
@@ -763,7 +778,7 @@ a skill check against beta 31 or against this guide.
 3. Use an existing pattern from this file. If none fits, add the new pattern
    here first, then build it.
 4. Name it from the Vocabulary table. Add any new word to the table.
-5. It must work at 320px wide and with only a keyboard.
+5. It must work at 320px wide, with mouse hover and with touch (the priority). Do not regress the keyboard and screen-reader support that exists today, but do not gold-plate it.
 6. A new colour is never needed: status colours for state, the service colour
    for identity, coral for the one primary action.
 
@@ -776,6 +791,8 @@ a skill check against beta 31 or against this guide.
 - Do pair state colour with a word or icon (status cards already do).
 - Don't use coral for decoration, or for more than one "live" item per view.
 - Don't add radii, font sizes, shadows or z-indexes not listed here.
+- Don't put a bordered box inside a panel except fields, the Advanced / Activity
+  rows and the save bar (see Borders inside panels).
 
 ## How this drives the app
 
